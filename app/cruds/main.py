@@ -1,16 +1,25 @@
 from copy import deepcopy
 from datetime import datetime, timezone
+import logging
+import os
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import MutableHeaders
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from app.auth import (
+    SUPERTOKENS_ENABLED, CurrentUser, configure_user_lookup, cors_headers, get_current_user,
+)
+if SUPERTOKENS_ENABLED:
+    from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
 from app.schemas import (
-    AchievementInput, AchievementVisibilityInput, ApplicationInput, AuthInput,
+    AchievementInput, AchievementVisibilityInput, ApplicationInput,
     BlockInput, CompletionInput, DisputeInput, MessageInput, ProfileUpdateInput,
     ReportInput, RequestInput, RequestUpdateInput, ReviewInput, SelectionInput,
     StructureInput, VerificationInput,
@@ -25,10 +34,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=[os.getenv("WEBSITE_DOMAIN", "http://localhost:3000")],
+    allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=cors_headers(),
 )
 
 
@@ -49,42 +58,139 @@ class ApiPrefixMiddleware:
 
 
 app.add_middleware(ApiPrefixMiddleware)
+if SUPERTOKENS_ENABLED:
+    app.add_middleware(get_middleware())
 app.include_router(system_router)
 
 
 ERROR_MESSAGES = {
+    "BAD_REQUEST": "リクエストを処理できません",
+    "AUTHENTICATION_REQUIRED": "認証が必要です",
+    "USER_PROFILE_NOT_FOUND": "ユーザープロフィールが見つかりません",
+    "USER_SUSPENDED": "利用停止中のユーザーです",
+    "ROLE_FORBIDDEN": "この操作を行う権限がありません",
+    "MFA_REQUIRED": "多要素認証が必要です",
     "REQUEST_NOT_FOUND": "依頼が見つかりません",
     "MATCH_NOT_FOUND": "マッチが見つかりません",
     "APPLICATION_NOT_FOUND": "応募が見つかりません",
     "REQUEST_STATE_CONFLICT": "依頼の状態が更新されているため処理できません",
     "VALIDATION_ERROR": "入力内容を確認してください",
+    "INTERNAL_SERVER_ERROR": "サーバー内部でエラーが発生しました",
 }
 
+STATUS_ERROR_CODES = {
+    400: "BAD_REQUEST",
+    401: "AUTHENTICATION_REQUIRED",
+    403: "ROLE_FORBIDDEN",
+    404: "NOT_FOUND",
+    409: "STATE_CONFLICT",
+    422: "VALIDATION_ERROR",
+    500: "INTERNAL_SERVER_ERROR",
+}
+logger = logging.getLogger(__name__)
 
-def error_body(code: str, details: dict[str, Any] | None = None) -> dict:
+
+def request_id_for(request: Request) -> str:
+    request_id = getattr(request.state, "request_id", None)
+    return request_id or new_id("trace")
+
+
+def error_body(
+    code: str,
+    request_id: str,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "error": {
             "code": code,
             "message": ERROR_MESSAGES.get(code, code.replace("_", " ").lower()),
             "details": details or {},
-            "requestId": new_id("trace"),
+            "requestId": request_id,
         }
     }
 
 
-@app.exception_handler(HTTPException)
-async def http_error_handler(_request: Request, exc: HTTPException):
-    detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
-    code = detail.pop("code", "HTTP_ERROR")
-    return JSONResponse(status_code=exc.status_code, content=error_body(code, detail))
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    request_id = request_id_for(request)
+    detail = dict(exc.detail) if isinstance(exc.detail, dict) else {}
+    code = detail.pop("code", STATUS_ERROR_CODES.get(exc.status_code, "HTTP_ERROR"))
+    # String exception details can contain framework internals or user data. Only
+    # explicitly structured domain details are safe to expose.
+    detail.pop("message", None)
+    logger.warning(
+        "API error requestId=%s method=%s path=%s status=%s code=%s",
+        request_id, request.method, request.url.path, exc.status_code, code,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_body(code, request_id, detail),
+        headers={"X-Request-ID": request_id},
+    )
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_error_handler(_request: Request, exc: RequestValidationError):
+async def validation_error_handler(
+    request: Request, exc: RequestValidationError,
+) -> JSONResponse:
+    request_id = request_id_for(request)
+    # Pydantic's raw errors include the rejected input. Keep only diagnostics so
+    # passwords, descriptions, identity data, etc. cannot be reflected back.
+    errors = [
+        {"type": error["type"], "loc": list(error["loc"]), "msg": error["msg"]}
+        for error in exc.errors()
+    ]
+    logger.warning(
+        "API validation error requestId=%s method=%s path=%s errorCount=%s",
+        request_id, request.method, request.url.path, len(errors),
+    )
     return JSONResponse(
         status_code=422,
-        content=jsonable_encoder(error_body("VALIDATION_ERROR", {"errors": exc.errors()})),
+        content=jsonable_encoder(
+            error_body("VALIDATION_ERROR", request_id, {"errors": errors})
+        ),
+        headers={"X-Request-ID": request_id},
     )
+
+
+@app.exception_handler(Exception)
+async def internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    request_id = request_id_for(request)
+    logger.exception(
+        "Unhandled API error requestId=%s method=%s path=%s",
+        request_id, request.method, request.url.path,
+        exc_info=exc,
+    )
+    return JSONResponse(
+        status_code=500,
+        content=error_body("INTERNAL_SERVER_ERROR", request_id),
+        headers={"X-Request-ID": request_id},
+    )
+
+
+class RequestIdMiddleware:
+    """Attach one server-generated trace ID without buffering response bodies."""
+
+    def __init__(self, asgi_app):
+        self.asgi_app = asgi_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.asgi_app(scope, receive, send)
+            return
+
+        request_id = new_id("trace")
+        scope.setdefault("state", {})["request_id"] = request_id
+
+        async def send_with_request_id(message):
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)["X-Request-ID"] = request_id
+            await send(message)
+
+        await self.asgi_app(scope, receive, send_with_request_id)
+
+
+app.add_middleware(RequestIdMiddleware)
 
 
 def now_iso() -> str:
@@ -165,7 +271,7 @@ HELPERS = {
 
 def reset_store() -> None:
     global requests_store, applications, matches, messages, reviews, achievements
-    global profile_store, verifications, reports, blocks, idempotency_store
+    global profile_store, users_store, verifications, reports, blocks, idempotency_store
     profile_store = {
         "id": "usr_101",
         "displayName": "山田 花子",
@@ -174,6 +280,17 @@ def reset_store() -> None:
         "verificationStatus": "approved",
         "areaCode": "AREA-001",
         "status": "active",
+    }
+    users_store = {
+        profile_store["id"]: profile_store,
+        "usr_207": {
+            **HELPERS["usr_207"], "role": "helper", "status": "active",
+            "emailVerified": True,
+        },
+        "usr_208": {
+            **HELPERS["usr_208"], "role": "helper", "status": "active",
+            "emailVerified": True,
+        },
     }
     requests_store = {item["id"]: deepcopy(item) for item in INITIAL_REQUESTS}
     applications = {
@@ -207,6 +324,7 @@ def reset_store() -> None:
 
 
 reset_store()
+configure_user_lookup(lambda user_id: users_store.get(user_id))
 
 
 def request_or_404(request_id: str) -> dict:
@@ -217,47 +335,44 @@ def match_or_404(match_id: str) -> dict:
     return get_or_404(matches, match_id, "MATCH_NOT_FOUND")
 
 
+def ensure_match_participant(match: dict, user_id: str) -> str:
+    if match["requesterId"] == user_id:
+        return "requester"
+    if match["helperId"] == user_id:
+        return "helper"
+    raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+
+
 @app.post("/_mock/reset", tags=["Mock control"])
-def reset_mock():
+async def reset_mock():
     reset_store()
     return {"reset": True}
 
 
-@app.post("/auth/register", status_code=201, tags=["Auth"])
-def register(body: AuthInput):
-    return {
-        "user": {**profile_store, "emailVerified": False},
-        "session": {"type": "mock_cookie", "expiresIn": 3600},
-    }
-
-
-@app.post("/auth/login", tags=["Auth"])
-def login(_body: AuthInput):
-    return {"user": profile_store, "session": {"type": "mock_cookie", "expiresIn": 3600}}
-
-
-@app.post("/auth/logout", status_code=204, tags=["Auth"])
-def logout():
-    return None
-
-
 @app.get("/profile", tags=["Profile"])
-def get_profile():
-    return profile_store
+async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
+    return users_store[current_user.user_id]
 
 
 @app.patch("/profile", tags=["Profile"])
-def update_profile(body: ProfileUpdateInput):
+async def update_profile(
+    body: ProfileUpdateInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     changes = body.model_dump(exclude_none=True)
     if not changes:
         raise HTTPException(422, detail={"code": "NO_CHANGES"})
-    profile_store.update(changes)
-    profile_store["updatedAt"] = now_iso()
-    return profile_store
+    profile = users_store[current_user.user_id]
+    profile.update(changes)
+    profile["updatedAt"] = now_iso()
+    return profile
 
 
 @app.post("/requests/structure", tags=["Requests"])
-def structure_request(body: StructureInput):
+async def structure_request(
+    body: StructureInput,
+    _current_user: CurrentUser = Depends(get_current_user),
+):
     if any(word in body.text for word in ["電気工事", "医療行為", "介護", "送迎"]):
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
     is_dog = "犬" in body.text or "散歩" in body.text
@@ -275,7 +390,7 @@ def structure_request(body: StructureInput):
 
 
 @app.get("/requests", tags=["Requests"])
-def list_requests(
+async def list_requests(
     category: str | None = None,
     areaCode: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
@@ -289,14 +404,18 @@ def list_requests(
 
 
 @app.post("/requests", status_code=201, tags=["Requests"])
-def create_request(body: RequestInput, idempotency_key: str = Header(alias="Idempotency-Key")):
-    cache_key = ("create_request", idempotency_key)
+async def create_request(
+    body: RequestInput,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    cache_key = ("create_request", current_user.user_id, idempotency_key)
     if cache_key in idempotency_store:
         return idempotency_store[cache_key]
     request_id = new_id("req")
     item = {
         "id": request_id,
-        "requesterId": "usr_101",
+        "requesterId": current_user.user_id,
         **body.model_dump(exclude={"confirmed"}),
         "areaLabel": "大学周辺・約1km",
         "distanceKm": 1.0,
@@ -312,13 +431,19 @@ def create_request(body: RequestInput, idempotency_key: str = Header(alias="Idem
 
 
 @app.get("/requests/{request_id}", tags=["Requests"])
-def get_request(request_id: str):
+async def get_request(request_id: str):
     return request_or_404(request_id)
 
 
 @app.patch("/requests/{request_id}", tags=["Requests"])
-def update_request(request_id: str, body: RequestUpdateInput):
+async def update_request(
+    request_id: str,
+    body: RequestUpdateInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     item = request_or_404(request_id)
+    if item["requesterId"] != current_user.user_id:
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
     if item["status"] not in {"draft", "pending_review", "published"}:
         raise HTTPException(409, detail={"code": "REQUEST_NOT_EDITABLE"})
     if item["version"] != body.expectedVersion:
@@ -335,8 +460,13 @@ def update_request(request_id: str, body: RequestUpdateInput):
 
 
 @app.delete("/requests/{request_id}", status_code=204, tags=["Requests"])
-def cancel_request(request_id: str):
+async def cancel_request(
+    request_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     item = request_or_404(request_id)
+    if item["requesterId"] != current_user.user_id:
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
     if item["status"] in {"completed", "cancelled"}:
         raise HTTPException(409, detail={"code": "INVALID_REQUEST_TRANSITION"})
     item["status"] = "cancelled"
@@ -348,8 +478,13 @@ def cancel_request(request_id: str):
 
 
 @app.get("/requests/{request_id}/applications", tags=["Applications"])
-def list_applications(request_id: str):
-    request_or_404(request_id)
+async def list_applications(
+    request_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    request_item = request_or_404(request_id)
+    if request_item["requesterId"] != current_user.user_id:
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
     return {
         "items": [
             {**item, "helper": HELPERS[item["helperId"]]}
@@ -360,15 +495,19 @@ def list_applications(request_id: str):
 
 
 @app.post("/requests/{request_id}/applications", status_code=201, tags=["Applications"])
-def create_application(request_id: str, body: ApplicationInput):
+async def create_application(
+    request_id: str,
+    body: ApplicationInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     request_item = request_or_404(request_id)
     if request_item["status"] != "published":
         raise HTTPException(409, detail={"code": "REQUEST_NOT_OPEN"})
-    if request_item["requesterId"] == "usr_207":
+    if request_item["requesterId"] == current_user.user_id:
         raise HTTPException(403, detail={"code": "SELF_APPLICATION_NOT_ALLOWED"})
     if any(
         item["requestId"] == request_id
-        and item["helperId"] == "usr_207"
+        and item["helperId"] == current_user.user_id
         and item["status"] not in {"withdrawn", "cancelled"}
         for item in applications.values()
     ):
@@ -376,7 +515,7 @@ def create_application(request_id: str, body: ApplicationInput):
     item = {
         "id": new_id("app"),
         "requestId": request_id,
-        "helperId": "usr_207",
+        "helperId": current_user.user_id,
         **body.model_dump(),
         "status": "applied",
         "createdAt": now_iso(),
@@ -386,10 +525,15 @@ def create_application(request_id: str, body: ApplicationInput):
 
 
 @app.post("/applications/{application_id}/withdraw", tags=["Applications"])
-def withdraw_application(application_id: str):
+async def withdraw_application(
+    application_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     application = applications.get(application_id)
     if not application:
         raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
+    if application["helperId"] != current_user.user_id:
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
     if application["status"] != "applied":
         raise HTTPException(409, detail={"code": "APPLICATION_NOT_WITHDRAWABLE"})
     application["status"] = "withdrawn"
@@ -398,13 +542,19 @@ def withdraw_application(application_id: str):
 
 
 @app.post("/applications/{application_id}/select", status_code=201, tags=["Applications"])
-def select_application(application_id: str, body: SelectionInput):
+async def select_application(
+    application_id: str,
+    body: SelectionInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     application = applications.get(application_id)
     if not application:
         raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
     if application["requestId"] != body.requestId:
         raise HTTPException(409, detail={"code": "APPLICATION_REQUEST_MISMATCH"})
     request_item = request_or_404(body.requestId)
+    if request_item["requesterId"] != current_user.user_id:
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
     if request_item["version"] != body.expectedVersion:
         raise HTTPException(
             409,
@@ -440,23 +590,32 @@ def select_application(application_id: str, body: SelectionInput):
 
 
 @app.get("/matches/{match_id}", tags=["Matches"])
-def get_match(match_id: str):
-    return match_or_404(match_id)
+async def get_match(match_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    match = match_or_404(match_id)
+    ensure_match_participant(match, current_user.user_id)
+    return match
 
 
 @app.get("/matches/{match_id}/messages", tags=["Messages"])
-def list_messages(match_id: str):
-    match_or_404(match_id)
+async def list_messages(
+    match_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    ensure_match_participant(match_or_404(match_id), current_user.user_id)
     return {"items": messages.get(match_id, []), "nextCursor": None}
 
 
 @app.post("/matches/{match_id}/messages", status_code=201, tags=["Messages"])
-def create_message(match_id: str, body: MessageInput):
-    match_or_404(match_id)
+async def create_message(
+    match_id: str,
+    body: MessageInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    ensure_match_participant(match_or_404(match_id), current_user.user_id)
     item = {
         "id": new_id("msg"),
         "matchId": match_id,
-        "senderId": "usr_101",
+        "senderId": current_user.user_id,
         "body": body.body,
         "sentAt": now_iso(),
         "readAt": None,
@@ -467,9 +626,16 @@ def create_message(match_id: str, body: MessageInput):
 
 
 @app.post("/matches/{match_id}/complete", tags=["Matches"])
-def complete_match(match_id: str, body: CompletionInput):
+async def complete_match(
+    match_id: str,
+    body: CompletionInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     match = match_or_404(match_id)
-    match[f"{body.actorRole}Confirmed"] = True
+    actor_role = ensure_match_participant(match, current_user.user_id)
+    if body.actorRole != actor_role:
+        raise HTTPException(403, detail={"code": "ACTOR_ROLE_MISMATCH"})
+    match[f"{actor_role}Confirmed"] = True
     if match["requesterConfirmed"] and match["helperConfirmed"]:
         match["status"] = "completed"
         match["completedAt"] = now_iso()
@@ -481,8 +647,13 @@ def complete_match(match_id: str, body: CompletionInput):
 
 
 @app.post("/matches/{match_id}/dispute", tags=["Matches"])
-def dispute_match(match_id: str, body: DisputeInput):
+async def dispute_match(
+    match_id: str,
+    body: DisputeInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     match = match_or_404(match_id)
+    ensure_match_participant(match, current_user.user_id)
     if match["status"] in {"completed", "disputed"}:
         raise HTTPException(409, detail={"code": "MATCH_NOT_DISPUTABLE"})
     match.update({"status": "disputed", "disputeReason": body.reason, "disputedAt": now_iso()})
@@ -491,20 +662,25 @@ def dispute_match(match_id: str, body: DisputeInput):
 
 
 @app.post("/matches/{match_id}/reviews", status_code=201, tags=["Reviews"])
-def create_review(match_id: str, body: ReviewInput):
+async def create_review(
+    match_id: str,
+    body: ReviewInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     match = match_or_404(match_id)
+    actor_role = ensure_match_participant(match, current_user.user_id)
     if match["status"] != "completed":
         raise HTTPException(409, detail={"code": "MATCH_NOT_COMPLETED"})
     if any(
-        review["matchId"] == match_id and review["reviewerId"] == "usr_101"
+        review["matchId"] == match_id and review["reviewerId"] == current_user.user_id
         for review in reviews.values()
     ):
         raise HTTPException(409, detail={"code": "DUPLICATE_REVIEW"})
     item = {
         "id": new_id("review"),
         "matchId": match_id,
-        "reviewerId": "usr_101",
-        "revieweeId": match["helperId"],
+        "reviewerId": current_user.user_id,
+        "revieweeId": match["helperId"] if actor_role == "requester" else match["requesterId"],
         **body.model_dump(),
         "createdAt": now_iso(),
     }
@@ -513,8 +689,12 @@ def create_review(match_id: str, body: ReviewInput):
 
 
 @app.post("/achievements/generate", status_code=201, tags=["Achievements"])
-def generate_achievement(body: AchievementInput):
+async def generate_achievement(
+    body: AchievementInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     match = match_or_404(body.matchId)
+    ensure_match_participant(match, current_user.user_id)
     if match["status"] != "completed":
         raise HTTPException(409, detail={"code": "MATCH_NOT_COMPLETED"})
     request_item = request_or_404(match["requestId"])
@@ -536,10 +716,15 @@ def generate_achievement(body: AchievementInput):
 
 
 @app.patch("/achievements/visibility", tags=["Achievements"])
-def update_achievement_visibility(body: AchievementVisibilityInput):
+async def update_achievement_visibility(
+    body: AchievementVisibilityInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     item = achievements.get(body.achievementId)
     if not item:
         raise HTTPException(404, detail={"code": "ACHIEVEMENT_NOT_FOUND"})
+    if item["userId"] != current_user.user_id:
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
     if body.visibility == "public" and not body.approved:
         raise HTTPException(409, detail={"code": "ACHIEVEMENT_APPROVAL_REQUIRED"})
     item["visibility"] = body.visibility
@@ -550,28 +735,37 @@ def update_achievement_visibility(body: AchievementVisibilityInput):
 
 
 @app.post("/verifications", status_code=201, tags=["Verification"])
-def create_verification(body: VerificationInput):
+async def create_verification(
+    body: VerificationInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     if body.method == "student_card" and not body.storageObjectKey:
         raise HTTPException(422, detail={"code": "STORAGE_OBJECT_REQUIRED"})
-    if any(item["status"] == "pending" for item in verifications.values()):
+    if any(
+        item["status"] == "pending" and item["userId"] == current_user.user_id
+        for item in verifications.values()
+    ):
         raise HTTPException(409, detail={"code": "VERIFICATION_ALREADY_PENDING"})
     item = {
         "id": new_id("verification"),
-        "userId": "usr_101",
+        "userId": current_user.user_id,
         **body.model_dump(),
         "status": "pending",
         "createdAt": now_iso(),
     }
     verifications[item["id"]] = item
-    profile_store["verificationStatus"] = "pending"
+    users_store[current_user.user_id]["verificationStatus"] = "pending"
     return item
 
 
 @app.post("/reports", status_code=201, tags=["Safety"])
-def create_report(body: ReportInput):
+async def create_report(
+    body: ReportInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     item = {
         "id": new_id("report"),
-        "reporterId": "usr_101",
+        "reporterId": current_user.user_id,
         **body.model_dump(),
         "severity": "high" if body.reason in {"fraud", "dangerous_work"} else "medium",
         "status": "open",
@@ -587,8 +781,12 @@ def create_report(body: ReportInput):
 
 
 @app.post("/users/{user_id}/block", status_code=201, tags=["Safety"])
-def set_user_block(user_id: str, body: BlockInput):
-    if user_id == "usr_101":
+async def set_user_block(
+    user_id: str,
+    body: BlockInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if user_id == current_user.user_id:
         raise HTTPException(422, detail={"code": "SELF_BLOCK_NOT_ALLOWED"})
     if body.blocked:
         blocks.add(user_id)

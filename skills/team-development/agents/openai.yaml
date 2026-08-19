@@ -1,0 +1,4 @@
+interface:
+  display_name: "Team Development"
+  short_description: "Safe, consistent collaboration for this FastAPI repository"
+  default_prompt: "Use $team-development to implement and review this change with the repository team rules."

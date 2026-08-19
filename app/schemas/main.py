@@ -1,9 +1,11 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StructureInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     text: str = Field(min_length=5, max_length=3000)
     areaCode: str
 
