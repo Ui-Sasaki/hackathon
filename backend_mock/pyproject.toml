@@ -1,0 +1,18 @@
+[project]
+name = "tasuke-no-wa-backend-mock"
+version = "0.1.0"
+description = "Frontend development mock API for Tasuke no Wa"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27,<1",
+  "pytest>=8,<9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
