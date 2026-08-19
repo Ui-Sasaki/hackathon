@@ -5,7 +5,6 @@
 ## セットアップ
 
 ```bash
-cd masayoshi
 python3 -m venv .venv
 ```
 
