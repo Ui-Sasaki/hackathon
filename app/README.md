@@ -70,7 +70,7 @@ python -m uvicorn main:app --reload --port 8000
 | POST | `/applications/{id}/withdraw` | 応募取り下げ |
 | GET / POST | `/matches/{id}/messages` | チャット取得・送信 |
 | POST | `/matches/{id}/complete` | 完了確認 |
-| POST | `/matches/{id}/dispute` | 異議申立て |
+| POST | `/matches/{id}/dispute` | マッチングキャンセル |
 | POST | `/matches/{id}/reviews` | 評価投稿 |
 | POST | `/achievements/generate` | 実績生成 |
 | POST | `/verifications` | 本人確認申請 |

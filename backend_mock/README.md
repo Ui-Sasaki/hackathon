@@ -63,7 +63,7 @@ POST /_mock/reset
 | POST | `/applications/{application_id}/withdraw` | 応募取り下げ |
 | GET/POST | `/matches/{match_id}/messages` | チャット |
 | POST | `/matches/{match_id}/complete` | 完了確認 |
-| POST | `/matches/{match_id}/dispute` | 異議申立て |
+| POST | `/matches/{match_id}/dispute` | マッチングキャンセル |
 | POST | `/matches/{match_id}/reviews` | 評価・感謝 |
 | POST | `/achievements/generate` | AI実績生成モック |
 | PATCH | `/achievements/visibility` | 実績公開範囲変更 |
