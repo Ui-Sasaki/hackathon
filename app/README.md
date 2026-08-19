@@ -1,10 +1,10 @@
 # テトテFastAPI 開発ガイド
 
-地域の困りごとと支援者をつなぐAPIである。現在はインメモリデータを使い、認証・AI・本人確認・DBを模擬している。
+地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使い、業務データ、AI、本人確認は現在インメモリで模擬している。
 
 ## セットアップと起動
 
-リポジトリの `masayoshi` ディレクトリで実行する。
+リポジトリのルートディレクトリで実行する。
 
 ```bash
 python3 -m venv .venv
@@ -18,12 +18,27 @@ python -m uvicorn main:app --reload --port 8000
 - OpenAPI: `http://localhost:8000/openapi.json`
 - ヘルスチェック: `http://localhost:8000/health`
 
+起動前にSuperTokens Coreを用意し、必要に応じて次の環境変数を設定する。
+
+| 環境変数 | 既定値 | 用途 |
+|---|---|---|
+| `SUPERTOKENS_CONNECTION_URI` | `http://localhost:3567` | SuperTokens Core接続先 |
+| `SUPERTOKENS_API_KEY` | 未設定 | Core APIキー |
+| `API_DOMAIN` | `http://localhost:8000` | API公開元 |
+| `WEBSITE_DOMAIN` | `http://localhost:3000` | CORSで許可するフロントエンド |
+| `AUTH_COOKIE_SECURE` | `true` | CookieのSecure属性 |
+| `AUTH_COOKIE_SAME_SITE` | `lax` | CookieのSameSite属性 |
+
+登録、ログイン、ログアウト、パスワード再設定はSuperTokensの`/auth/*` APIを
+利用する。Cookie認証ではHttpOnly/Secure/SameSite Cookieと`anti-csrf`ヘッダーが
+使われる。ローカルHTTP開発時だけ`AUTH_COOKIE_SECURE=false`にする。
+
 `/requests` と `/api/requests` のように、各APIは `/api` 接頭辞の有無に対応する。
 
 ## フォルダ構成
 
 ```text
-masayoshi/
+./
 ├── main.py              # uvicorn用エントリーポイント
 ├── app/
 │   ├── main.py          # ASGIアプリの公開
@@ -40,6 +55,11 @@ masayoshi/
 | Method | Path | 説明 |
 |---|---|---|
 | GET | `/health` | ヘルスチェック |
+| POST | `/auth/signup` | ユーザー登録 |
+| POST | `/auth/signin` | ログイン |
+| POST | `/auth/signout` | ログアウト |
+| POST | `/auth/user/password/reset/token` | パスワード再設定メール送信 |
+| POST | `/auth/user/password/reset` | パスワード再設定・既存セッション失効 |
 | GET / PATCH | `/profile` | プロフィール取得・更新 |
 | POST | `/requests/structure` | 依頼文の構造化 |
 | GET / POST | `/requests` | 依頼一覧・作成 |
@@ -50,7 +70,7 @@ masayoshi/
 | POST | `/applications/{id}/withdraw` | 応募取り下げ |
 | GET / POST | `/matches/{id}/messages` | チャット取得・送信 |
 | POST | `/matches/{id}/complete` | 完了確認 |
-| POST | `/matches/{id}/dispute` | 異議申立て |
+| POST | `/matches/{id}/dispute` | マッチングキャンセル |
 | POST | `/matches/{id}/reviews` | 評価投稿 |
 | POST | `/achievements/generate` | 実績生成 |
 | POST | `/verifications` | 本人確認申請 |
@@ -58,6 +78,25 @@ masayoshi/
 | POST | `/users/{id}/block` | ブロック・解除 |
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
+
+## エラーレスポンスとトレースID
+
+400、401、403、404、409、422、500 のエラーは、次の共通形式で返す。
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "入力内容を確認してください",
+    "details": {},
+    "requestId": "trace_0123abcd"
+  }
+}
+```
+
+`requestId` はレスポンスの `X-Request-ID` ヘッダーにも設定され、サーバーログの
+`requestId` と照合できる。検証エラーには入力値を含めず、500 エラーでは内部例外を
+公開しない。
 
 ## 開発とテスト
 
