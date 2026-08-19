@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Frontend development mock API for Tasuke no Wa"
 requires-python = ">=3.11"
 dependencies = [
-  "fastapi>=0.115,<1",
+  "fastapi>=0.115,<0.116",
+  "anyio>=4.4,<4.10",
   "uvicorn[standard]>=0.30,<1",
 ]
 
@@ -16,3 +17,8 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+python_files = ["main.py"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["backend_mock*", "tests*"]

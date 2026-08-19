@@ -1,12 +1,12 @@
-# backend_mock
+# たすけの輪 FastAPI Mock
 
 「たすけの輪」のフロントエンド開発用FastAPIモックである。
 
 ## セットアップ
 
 ```bash
-cd masayoshi/backend_mock
-python -m venv .venv
+cd masayoshi
+python3 -m venv .venv
 ```
 
 Windows:
@@ -26,12 +26,16 @@ pip install -e '.[dev]'
 ## 起動
 
 ```bash
-uvicorn app.main:app --reload --port 8000
+.venv/bin/python -m uvicorn app.main:app --reload --port 8000
 ```
+
+Windowsでは `.venv\Scripts\python -m uvicorn app.main:app --reload --port 8000`
+を実行する。
 
 - API: `http://localhost:8000`
 - Swagger UI: `http://localhost:8000/docs`
 - OpenAPI: `http://localhost:8000/openapi.json`
+- 要件書準拠の `/api` 接頭辞も利用可能（例: `/api/requests`）
 
 フロントエンドの環境変数例：
 
@@ -51,16 +55,22 @@ POST /_mock/reset
 |---|---|---|
 | GET | `/health` | ヘルスチェック |
 | GET | `/profile` | ログインユーザー取得 |
+| PATCH | `/profile` | プロフィール更新 |
 | POST | `/requests/structure` | 依頼文のAI構造化モック |
 | GET | `/requests` | 依頼一覧 |
 | POST | `/requests` | 依頼作成 |
 | GET | `/requests/{request_id}/applications` | 応募者一覧 |
 | POST | `/applications/{application_id}/select` | 依頼者による応募者選択 |
+| POST | `/applications/{application_id}/withdraw` | 応募取り下げ |
 | GET/POST | `/matches/{match_id}/messages` | チャット |
 | POST | `/matches/{match_id}/complete` | 完了確認 |
+| POST | `/matches/{match_id}/dispute` | 異議申立て |
 | POST | `/matches/{match_id}/reviews` | 評価・感謝 |
 | POST | `/achievements/generate` | AI実績生成モック |
+| PATCH | `/achievements/visibility` | 実績公開範囲変更 |
+| POST | `/verifications` | 本人確認申請 |
 | POST | `/reports` | 通報 |
+| POST | `/users/{user_id}/block` | ユーザーブロック・解除 |
 
 ## 注意
 

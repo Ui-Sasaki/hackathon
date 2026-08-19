@@ -1,11 +1,20 @@
 from copy import deepcopy
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from app.routers import system_router
+from app.schemas import (
+    AchievementInput, AchievementVisibilityInput, ApplicationInput, AuthInput,
+    BlockInput, CompletionInput, DisputeInput, MessageInput, ProfileUpdateInput,
+    ReportInput, RequestInput, RequestUpdateInput, ReviewInput, SelectionInput,
+    StructureInput, VerificationInput,
+)
 
 
 app = FastAPI(
@@ -23,6 +32,61 @@ app.add_middleware(
 )
 
 
+class ApiPrefixMiddleware:
+    """要件書の /api パスと、既存フロント用の無接頭辞パスを両方提供する。"""
+
+    def __init__(self, asgi_app):
+        self.asgi_app = asgi_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and (
+            scope["path"] == "/api" or scope["path"].startswith("/api/")
+        ):
+            scope = dict(scope)
+            scope["path"] = scope["path"][4:] or "/"
+            scope["raw_path"] = scope["path"].encode()
+        await self.asgi_app(scope, receive, send)
+
+
+app.add_middleware(ApiPrefixMiddleware)
+app.include_router(system_router)
+
+
+ERROR_MESSAGES = {
+    "REQUEST_NOT_FOUND": "依頼が見つかりません",
+    "MATCH_NOT_FOUND": "マッチが見つかりません",
+    "APPLICATION_NOT_FOUND": "応募が見つかりません",
+    "REQUEST_STATE_CONFLICT": "依頼の状態が更新されているため処理できません",
+    "VALIDATION_ERROR": "入力内容を確認してください",
+}
+
+
+def error_body(code: str, details: dict[str, Any] | None = None) -> dict:
+    return {
+        "error": {
+            "code": code,
+            "message": ERROR_MESSAGES.get(code, code.replace("_", " ").lower()),
+            "details": details or {},
+            "requestId": new_id("trace"),
+        }
+    }
+
+
+@app.exception_handler(HTTPException)
+async def http_error_handler(_request: Request, exc: HTTPException):
+    detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+    code = detail.pop("code", "HTTP_ERROR")
+    return JSONResponse(status_code=exc.status_code, content=error_body(code, detail))
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(_request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content=jsonable_encoder(error_body("VALIDATION_ERROR", {"errors": exc.errors()})),
+    )
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -31,69 +95,11 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:8]}"
 
 
-class StructureInput(BaseModel):
-    text: str = Field(min_length=5, max_length=3000)
-    areaCode: str
-
-
-class RequestInput(BaseModel):
-    title: str = Field(min_length=1, max_length=100)
-    description: str = Field(min_length=1, max_length=2000)
-    category: str
-    scheduledAt: str
-    estimatedMinutes: int = Field(ge=10, le=240)
-    requiredHelpers: int = Field(default=1, ge=1, le=5)
-    areaCode: str
-    riskLevel: Literal["low", "medium"] = "low"
-    confirmed: Literal[True]
-
-
-class ApplicationInput(BaseModel):
-    message: str = Field(min_length=1, max_length=1000)
-    availableAt: str
-
-
-class SelectionInput(BaseModel):
-    requestId: str
-    expectedVersion: int = Field(ge=1)
-
-
-class MessageInput(BaseModel):
-    body: str = Field(min_length=1, max_length=2000)
-
-
-class CompletionInput(BaseModel):
-    completed: Literal[True]
-    actorRole: Literal["requester", "helper"]
-
-
-class ReviewInput(BaseModel):
-    onTime: bool
-    polite: bool
-    safetyAware: bool
-    communicative: bool
-    comment: str = Field(min_length=1, max_length=1000)
-
-
-class AchievementInput(BaseModel):
-    matchId: str
-    visibility: Literal["private", "members", "public"] = "members"
-
-
-class ReportInput(BaseModel):
-    targetType: Literal["user", "request", "match", "message", "review"]
-    targetId: str
-    reason: Literal[
-        "fraud",
-        "harassment",
-        "dangerous_work",
-        "false_information",
-        "no_show",
-        "personal_information_request",
-        "payment_request",
-        "other",
-    ]
-    description: str = Field(min_length=10, max_length=2000)
+def get_or_404(store: dict, entity_id: str, error_code: str) -> dict:
+    item = store.get(entity_id)
+    if item is None:
+        raise HTTPException(404, detail={"code": error_code})
+    return item
 
 
 INITIAL_REQUESTS = [
@@ -159,6 +165,16 @@ HELPERS = {
 
 def reset_store() -> None:
     global requests_store, applications, matches, messages, reviews, achievements
+    global profile_store, verifications, reports, blocks, idempotency_store
+    profile_store = {
+        "id": "usr_101",
+        "displayName": "山田 花子",
+        "role": "requester",
+        "emailVerified": True,
+        "verificationStatus": "approved",
+        "areaCode": "AREA-001",
+        "status": "active",
+    }
     requests_store = {item["id"]: deepcopy(item) for item in INITIAL_REQUESTS}
     applications = {
         "app_55": {
@@ -184,31 +200,21 @@ def reset_store() -> None:
     messages = {}
     reviews = {}
     achievements = {}
+    verifications = {}
+    reports = {}
+    blocks = set()
+    idempotency_store = {}
 
 
 reset_store()
 
 
 def request_or_404(request_id: str) -> dict:
-    if request_id not in requests_store:
-        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
-    return requests_store[request_id]
+    return get_or_404(requests_store, request_id, "REQUEST_NOT_FOUND")
 
 
 def match_or_404(match_id: str) -> dict:
-    if match_id not in matches:
-        raise HTTPException(404, detail={"code": "MATCH_NOT_FOUND"})
-    return matches[match_id]
-
-
-@app.get("/", tags=["System"])
-def root():
-    return {"name": app.title, "version": app.version, "docs": "/docs"}
-
-
-@app.get("/health", tags=["System"])
-def health():
-    return {"status": "ok", "time": now_iso()}
+    return get_or_404(matches, match_id, "MATCH_NOT_FOUND")
 
 
 @app.post("/_mock/reset", tags=["Mock control"])
@@ -217,15 +223,37 @@ def reset_mock():
     return {"reset": True}
 
 
+@app.post("/auth/register", status_code=201, tags=["Auth"])
+def register(body: AuthInput):
+    return {
+        "user": {**profile_store, "emailVerified": False},
+        "session": {"type": "mock_cookie", "expiresIn": 3600},
+    }
+
+
+@app.post("/auth/login", tags=["Auth"])
+def login(_body: AuthInput):
+    return {"user": profile_store, "session": {"type": "mock_cookie", "expiresIn": 3600}}
+
+
+@app.post("/auth/logout", status_code=204, tags=["Auth"])
+def logout():
+    return None
+
+
 @app.get("/profile", tags=["Profile"])
 def get_profile():
-    return {
-        "id": "usr_101",
-        "displayName": "山田 花子",
-        "role": "requester",
-        "verificationStatus": "approved",
-        "areaCode": "AREA-001",
-    }
+    return profile_store
+
+
+@app.patch("/profile", tags=["Profile"])
+def update_profile(body: ProfileUpdateInput):
+    changes = body.model_dump(exclude_none=True)
+    if not changes:
+        raise HTTPException(422, detail={"code": "NO_CHANGES"})
+    profile_store.update(changes)
+    profile_store["updatedAt"] = now_iso()
+    return profile_store
 
 
 @app.post("/requests/structure", tags=["Requests"])
@@ -262,6 +290,9 @@ def list_requests(
 
 @app.post("/requests", status_code=201, tags=["Requests"])
 def create_request(body: RequestInput, idempotency_key: str = Header(alias="Idempotency-Key")):
+    cache_key = ("create_request", idempotency_key)
+    if cache_key in idempotency_store:
+        return idempotency_store[cache_key]
     request_id = new_id("req")
     item = {
         "id": request_id,
@@ -276,12 +307,44 @@ def create_request(body: RequestInput, idempotency_key: str = Header(alias="Idem
         "createdAt": now_iso(),
     }
     requests_store[request_id] = item
+    idempotency_store[cache_key] = item
     return item
 
 
 @app.get("/requests/{request_id}", tags=["Requests"])
 def get_request(request_id: str):
     return request_or_404(request_id)
+
+
+@app.patch("/requests/{request_id}", tags=["Requests"])
+def update_request(request_id: str, body: RequestUpdateInput):
+    item = request_or_404(request_id)
+    if item["status"] not in {"draft", "pending_review", "published"}:
+        raise HTTPException(409, detail={"code": "REQUEST_NOT_EDITABLE"})
+    if item["version"] != body.expectedVersion:
+        raise HTTPException(
+            409, detail={"code": "REQUEST_STATE_CONFLICT", "currentVersion": item["version"]}
+        )
+    changes = body.model_dump(exclude={"expectedVersion"}, exclude_none=True)
+    if "requiredHelpers" in changes and changes["requiredHelpers"] < item["acceptedHelpers"]:
+        raise HTTPException(409, detail={"code": "HELPER_COUNT_CONFLICT"})
+    item.update(changes)
+    item["version"] += 1
+    item["updatedAt"] = now_iso()
+    return item
+
+
+@app.delete("/requests/{request_id}", status_code=204, tags=["Requests"])
+def cancel_request(request_id: str):
+    item = request_or_404(request_id)
+    if item["status"] in {"completed", "cancelled"}:
+        raise HTTPException(409, detail={"code": "INVALID_REQUEST_TRANSITION"})
+    item["status"] = "cancelled"
+    item["version"] += 1
+    for application in applications.values():
+        if application["requestId"] == request_id and application["status"] == "applied":
+            application["status"] = "cancelled"
+    return None
 
 
 @app.get("/requests/{request_id}/applications", tags=["Applications"])
@@ -301,6 +364,15 @@ def create_application(request_id: str, body: ApplicationInput):
     request_item = request_or_404(request_id)
     if request_item["status"] != "published":
         raise HTTPException(409, detail={"code": "REQUEST_NOT_OPEN"})
+    if request_item["requesterId"] == "usr_207":
+        raise HTTPException(403, detail={"code": "SELF_APPLICATION_NOT_ALLOWED"})
+    if any(
+        item["requestId"] == request_id
+        and item["helperId"] == "usr_207"
+        and item["status"] not in {"withdrawn", "cancelled"}
+        for item in applications.values()
+    ):
+        raise HTTPException(409, detail={"code": "DUPLICATE_APPLICATION"})
     item = {
         "id": new_id("app"),
         "requestId": request_id,
@@ -313,23 +385,44 @@ def create_application(request_id: str, body: ApplicationInput):
     return item
 
 
+@app.post("/applications/{application_id}/withdraw", tags=["Applications"])
+def withdraw_application(application_id: str):
+    application = applications.get(application_id)
+    if not application:
+        raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
+    if application["status"] != "applied":
+        raise HTTPException(409, detail={"code": "APPLICATION_NOT_WITHDRAWABLE"})
+    application["status"] = "withdrawn"
+    application["updatedAt"] = now_iso()
+    return application
+
+
 @app.post("/applications/{application_id}/select", status_code=201, tags=["Applications"])
 def select_application(application_id: str, body: SelectionInput):
     application = applications.get(application_id)
     if not application:
         raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
+    if application["requestId"] != body.requestId:
+        raise HTTPException(409, detail={"code": "APPLICATION_REQUEST_MISMATCH"})
     request_item = request_or_404(body.requestId)
     if request_item["version"] != body.expectedVersion:
         raise HTTPException(
             409,
             detail={"code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"]},
         )
+    if application["status"] != "applied":
+        raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
     if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
         raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
     application["status"] = "selected"
     request_item["acceptedHelpers"] += 1
     request_item["version"] += 1
-    request_item["status"] = "matched"
+    capacity_reached = request_item["acceptedHelpers"] >= request_item["requiredHelpers"]
+    request_item["status"] = "matched" if capacity_reached else "matching"
+    if capacity_reached:
+        for other in applications.values():
+            if other["requestId"] == request_item["id"] and other["status"] == "applied":
+                other["status"] = "not_selected"
     match = {
         "id": new_id("match"),
         "requestId": request_item["id"],
@@ -380,8 +473,20 @@ def complete_match(match_id: str, body: CompletionInput):
     if match["requesterConfirmed"] and match["helperConfirmed"]:
         match["status"] = "completed"
         match["completedAt"] = now_iso()
+        request_or_404(match["requestId"])["status"] = "completed"
     else:
         match["status"] = "completion_pending"
+        request_or_404(match["requestId"])["status"] = "completion_pending"
+    return match
+
+
+@app.post("/matches/{match_id}/dispute", tags=["Matches"])
+def dispute_match(match_id: str, body: DisputeInput):
+    match = match_or_404(match_id)
+    if match["status"] in {"completed", "disputed"}:
+        raise HTTPException(409, detail={"code": "MATCH_NOT_DISPUTABLE"})
+    match.update({"status": "disputed", "disputeReason": body.reason, "disputedAt": now_iso()})
+    request_or_404(match["requestId"])["status"] = "disputed"
     return match
 
 
@@ -390,6 +495,11 @@ def create_review(match_id: str, body: ReviewInput):
     match = match_or_404(match_id)
     if match["status"] != "completed":
         raise HTTPException(409, detail={"code": "MATCH_NOT_COMPLETED"})
+    if any(
+        review["matchId"] == match_id and review["reviewerId"] == "usr_101"
+        for review in reviews.values()
+    ):
+        raise HTTPException(409, detail={"code": "DUPLICATE_REVIEW"})
     item = {
         "id": new_id("review"),
         "matchId": match_id,
@@ -425,9 +535,41 @@ def generate_achievement(body: AchievementInput):
     return item
 
 
+@app.patch("/achievements/visibility", tags=["Achievements"])
+def update_achievement_visibility(body: AchievementVisibilityInput):
+    item = achievements.get(body.achievementId)
+    if not item:
+        raise HTTPException(404, detail={"code": "ACHIEVEMENT_NOT_FOUND"})
+    if body.visibility == "public" and not body.approved:
+        raise HTTPException(409, detail={"code": "ACHIEVEMENT_APPROVAL_REQUIRED"})
+    item["visibility"] = body.visibility
+    if body.approved:
+        item["approvedAt"] = now_iso()
+        item["status"] = "approved"
+    return item
+
+
+@app.post("/verifications", status_code=201, tags=["Verification"])
+def create_verification(body: VerificationInput):
+    if body.method == "student_card" and not body.storageObjectKey:
+        raise HTTPException(422, detail={"code": "STORAGE_OBJECT_REQUIRED"})
+    if any(item["status"] == "pending" for item in verifications.values()):
+        raise HTTPException(409, detail={"code": "VERIFICATION_ALREADY_PENDING"})
+    item = {
+        "id": new_id("verification"),
+        "userId": "usr_101",
+        **body.model_dump(),
+        "status": "pending",
+        "createdAt": now_iso(),
+    }
+    verifications[item["id"]] = item
+    profile_store["verificationStatus"] = "pending"
+    return item
+
+
 @app.post("/reports", status_code=201, tags=["Safety"])
 def create_report(body: ReportInput):
-    return {
+    item = {
         "id": new_id("report"),
         "reporterId": "usr_101",
         **body.model_dump(),
@@ -435,3 +577,21 @@ def create_report(body: ReportInput):
         "status": "open",
         "createdAt": now_iso(),
     }
+    reports[item["id"]] = item
+    if item["severity"] == "high" and body.targetType == "request":
+        target = requests_store.get(body.targetId)
+        if target:
+            target["status"] = "suspended"
+            target["version"] += 1
+    return item
+
+
+@app.post("/users/{user_id}/block", status_code=201, tags=["Safety"])
+def set_user_block(user_id: str, body: BlockInput):
+    if user_id == "usr_101":
+        raise HTTPException(422, detail={"code": "SELF_BLOCK_NOT_ALLOWED"})
+    if body.blocked:
+        blocks.add(user_id)
+    else:
+        blocks.discard(user_id)
+    return {"userId": user_id, "blocked": user_id in blocks, "updatedAt": now_iso()}
