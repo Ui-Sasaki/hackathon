@@ -16,7 +16,7 @@ PGPORT="${PGPORT:-55432}"
 PGSUPERUSER="${PGSUPERUSER:-tetote}"
 PGDATABASE="${PGDATABASE:-tetote}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-MIGRATION="$HERE/../migrations/20260820000000_baseline.sql"
+MIGRATIONS_DIR="$HERE/../migrations"
 
 psql_su() { "$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U "$PGSUPERUSER" "$@"; }
 
@@ -24,8 +24,13 @@ echo "=== 1. データベースを作り直す ==="
 "$PGBIN/dropdb"   -h "$PGHOST" -p "$PGPORT" -U "$PGSUPERUSER" --if-exists "$PGDATABASE"
 "$PGBIN/createdb" -h "$PGHOST" -p "$PGPORT" -U "$PGSUPERUSER" "$PGDATABASE"
 
-echo "=== 2. baseline migration を適用する ==="
-psql_su -d "$PGDATABASE" -q -v ON_ERROR_STOP=1 -f "$MIGRATION"
+echo "=== 2. migration を適用する ==="
+# ファイル名の日時順に supabase/migrations/ の全ファイルを適用する。
+# 1本だけを名指しすると、後から追加した migration が検査対象から漏れる。
+for migration in "$MIGRATIONS_DIR"/*.sql; do
+  echo "  - $(basename "$migration")"
+  psql_su -d "$PGDATABASE" -q -v ON_ERROR_STOP=1 -f "$migration"
+done
 psql_su -d "$PGDATABASE" -tA -c "
   select 'tables=' || (select count(*) from pg_tables where schemaname='public')
       || ' enums='  || (select count(*) from pg_type where typtype='e'
