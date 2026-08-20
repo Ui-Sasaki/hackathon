@@ -625,6 +625,11 @@ async def create_message(
     return item
 
 
+# 完了確認を受け付けるマッチ状態。ここを明示しないと disputed や completed を
+# 完了操作で上書きできる。状態を変える前に検査すること。
+COMPLETABLE_MATCH_STATUSES = {"matched", "completion_pending"}
+
+
 @app.post("/matches/{match_id}/complete", tags=["Matches"])
 async def complete_match(
     match_id: str,
@@ -635,6 +640,8 @@ async def complete_match(
     actor_role = ensure_match_participant(match, current_user.user_id)
     if body.actorRole != actor_role:
         raise HTTPException(403, detail={"code": "ACTOR_ROLE_MISMATCH"})
+    if match["status"] not in COMPLETABLE_MATCH_STATUSES:
+        raise HTTPException(409, detail={"code": "MATCH_NOT_COMPLETABLE"})
     match[f"{actor_role}Confirmed"] = True
     if match["requesterConfirmed"] and match["helperConfirmed"]:
         match["status"] = "completed"
