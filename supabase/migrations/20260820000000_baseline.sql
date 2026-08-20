@@ -202,3 +202,205 @@ create index matches_helper_status_idx on matches (helper_id, status, matched_at
 create index matches_status_matched_idx on matches (status, matched_at);
 
 commit;
+
+begin;
+
+-- ---------------------------------------------------------------------------
+-- messages
+-- ---------------------------------------------------------------------------
+
+create table messages (
+    id uuid primary key default gen_random_uuid(),
+    match_id uuid not null references matches (id) on delete restrict,
+    sender_id uuid not null references users (id) on delete restrict,
+    body text not null,
+    moderation moderation_status not null default 'clean',
+    sent_at timestamptz not null default now(),
+    read_at timestamptz,
+    constraint messages_body_length check (length(trim(body)) between 1 and 4000),
+    constraint messages_read_after_sent check (read_at is null or read_at >= sent_at)
+);
+
+create index messages_match_cursor_idx on messages (match_id, sent_at, id);
+create index messages_match_unread_idx on messages (match_id, read_at);
+create index messages_sender_sent_idx on messages (sender_id, sent_at desc);
+
+-- ---------------------------------------------------------------------------
+-- reviews
+-- ---------------------------------------------------------------------------
+
+create table reviews (
+    id uuid primary key default gen_random_uuid(),
+    match_id uuid not null references matches (id) on delete restrict,
+    reviewer_id uuid not null references users (id) on delete restrict,
+    reviewee_id uuid not null references users (id) on delete restrict,
+    evaluation jsonb not null default '{}'::jsonb,
+    comment text,
+    created_at timestamptz not null default now(),
+    -- 同一マッチにつきレビュアー1件（#10）。
+    constraint reviews_match_reviewer_key unique (match_id, reviewer_id),
+    constraint reviews_reviewer_is_not_reviewee check (reviewer_id <> reviewee_id),
+    constraint reviews_evaluation_is_object check (jsonb_typeof(evaluation) = 'object'),
+    constraint reviews_comment_length check (comment is null or length(comment) <= 2000)
+);
+
+-- 「完了済みマッチだけ」「reviewee が相手当事者であること」は matches 行の参照が要るため
+-- テーブル単体の CHECK では表現できない。投稿 RPC / API 側で検証する。
+
+create index reviews_reviewee_created_idx on reviews (reviewee_id, created_at desc);
+create index reviews_match_created_idx on reviews (match_id, created_at);
+
+-- ---------------------------------------------------------------------------
+-- achievement_profiles
+--
+-- 事実データの正本は matches / requests / reviews であり、generated_text へ埋め込まない。
+-- AI provider を外しても DB 契約が残る形にしておく（#10 / 学生調査の結果に依存しない）。
+-- ---------------------------------------------------------------------------
+
+create table achievement_profiles (
+    user_id uuid primary key references users (id) on delete restrict,
+    generated_text text,
+    model_name text,
+    prompt_version text,
+    generated_at timestamptz,
+    approved_at timestamptz,
+    visibility achievement_visibility not null default 'private',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint achievement_generated_text_length
+        check (generated_text is null or length(generated_text) <= 10000),
+    -- 生成文があるなら、どのモデルのどのプロンプトでいつ作ったかを必ず持つ。
+    constraint achievement_generation_metadata_complete
+        check (generated_text is null
+               or (model_name is not null
+                   and prompt_version is not null
+                   and generated_at is not null)),
+    constraint achievement_approved_requires_generation
+        check (approved_at is null or generated_at is not null)
+);
+
+create index achievement_visibility_approved_idx
+    on achievement_profiles (visibility, approved_at);
+create index achievement_generated_at_idx on achievement_profiles (generated_at);
+
+-- ---------------------------------------------------------------------------
+-- verification_requests
+--
+-- 画像本体は private bucket に置き、この表は metadata だけを持つ。
+-- storage_object_key に public URL を保存しない。
+-- ---------------------------------------------------------------------------
+
+create table verification_requests (
+    id uuid primary key default gen_random_uuid(),
+    user_id uuid not null references users (id) on delete restrict,
+    reviewer_id uuid references users (id) on delete set null,
+    status verification_status not null default 'pending',
+    storage_object_key text,
+    note text,
+    reviewed_at timestamptz,
+    deletion_due_at timestamptz,
+    deleted_at timestamptz,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    -- unverified は利用者の状態であって申請の状態ではない。
+    constraint verification_status_is_not_unverified check (status <> 'unverified'),
+    constraint verification_reviewer_requires_timestamp
+        check (reviewer_id is null or reviewed_at is not null),
+    constraint verification_decided_requires_timestamp
+        check (status not in ('approved', 'rejected') or reviewed_at is not null),
+    constraint verification_stored_object_requires_due_date
+        check (storage_object_key is null or deletion_due_at is not null),
+    constraint verification_deleted_after_due
+        check (deleted_at is null or deleted_at >= deletion_due_at)
+);
+
+create index verification_user_created_idx on verification_requests (user_id, created_at desc);
+-- 同時に複数の未処理申請を作らせない。
+create unique index verification_one_pending_per_user_idx
+    on verification_requests (user_id) where status = 'pending';
+create index verification_queue_idx on verification_requests (status, created_at);
+create index verification_pending_deletion_idx
+    on verification_requests (deletion_due_at)
+    where deleted_at is null and storage_object_key is not null;
+create index verification_reviewer_idx on verification_requests (reviewer_id, reviewed_at desc);
+
+-- ---------------------------------------------------------------------------
+-- reports
+--
+-- target は polymorphic なので通常の FK を張れない。存在確認は insert RPC で行う。
+-- ---------------------------------------------------------------------------
+
+create table reports (
+    id uuid primary key default gen_random_uuid(),
+    reporter_id uuid not null references users (id) on delete restrict,
+    handled_by uuid references users (id) on delete set null,
+    target_type text not null,
+    target_id uuid not null,
+    reason text not null,
+    description text not null,
+    severity report_severity not null default 'low',
+    status report_status not null default 'open',
+    resolved_at timestamptz,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint reports_target_type_allowed
+        check (target_type in ('user', 'request', 'application', 'match', 'message', 'review')),
+    constraint reports_description_length check (length(description) between 1 and 4000),
+    constraint reports_closed_requires_handler
+        check (status not in ('resolved', 'rejected')
+               or (resolved_at is not null and handled_by is not null))
+);
+
+create index reports_triage_idx on reports (status, severity desc, created_at);
+create index reports_target_idx on reports (target_type, target_id, status);
+create index reports_reporter_idx on reports (reporter_id, created_at desc);
+create index reports_handler_idx on reports (handled_by, status);
+
+-- ---------------------------------------------------------------------------
+-- audit_logs
+--
+-- append-only。UPDATE と DELETE は全アクターに対して拒否する（RLS で後述）。
+-- ip_hash は生 IP ではなく salted hash。salt は DB にも文書にも保存しない。
+-- ---------------------------------------------------------------------------
+
+create table audit_logs (
+    id uuid primary key default gen_random_uuid(),
+    actor_id uuid references users (id) on delete set null,
+    event_type text not null,
+    target_type text not null,
+    target_id uuid,
+    result text not null,
+    detail jsonb not null default '{}'::jsonb,
+    ip_hash text,
+    user_agent text,
+    created_at timestamptz not null default now(),
+    constraint audit_event_type_not_blank check (length(trim(event_type)) > 0),
+    constraint audit_target_type_not_blank check (length(trim(target_type)) > 0),
+    constraint audit_result_not_blank check (length(trim(result)) > 0),
+    constraint audit_detail_is_object check (jsonb_typeof(detail) = 'object'),
+    constraint audit_user_agent_length check (user_agent is null or length(user_agent) <= 512)
+);
+
+create index audit_created_idx on audit_logs (created_at desc, id desc);
+create index audit_actor_idx on audit_logs (actor_id, created_at desc);
+create index audit_target_idx on audit_logs (target_type, target_id, created_at desc);
+create index audit_event_idx on audit_logs (event_type, created_at desc);
+
+-- ---------------------------------------------------------------------------
+-- user_blocks
+--
+-- 要件定義書 §9 に無いが #11 / #14 に必須。誰が誰をブロックしたかを利用者単位で持つ。
+-- 双方向判定は exists(blocker=a, blocked=b) or exists(blocker=b, blocked=a)。
+-- ---------------------------------------------------------------------------
+
+create table user_blocks (
+    blocker_id uuid not null references users (id) on delete restrict,
+    blocked_id uuid not null references users (id) on delete restrict,
+    created_at timestamptz not null default now(),
+    constraint user_blocks_pkey primary key (blocker_id, blocked_id),
+    constraint user_blocks_no_self check (blocker_id <> blocked_id)
+);
+
+create index user_blocks_reverse_idx on user_blocks (blocked_id, blocker_id);
+
+commit;
