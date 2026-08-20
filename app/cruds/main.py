@@ -275,7 +275,7 @@ def reset_store() -> None:
     profile_store = {
         "id": "usr_101",
         "displayName": "山田 花子",
-        "role": "requester",
+        "role": "member",
         "emailVerified": True,
         "verificationStatus": "approved",
         "areaCode": "AREA-001",
@@ -284,11 +284,11 @@ def reset_store() -> None:
     users_store = {
         profile_store["id"]: profile_store,
         "usr_207": {
-            **HELPERS["usr_207"], "role": "helper", "status": "active",
+            **HELPERS["usr_207"], "role": "member", "status": "active",
             "emailVerified": True,
         },
         "usr_208": {
-            **HELPERS["usr_208"], "role": "helper", "status": "active",
+            **HELPERS["usr_208"], "role": "member", "status": "active",
             "emailVerified": True,
         },
     }

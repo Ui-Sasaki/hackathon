@@ -56,14 +56,14 @@ async def raise_http_error(status_code: int) -> None:
 
 REQUESTER = CurrentUser(
     user_id="usr_101",
-    role="requester",
+    role="member",
     status="active",
     email_verified=True,
     verification_status="approved",
 )
 HELPER = CurrentUser(
     user_id="usr_207",
-    role="helper",
+    role="member",
     status="active",
     email_verified=True,
     verification_status="approved",
@@ -292,3 +292,67 @@ def test_unhandled_error_is_sanitized_and_correlated_with_log(caplog) -> None:
     assert "private database failure" not in response.text
     assert "user@example.com" not in response.text
     assert error["requestId"] in caplog.text
+
+
+def test_seeded_profile_uses_member_role() -> None:
+    response = client.get("/profile")
+    assert response.status_code == 200
+    assert response.json()["role"] == "member"
+
+
+def test_require_roles_accepts_member(monkeypatch) -> None:
+    async def as_member(_request) -> CurrentUser:
+        return CurrentUser(
+            user_id="usr_101",
+            role="member",
+            status="active",
+            email_verified=True,
+            verification_status="approved",
+        )
+
+    monkeypatch.setattr(auth_module, "get_current_user", as_member)
+    user = asyncio.run(auth_module.require_roles("member")(None))
+    assert user.role == "member"
+
+
+def test_require_roles_rejects_unlisted_role(monkeypatch) -> None:
+    async def as_member(_request) -> CurrentUser:
+        return CurrentUser(
+            user_id="usr_101",
+            role="member",
+            status="active",
+            email_verified=True,
+            verification_status="approved",
+        )
+
+    monkeypatch.setattr(auth_module, "get_current_user", as_member)
+    try:
+        asyncio.run(auth_module.require_roles("admin")(None))
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert exc.detail["code"] == "ROLE_FORBIDDEN"
+    else:
+        raise AssertionError("member must not pass an admin-only dependency")
+
+
+def test_privileged_roles_still_require_mfa(monkeypatch) -> None:
+    for privileged in ("admin", "verifier"):
+
+        async def as_privileged(_request, role: str = privileged) -> CurrentUser:
+            return CurrentUser(
+                user_id="usr_900",
+                role=role,
+                status="active",
+                email_verified=True,
+                verification_status="approved",
+                mfa_completed=False,
+            )
+
+        monkeypatch.setattr(auth_module, "get_current_user", as_privileged)
+        try:
+            asyncio.run(auth_module.require_roles(privileged)(None))
+        except HTTPException as exc:
+            assert exc.status_code == 403
+            assert exc.detail["code"] == "MFA_REQUIRED"
+        else:
+            raise AssertionError(f"{privileged} must require MFA")
