@@ -28,6 +28,7 @@ python -m uvicorn main:app --reload --port 8000
 | `WEBSITE_DOMAIN` | `http://localhost:3000` | CORSで許可するフロントエンド |
 | `AUTH_COOKIE_SECURE` | `true` | CookieのSecure属性 |
 | `AUTH_COOKIE_SAME_SITE` | `lax` | CookieのSameSite属性 |
+| `MOCK_RESET_ENABLED` | `false` | `POST /_mock/reset` を利用可能にする。開発・テスト環境でのみ有効にする |
 
 登録、ログイン、ログアウト、パスワード再設定はSuperTokensの`/auth/*` APIを
 利用する。Cookie認証ではHttpOnly/Secure/SameSite Cookieと`anti-csrf`ヘッダーが
@@ -104,10 +105,18 @@ python -m uvicorn main:app --reload --port 8000
 python -m pytest -q
 ```
 
-モックデータを初期状態へ戻す場合は次を実行する。
+モックデータを初期状態へ戻す `POST /_mock/reset` は、**全利用者のデータを消す破壊的操作**なので
+既定では無効である。利用するには次の2つを両方満たす必要がある。
+
+1. `MOCK_RESET_ENABLED=true` で起動する（開発・テスト環境のみ）
+2. 認証済みセッションで呼び出す
 
 ```bash
-curl -X POST http://localhost:8000/_mock/reset
+MOCK_RESET_ENABLED=true python -m uvicorn main:app --reload --port 8000
+curl -X POST http://localhost:8000/_mock/reset --cookie "$AUTH_COOKIES"
 ```
+
+無効な環境では、エンドポイントの存在を伏せるため認証の有無にかかわらず404を返す。
+テストは `tests/main.py` の冒頭で `MOCK_RESET_ENABLED=true` を設定している。
 
 データはプロセス内だけに保存され、サーバーを再起動すると初期化される。本番環境では認証、認可、永続DB、CSRF対策、レート制限を本実装へ置き換えること。

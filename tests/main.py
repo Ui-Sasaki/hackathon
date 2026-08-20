@@ -3,6 +3,7 @@ import os
 import asyncio
 
 os.environ["SUPERTOKENS_ENABLED"] = "false"
+os.environ["MOCK_RESET_ENABLED"] = "true"
 
 import httpx
 from fastapi import HTTPException
@@ -292,3 +293,33 @@ def test_unhandled_error_is_sanitized_and_correlated_with_log(caplog) -> None:
     assert "private database failure" not in response.text
     assert "user@example.com" not in response.text
     assert error["requestId"] in caplog.text
+
+
+def test_mock_reset_is_hidden_outside_enabled_environment(monkeypatch) -> None:
+    async def unauthenticated() -> CurrentUser:
+        raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
+
+    import app.cruds.main as cruds_main
+
+    monkeypatch.setattr(cruds_main, "MOCK_RESET_ENABLED", False)
+    app.dependency_overrides[get_current_user] = unauthenticated
+
+    response = client.post("/_mock/reset")
+    assert response.status_code == 404
+    assert client.get("/requests", params={"areaCode": "AREA-001"}).status_code == 200
+
+
+def test_mock_reset_rejects_missing_session() -> None:
+    async def unauthenticated() -> CurrentUser:
+        raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
+
+    app.dependency_overrides[get_current_user] = unauthenticated
+    response = client.post("/_mock/reset")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
+
+
+def test_mock_reset_succeeds_for_authenticated_caller_in_enabled_environment() -> None:
+    response = client.post("/_mock/reset")
+    assert response.status_code == 200
+    assert response.json()["reset"] is True
