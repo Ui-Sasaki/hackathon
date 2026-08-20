@@ -404,3 +404,349 @@ create table user_blocks (
 create index user_blocks_reverse_idx on user_blocks (blocked_id, blocker_id);
 
 commit;
+
+begin;
+
+-- ---------------------------------------------------------------------------
+-- ランタイムロール
+--
+-- 認証は SuperTokens であり Supabase Auth ではないため auth.uid() は使えない。
+-- FastAPI は認証済みリクエストごとに transaction-local な actor UUID を設定し、
+-- RLS はそこから users 行を引いて権限を判定する。
+--
+-- table owner / migration role をランタイムに使わない。superuser は RLS を
+-- 常に迂回するので、アプリケーションからは必ず下記の NOBYPASSRLS ロールで接続する。
+-- ---------------------------------------------------------------------------
+
+do $$
+begin
+    if not exists (select 1 from pg_roles where rolname = 'tetote_app') then
+        create role tetote_app login nosuperuser nobypassrls;
+    end if;
+    if not exists (select 1 from pg_roles where rolname = 'tetote_anon') then
+        create role tetote_anon login nosuperuser nobypassrls;
+    end if;
+end;
+$$;
+
+grant usage on schema public to tetote_app, tetote_anon;
+
+-- 未認証ロールには業務テーブルへの権限を一切与えない。
+-- RLS 以前に権限で落とす（多層防御の1層目）。
+grant select, insert on
+    users, requests, applications, matches, messages, reviews,
+    achievement_profiles, verification_requests, reports, audit_logs, user_blocks
+to tetote_app;
+
+-- 状態遷移・選択・完了・管理処置は専用関数へ寄せるため、UPDATE / DELETE は付与しない。
+
+-- ---------------------------------------------------------------------------
+-- ヘルパー
+--
+-- SECURITY DEFINER は search_path を固定し、実行権限を明示的に絞る。
+-- RLS を迂回する汎用 CRUD 関数は作らない。
+-- ---------------------------------------------------------------------------
+
+create schema if not exists app;
+grant usage on schema app to tetote_app, tetote_anon;
+
+create or replace function app.current_actor()
+returns uuid language sql stable as $$
+    select nullif(current_setting('app.actor_id', true), '')::uuid;
+$$;
+
+create or replace function app.actor_role()
+returns account_role language sql stable security definer
+set search_path = public, pg_temp as $$
+    select u.role from users u
+     where u.id = app.current_actor() and u.status = 'active';
+$$;
+
+create or replace function app.is_active_actor()
+returns boolean language sql stable security definer
+set search_path = public, pg_temp as $$
+    select exists (select 1 from users u
+                    where u.id = app.current_actor() and u.status = 'active');
+$$;
+
+create or replace function app.is_admin()
+returns boolean language sql stable as $$
+    select app.actor_role() = 'admin';
+$$;
+
+create or replace function app.is_verifier()
+returns boolean language sql stable as $$
+    select app.actor_role() = 'verifier';
+$$;
+
+-- ブロックは「どちら向きでも関係あり」で判定する。
+create or replace function app.is_blocked_pair(a uuid, b uuid)
+returns boolean language sql stable security definer
+set search_path = public, pg_temp as $$
+    select exists (
+        select 1 from user_blocks ub
+         where (ub.blocker_id = a and ub.blocked_id = b)
+            or (ub.blocker_id = b and ub.blocked_id = a)
+    );
+$$;
+
+create or replace function app.is_match_party(p_match_id uuid, p_actor uuid)
+returns boolean language sql stable security definer
+set search_path = public, pg_temp as $$
+    select exists (
+        select 1 from matches m
+          join requests r on r.id = m.request_id
+         where m.id = p_match_id
+           and (m.helper_id = p_actor or r.requester_id = p_actor)
+    );
+$$;
+
+-- ポリシー同士の相互参照による無限再帰を避けるため、テーブルをまたぐ判定は
+-- すべて SECURITY DEFINER のヘルパー経由にする。ポリシーの中で他テーブルを
+-- 直接 select すると、そのテーブルのポリシーが再帰的に評価される。
+create or replace function app.request_owner(p_request_id uuid)
+returns uuid language sql stable security definer
+set search_path = public, pg_temp as $$
+    select r.requester_id from requests r where r.id = p_request_id;
+$$;
+
+create or replace function app.request_is_open(p_request_id uuid)
+returns boolean language sql stable security definer
+set search_path = public, pg_temp as $$
+    select exists (
+        select 1 from requests r
+         where r.id = p_request_id
+           and r.status = 'published'
+           and (r.expires_at is null or r.expires_at > now())
+    );
+$$;
+
+create or replace function app.actor_has_match_on_request(p_request_id uuid, p_actor uuid)
+returns boolean language sql stable security definer
+set search_path = public, pg_temp as $$
+    select exists (
+        select 1 from matches m
+         where m.request_id = p_request_id and m.helper_id = p_actor
+    );
+$$;
+
+create or replace function app.profile_is_public(p_user_id uuid)
+returns boolean language sql stable security definer
+set search_path = public, pg_temp as $$
+    select exists (
+        select 1 from achievement_profiles ap
+         where ap.user_id = p_user_id
+           and ap.approved_at is not null
+           and ap.visibility = 'public'
+    );
+$$;
+
+create or replace function app.request_is_public(p_status request_status, p_expires timestamptz)
+returns boolean language sql immutable as $$
+    select p_status = 'published' and (p_expires is null or p_expires > now());
+$$;
+
+revoke all on function app.actor_role(), app.is_active_actor(), app.is_blocked_pair(uuid, uuid),
+    app.is_match_party(uuid, uuid), app.request_owner(uuid), app.request_is_open(uuid),
+    app.actor_has_match_on_request(uuid, uuid), app.profile_is_public(uuid) from public;
+grant execute on function app.current_actor(), app.actor_role(), app.is_active_actor(),
+    app.is_admin(), app.is_verifier(), app.is_blocked_pair(uuid, uuid),
+    app.is_match_party(uuid, uuid), app.request_is_public(request_status, timestamptz),
+    app.request_owner(uuid), app.request_is_open(uuid),
+    app.actor_has_match_on_request(uuid, uuid), app.profile_is_public(uuid)
+to tetote_app;
+
+-- ---------------------------------------------------------------------------
+-- RLS 有効化
+--
+-- FORCE を付けることでテーブル所有者にもポリシーを適用する。
+-- ---------------------------------------------------------------------------
+
+alter table users                 enable row level security;
+alter table requests              enable row level security;
+alter table applications          enable row level security;
+alter table matches               enable row level security;
+alter table messages              enable row level security;
+alter table reviews               enable row level security;
+alter table achievement_profiles  enable row level security;
+alter table verification_requests enable row level security;
+alter table reports               enable row level security;
+alter table audit_logs            enable row level security;
+alter table user_blocks           enable row level security;
+
+alter table users                 force row level security;
+alter table requests              force row level security;
+alter table applications          force row level security;
+alter table matches               force row level security;
+alter table messages              force row level security;
+alter table reviews               force row level security;
+alter table achievement_profiles  force row level security;
+alter table verification_requests force row level security;
+alter table reports               force row level security;
+alter table audit_logs            force row level security;
+alter table user_blocks           force row level security;
+
+-- 未認証ロールにはポリシーを一切作らない。権限も無いので二重に落ちる。
+--
+-- すべてのポリシーは app.is_active_actor() を先頭条件に置く。actor が未設定なら
+-- app.current_actor() は NULL になり、NULL 比較は真にならないが、
+-- 「公開中の依頼なら誰でも読める」のような actor に依存しない条件は
+-- それだけでは閉じない。要件定義書 §5 の権限表に未認証の列は無いので、
+-- 業務テーブルは actor が確定していない限り一律 deny にする。
+
+-- users -----------------------------------------------------------------
+create policy users_select_self on users for select to tetote_app
+    using (
+        app.is_active_actor()
+        and (id = app.current_actor() or app.is_admin())
+    );
+
+-- requests --------------------------------------------------------------
+create policy requests_select on requests for select to tetote_app
+    using (
+        app.is_active_actor()
+        and (
+            app.is_admin()
+            or requester_id = app.current_actor()
+            or (
+                app.request_is_public(status, expires_at)
+                and not app.is_blocked_pair(requester_id, app.current_actor())
+            )
+            or app.actor_has_match_on_request(id, app.current_actor())
+        )
+    );
+
+create policy requests_insert on requests for insert to tetote_app
+    with check (app.is_active_actor() and requester_id = app.current_actor());
+
+-- applications ----------------------------------------------------------
+create policy applications_select on applications for select to tetote_app
+    using (
+        app.is_active_actor()
+        and (
+            app.is_admin()
+            or helper_id = app.current_actor()
+            or (
+                app.request_owner(request_id) = app.current_actor()
+                and not app.is_blocked_pair(helper_id, app.current_actor())
+            )
+        )
+    );
+
+create policy applications_insert on applications for insert to tetote_app
+    with check (
+        app.is_active_actor()
+        and helper_id = app.current_actor()
+        and app.request_owner(request_id) <> app.current_actor()
+        and app.request_is_open(request_id)
+        and not app.is_blocked_pair(app.request_owner(request_id), app.current_actor())
+    );
+
+-- matches ---------------------------------------------------------------
+-- ブロック後も当事者は自分のマッチを閲覧できる。完了・dispute・通報の証拠を失わないため。
+create policy matches_select on matches for select to tetote_app
+    using (
+        app.is_active_actor()
+        and (
+            app.is_admin()
+            or helper_id = app.current_actor()
+            or app.request_owner(request_id) = app.current_actor()
+        )
+    );
+
+-- messages --------------------------------------------------------------
+create policy messages_select on messages for select to tetote_app
+    using (
+        app.is_active_actor()
+        and (app.is_admin() or app.is_match_party(match_id, app.current_actor()))
+    );
+
+create policy messages_insert on messages for insert to tetote_app
+    with check (
+        app.is_active_actor()
+        and sender_id = app.current_actor()
+        and app.is_match_party(match_id, app.current_actor())
+    );
+
+-- reviews ---------------------------------------------------------------
+create policy reviews_select on reviews for select to tetote_app
+    using (
+        app.is_active_actor()
+        and (
+            app.is_admin()
+            or reviewer_id = app.current_actor()
+            or reviewee_id = app.current_actor()
+            or app.profile_is_public(reviewee_id)
+        )
+    );
+
+create policy reviews_insert on reviews for insert to tetote_app
+    with check (
+        app.is_active_actor()
+        and reviewer_id = app.current_actor()
+        and app.is_match_party(match_id, app.current_actor())
+    );
+
+-- achievement_profiles --------------------------------------------------
+-- 本人の承認前は visibility にかかわらず外部から読めない。
+create policy achievements_select on achievement_profiles for select to tetote_app
+    using (
+        app.is_active_actor()
+        and (
+            app.is_admin()
+            or user_id = app.current_actor()
+            or (
+                approved_at is not null
+                and visibility = 'public'
+                and not app.is_blocked_pair(user_id, app.current_actor())
+            )
+        )
+    );
+
+-- verification_requests -------------------------------------------------
+create policy verifications_select on verification_requests for select to tetote_app
+    using (
+        app.is_active_actor()
+        and (app.is_admin() or app.is_verifier() or user_id = app.current_actor())
+    );
+
+create policy verifications_insert on verification_requests for insert to tetote_app
+    with check (app.is_active_actor() and user_id = app.current_actor());
+
+-- reports ---------------------------------------------------------------
+create policy reports_select on reports for select to tetote_app
+    using (
+        app.is_active_actor()
+        and (app.is_admin() or reporter_id = app.current_actor())
+    );
+
+create policy reports_insert on reports for insert to tetote_app
+    with check (app.is_active_actor() and reporter_id = app.current_actor());
+
+-- audit_logs ------------------------------------------------------------
+-- append-only。UPDATE / DELETE のポリシーも権限も与えない。
+create policy audit_select on audit_logs for select to tetote_app
+    using (
+        app.is_active_actor()
+        and (app.is_admin()
+             or (app.is_verifier() and target_type = 'verification_request'))
+    );
+
+create policy audit_insert on audit_logs for insert to tetote_app
+    with check (
+        app.is_active_actor()
+        and (actor_id is null or actor_id = app.current_actor())
+    );
+
+-- user_blocks -----------------------------------------------------------
+-- 誰にブロックされているかは相手に見せない。自分がブロックした関係だけを読める。
+create policy blocks_select on user_blocks for select to tetote_app
+    using (
+        app.is_active_actor()
+        and (app.is_admin() or blocker_id = app.current_actor())
+    );
+
+create policy blocks_insert on user_blocks for insert to tetote_app
+    with check (app.is_active_actor() and blocker_id = app.current_actor());
+
+commit;
