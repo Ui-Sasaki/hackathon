@@ -8,6 +8,7 @@ class StructureInput(BaseModel):
 
     text: str = Field(min_length=5, max_length=3000)
     areaCode: str
+    maskingConfirmed: bool = False
 
 
 ShortExtractedText = Annotated[str, Field(min_length=1, max_length=200)]
