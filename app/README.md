@@ -1,6 +1,8 @@
 # テトテFastAPI 開発ガイド
 
-地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使い、業務データ、AI、本人確認は現在インメモリで模擬している。
+地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使い、依頼（`requests`）はPostgres（Supabase）へ永続化されている（#4）。応募・マッチング・チャット等その他の業務データ、AI、本人確認は現在インメモリで模擬している。
+
+依頼周りのエンドポイントを動かすには `DATABASE_URL` が要る。`.env.example` を `.env` にコピーし、値を埋めること。`supabase/tests/run.sh` でローカルのPostgresを用意できる。
 
 ## セットアップと起動
 
@@ -30,6 +32,7 @@ python -m uvicorn main:app --reload --port 8000
 | `AUTH_COOKIE_SAME_SITE` | `lax` | CookieのSameSite属性 |
 | `AUTH_MOCK_ENABLED` | `false` | 開発用の認証モックを有効化 |
 | `AUTH_MOCK_USER_ID` | `usr_101` | 認証モックの既定ユーザーID |
+| `MOCK_RESET_ENABLED` | `false` | `POST /_mock/reset` を利用可能にする。開発・テスト環境でのみ有効にする |
 
 登録、ログイン、ログアウト、パスワード再設定はSuperTokensの`/auth/*` APIを
 利用する。Cookie認証ではHttpOnly/Secure/SameSite Cookieと`anti-csrf`ヘッダーが
@@ -63,9 +66,13 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 ├── main.py              # uvicorn用エントリーポイント
 ├── app/
 │   ├── main.py          # ASGIアプリの公開
-│   ├── cruds/main.py    # エンドポイントとインメモリCRUD
+│   ├── db.py            # Postgres接続・actor scoped transaction（#4）
+│   ├── cruds/main.py    # エンドポイントとCRUD（requestsはPostgres、他はインメモリ）
 │   ├── routers/main.py  # システム系ルーター
 │   └── schemas/main.py  # Pydantic入力スキーマ
+├── supabase/
+│   ├── migrations/      # スキーマ・RLS・DB関数。mergeしたら編集せず追加migrationにする
+│   └── tests/           # 制約・RLSの検証（run.sh で最初から再現できる）
 └── tests/main.py        # APIテスト
 ```
 
@@ -109,6 +116,14 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 続きはレスポンスの `nextCursor` を `cursor` に指定して取得する。期限切れや募集終了した
 依頼は含まれず、レスポンスには番地および正確な緯度・経度を含めない。
 
+### 通報・ブロック
+
+`POST /reports` の通報者は認証済みセッションから決定し、危険作業・詐欺の依頼通報は
+高緊急度として対象依頼を自動的に一時停止する。`POST /users/{id}/block` は
+`blocked: true` でブロック、`false` で解除する。ブロック関係にある利用者の依頼、応募、
+相手が送信したメッセージは双方から非表示になる。通報、依頼の自動停止、ブロック、解除は
+監査イベントとして記録する。
+
 ## エラーレスポンスとトレースID
 
 400、401、403、404、409、422、500 のエラーは、次の共通形式で返す。
@@ -130,14 +145,31 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 
 ## 開発とテスト
 
+`requests` 関連のテストは実際の Postgres に接続する（`DATABASE_URL`、既定はローカルの
+WSL 上の Postgres）。先に一度用意しておく。
+
 ```bash
+./supabase/tests/run.sh   # スキーマ適用・制約・RLS の検証。DB を作り直す
 python -m pytest -q
 ```
 
-モックデータを初期状態へ戻す場合は次を実行する。
+モックデータを初期状態へ戻す `POST /_mock/reset` は、**全利用者のデータを消す破壊的操作**なので
+既定では無効である。利用するには次の2つを両方満たす必要がある。
+
+1. `MOCK_RESET_ENABLED=true` で起動する（開発・テスト環境のみ）
+2. 認証済みセッションで呼び出す
+
+この操作はインメモリのストアと Postgres の `requests` を両方リセットする。
 
 ```bash
-curl -X POST http://localhost:8000/_mock/reset
+MOCK_RESET_ENABLED=true python -m uvicorn main:app --reload --port 8000
+curl -X POST http://localhost:8000/_mock/reset --cookie "$AUTH_COOKIES"
 ```
 
-データはプロセス内だけに保存され、サーバーを再起動すると初期化される。本番環境では認証、認可、永続DB、CSRF対策、レート制限を本実装へ置き換えること。
+無効な環境では、エンドポイントの存在を伏せるため認証の有無にかかわらず404を返す。
+テストは `tests/main.py` の冒頭で `MOCK_RESET_ENABLED=true` を設定している。
+
+応募・マッチング・チャット等の業務データ、AI、本人確認はプロセス内だけに保存され、
+サーバーを再起動すると初期化される（これらの永続化は #4 の対象外）。
+本番環境では認可の細部（RLS のRPC本体、#7 の排他制御等）、CSRF対策、レート制限を
+本実装へ置き換えること。
