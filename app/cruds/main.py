@@ -428,6 +428,49 @@ def ensure_match_participant(match: dict, user_id: str) -> str:
         return "helper"
     raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
 
+def is_blocked_pair(first_user_id: str, second_user_id: str) -> bool:
+    """Return whether either user has blocked the other."""
+
+    return (
+        (first_user_id, second_user_id) in blocks
+        or (second_user_id, first_user_id) in blocks
+    )
+
+
+def record_audit_event(
+    *,
+    actor_id: str,
+    event_type: str,
+    target_type: str,
+    target_id: str,
+    result: str = "success",
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Append an immutable mock audit event without recording request content."""
+
+    audit_logs.append(
+        {
+            "id": new_id("audit"),
+            "actorId": actor_id,
+            "eventType": event_type,
+            "targetType": target_type,
+            "targetId": target_id,
+            "result": result,
+            "detail": detail or {},
+            "createdAt": now_iso(),
+        }
+    )
+
+
+MOCK_RESET_ENABLED = os.getenv("MOCK_RESET_ENABLED", "false").lower() in {
+    "1", "true", "yes", "on",
+}
+
+
+async def require_mock_environment() -> None:
+    if not MOCK_RESET_ENABLED:
+        raise HTTPException(404, detail={"code": "NOT_FOUND"})
+
 
 def admin_can_investigate_match(match_id: str) -> bool:
     """Allow admin message review only while a related report is open."""
