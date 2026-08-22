@@ -58,6 +58,23 @@ class StructureInput(ContractModel):
     text: str = Field(min_length=5, max_length=3000, description="個人情報を含めない依頼文")
     areaCode: str | None = Field(None, min_length=1, max_length=30)
     location: LocationResolveInput | None = None
+    maskingConfirmed: bool = False
+
+
+class MaskingDetection(ContractModel):
+    type: str
+    placeholder: str
+    count: int = Field(ge=1)
+
+
+class MaskingConfirmationResponse(ContractModel):
+    maskedText: str
+    detections: list[MaskingDetection]
+    hasDetections: bool
+    ruleVersion: str
+    status: Literal["masking_confirmation_required"]
+    requiresMaskingConfirmation: Literal[True]
+    message: str
 
 
 class StructuredRequestResponse(ContractModel):
@@ -70,6 +87,7 @@ class StructuredRequestResponse(ContractModel):
     riskLevel: Literal["low", "medium", "high", "prohibited"]
     missingFields: list[str]
     warnings: list[str]
+    requiresConfirmation: bool = True
 
 
 class RequestInput(ContractModel):

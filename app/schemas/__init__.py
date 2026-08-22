@@ -13,6 +13,7 @@ from .main import (
     ErrorResponse,
     LocationResolveInput,
     LocationResolveResponse,
+    MaskingConfirmationResponse,
     MessageInput,
     MessageListResponse,
     MessageResponse,
