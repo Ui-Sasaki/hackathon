@@ -1,0 +1,3 @@
+# WSL / Linux 上で実行されるスクリプトは常に LF。
+# CRLF になると shebang 行末の  で bad interpreter になり、黙って動かなくなる。
+*.sh text eol=lf
