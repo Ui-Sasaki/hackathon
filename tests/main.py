@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+from copy import deepcopy
 
 os.environ["SUPERTOKENS_ENABLED"] = "false"
 os.environ["MOCK_RESET_ENABLED"] = "true"
@@ -12,6 +13,7 @@ os.environ.setdefault(
 )
 
 import httpx
+import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
@@ -86,6 +88,9 @@ async def requester_user() -> CurrentUser:
 def setup_function() -> None:
     app.dependency_overrides[get_current_user] = requester_user
     client.post("/_mock/reset")
+    crud_module.configure_structure_llm_client(crud_module.default_structure_llm_client)
+    for metric in crud_module.masking_metrics:
+        crud_module.masking_metrics[metric] = 0
 
 
 def test_health() -> None:
@@ -100,6 +105,79 @@ def test_list_requests() -> None:
     assert len(response.json()["items"]) == 2
 
 
+def add_search_request(request_id: str, **changes) -> None:
+    item = deepcopy(crud_module.INITIAL_REQUESTS[0])
+    item.update(
+        {
+            "id": request_id,
+            "createdAt": f"2026-08-21T00:00:{int(request_id.split('_')[-1]):02d}+00:00",
+            **changes,
+        }
+    )
+    crud_module.requests_store[request_id] = item
+
+
+def test_request_search_filters_and_excludes_closed_or_expired_requests() -> None:
+    add_search_request(
+        "req_01", category="cleaning", requiredHelpers=2,
+        scheduledAt="2026-09-01T10:00:00+09:00", requesterId="usr_101",
+    )
+    add_search_request("req_02", status="cancelled")
+    add_search_request("req_03", scheduledAt="2020-01-01T00:00:00+00:00")
+
+    response = client.get(
+        "/requests",
+        params={
+            "category": "cleaning", "requiredHelpers": 2,
+            "verificationStatus": "approved",
+            "scheduledFrom": "2026-09-01T00:00:00+09:00",
+            "scheduledTo": "2026-09-02T00:00:00+09:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == ["req_01"]
+
+
+def test_request_search_uses_profile_area_and_never_returns_precise_location() -> None:
+    response = client.get("/requests", params={"maxDistanceKm": 2})
+
+    assert response.status_code == 200
+    assert response.json()["items"]
+    for item in response.json()["items"]:
+        assert "latitude" not in item
+        assert "longitude" not in item
+        assert "streetAddress" not in item
+        assert item["distanceKm"] <= 2
+
+    detail = client.get("/requests/req_1024").json()
+    assert "latitude" not in detail
+    assert "longitude" not in detail
+    assert "streetAddress" not in detail
+
+
+def test_request_search_cursor_paging_has_default_page_size_20() -> None:
+    for index in range(1, 22):
+        add_search_request(f"req_{index:02d}")
+
+    first = client.get("/requests")
+    assert first.status_code == 200
+    assert len(first.json()["items"]) == 20
+    assert first.json()["nextCursor"] is not None
+
+    second = client.get("/requests", params={"cursor": first.json()["nextCursor"]})
+    first_ids = {item["id"] for item in first.json()["items"]}
+    second_ids = {item["id"] for item in second.json()["items"]}
+    assert len(second_ids) == 3
+    assert first_ids.isdisjoint(second_ids)
+
+
+def test_request_search_validates_limit_cursor_and_location_pair() -> None:
+    assert client.get("/requests", params={"limit": 101}).status_code == 422
+    assert client.get("/requests", params={"cursor": "not-a-cursor"}).status_code == 422
+    assert client.get("/requests", params={"latitude": 35.0}).status_code == 422
+
+
 def test_structure_request() -> None:
     response = client.post(
         "/requests/structure",
@@ -107,6 +185,110 @@ def test_structure_request() -> None:
     )
     assert response.status_code == 200
     assert response.json()["category"] == "pet_support"
+
+
+def test_masking_preview_detects_japanese_and_full_width_pii_formats() -> None:
+    original_values = [
+        "hanako@example.jp",
+        "０９０－１２３４－５６７８",
+        "〒１６０－００２３",
+        "東京都新宿区西新宿２丁目８－１",
+        "学生証番号：ＡＢＣ１２３４５",
+        "氏名は山田 花子",
+    ]
+    response = client.post(
+        "/requests/masking-preview",
+        json={
+            "text": "、".join(original_values) + "。荷物の整理をお願いします",
+            "areaCode": "AREA-001",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hasDetections"] is True
+    assert {item["type"] for item in body["detections"]} == {
+        "email",
+        "phone",
+        "postal_code",
+        "address",
+        "certificate_number",
+        "name",
+    }
+    assert "[メールアドレス]" in body["maskedText"]
+    assert "[電話番号]" in body["maskedText"]
+    assert "[郵便番号]" in body["maskedText"]
+    assert "[詳細住所]" in body["maskedText"]
+    assert "[証明書番号]" in body["maskedText"]
+    assert "[氏名]" in body["maskedText"]
+    for value in original_values:
+        assert value not in response.text
+
+
+def test_structure_requires_confirmation_and_only_sends_masked_text_to_llm() -> None:
+    calls = []
+
+    async def capture(masked_text: str, area_code: str) -> dict:
+        calls.append((masked_text, area_code))
+        return await crud_module.default_structure_llm_client(masked_text, area_code)
+
+    crud_module.configure_structure_llm_client(capture)
+    payload = {
+        "text": "連絡先090-1234-5678へ電話して、犬の散歩をお願いします",
+        "areaCode": "AREA-001",
+    }
+    preview = client.post("/requests/structure", json=payload)
+    confirmed = client.post(
+        "/requests/structure", json={**payload, "maskingConfirmed": True}
+    )
+
+    assert preview.status_code == 200
+    assert preview.json()["status"] == "masking_confirmation_required"
+    assert calls == [("連絡先[電話番号]へ電話して、犬の散歩をお願いします", "AREA-001")]
+    assert confirmed.status_code == 200
+    assert "090-1234-5678" not in confirmed.text
+    assert confirmed.json()["description"] == "連絡先[電話番号]へ電話して、犬の散歩をお願いします"
+    assert confirmed.json()["masking"]["confirmed"] is True
+
+
+def test_user_can_correct_false_detection_before_structure_submission() -> None:
+    detected = client.post(
+        "/requests/structure",
+        json={"text": "整理番号は090-1234-5678です", "areaCode": "AREA-001"},
+    )
+    corrected = client.post(
+        "/requests/structure",
+        json={"text": "整理番号を確認して片付けます", "areaCode": "AREA-001"},
+    )
+
+    assert detected.json()["requiresMaskingConfirmation"] is True
+    assert corrected.status_code == 200
+    assert corrected.json()["requiresConfirmation"] is True
+    assert corrected.json()["masking"]["detections"] == []
+
+
+def test_masking_service_failure_does_not_log_or_return_unmasked_input(caplog) -> None:
+    private_values = "secret@example.jp 090-9876-5432"
+
+    async def unavailable(_masked_text: str, _area_code: str) -> dict:
+        raise RuntimeError("provider-key-secret")
+
+    crud_module.configure_structure_llm_client(unavailable)
+    with caplog.at_level(logging.WARNING, logger="app.cruds.main"):
+        response = client.post(
+            "/requests/structure",
+            json={
+                "text": f"連絡先は{private_values}、荷物を整理してください",
+                "areaCode": "AREA-001",
+                "maskingConfirmed": True,
+            },
+        )
+
+    assert response.status_code == 503
+    assert private_values not in response.text
+    assert private_values not in caplog.text
+    assert "provider-key-secret" not in response.text
+    assert "provider-key-secret" not in caplog.text
 
 
 def test_select_application_with_version_check() -> None:
@@ -218,6 +400,97 @@ def test_session_dependency_returns_verified_user(monkeypatch) -> None:
     user = asyncio.run(get_current_user(request))
     assert user.user_id == "usr_101"
     assert user.verification_status == "approved"
+
+
+def test_auth_mock_returns_default_user_without_session(monkeypatch) -> None:
+    monkeypatch.setattr(auth_module, "AUTH_MOCK_ENABLED", True)
+    monkeypatch.setattr(auth_module, "AUTH_MOCK_USER_ID", "usr_101")
+    request = Request({"type": "http", "method": "GET", "path": "/profile", "headers": []})
+
+    user = asyncio.run(get_current_user(request))
+
+    assert user.user_id == "usr_101"
+    assert user.role == "requester"
+    assert user.mfa_completed is True
+
+
+def test_auth_mock_can_select_existing_user_by_header(monkeypatch) -> None:
+    monkeypatch.setattr(auth_module, "AUTH_MOCK_ENABLED", True)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/profile",
+            "headers": [(b"x-mock-user-id", b"usr_207")],
+        }
+    )
+
+    user = asyncio.run(get_current_user(request))
+
+    assert user.user_id == "usr_207"
+    assert user.role == "helper"
+
+
+def test_auth_mock_rejects_unknown_user(monkeypatch) -> None:
+    monkeypatch.setattr(auth_module, "AUTH_MOCK_ENABLED", True)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/profile",
+            "headers": [(b"x-mock-user-id", b"unknown")],
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(get_current_user(request))
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {"code": "USER_PROFILE_NOT_FOUND"}
+
+
+def test_signup_profile_is_created_with_safe_defaults() -> None:
+    crud_module.create_user_profile("supertokens-user-id")
+
+    assert crud_module.users_store["supertokens-user-id"] == {
+        "id": "supertokens-user-id",
+        "displayName": "",
+        "role": "requester",
+        "status": "active",
+        "emailVerified": False,
+        "verificationStatus": "unverified",
+    }
+
+
+def test_signup_profile_creation_is_idempotent() -> None:
+    crud_module.create_user_profile("usr_101")
+
+    assert crud_module.users_store["usr_101"]["displayName"] == "山田 花子"
+    assert crud_module.users_store["usr_101"]["verificationStatus"] == "approved"
+
+
+def test_successful_signup_triggers_profile_creation(monkeypatch) -> None:
+    created_user_ids: list[str] = []
+
+    class FakeSignUpPostOkResult:
+        user = type("User", (), {"id": "new-user-id"})()
+
+    class FakeApis:
+        async def sign_up_post(self, *_args, **_kwargs):
+            return FakeSignUpPostOkResult()
+
+        async def password_reset_post(self, *_args, **_kwargs):
+            return object()
+
+    monkeypatch.setattr(
+        auth_module, "SignUpPostOkResult", FakeSignUpPostOkResult, raising=False
+    )
+    monkeypatch.setattr(auth_module, "_user_creator", created_user_ids.append)
+    overridden = auth_module._override_emailpassword_apis(FakeApis())
+
+    asyncio.run(overridden.sign_up_post())
+
+    assert created_user_ids == ["new-user-id"]
 
 
 def test_invalid_session_is_unauthorized(monkeypatch) -> None:
