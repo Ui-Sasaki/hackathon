@@ -2,7 +2,8 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import logging
 import os
-from typing import Any
+import re
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -89,6 +90,84 @@ STATUS_ERROR_CODES = {
     500: "INTERNAL_SERVER_ERROR",
 }
 logger = logging.getLogger(__name__)
+
+MASKING_RULE_VERSION = "pii-mask-v1"
+masking_metrics = {"previewed": 0, "confirmationRequired": 0, "submitted": 0}
+PII_MASK_RULES = (
+    (
+        "email",
+        "[メールアドレス]",
+        re.compile(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９._%+－-]+[@＠][A-Za-z0-9Ａ-Ｚａ-ｚ０-９.-]+[.．][A-Za-zＡ-Ｚａ-ｚ]{2,}"),
+    ),
+    (
+        "phone",
+        "[電話番号]",
+        re.compile(r"(?<![0-9０-９])[0０][0-9０-９]{1,4}[-ー－―]?[0-9０-９]{1,4}[-ー－―]?[0-9０-９]{3,4}(?![0-9０-９])"),
+    ),
+    (
+        "postal_code",
+        "[郵便番号]",
+        re.compile(r"〒?\s*[0-9０-９]{3}[-ー－―][0-9０-９]{4}"),
+    ),
+    (
+        "certificate_number",
+        "[証明書番号]",
+        re.compile(r"(?:免許証|学生証|証明書)(?:番号|No[.．]?)?\s*[:：]?\s*[A-Za-zＡ-Ｚａ-ｚ0-9０-９-]{5,}"),
+    ),
+    (
+        "address",
+        "[詳細住所]",
+        re.compile(r"(?:東京都|北海道|(?:京都|大阪)府|.{2,3}県).{1,20}(?:市|区|町|村).{1,30}(?:[0-9０-９]+(?:[-ー－―丁目番地号][0-9０-９]*)+|丁目)"),
+    ),
+    (
+        "name",
+        "[氏名]",
+        re.compile(r"(?:氏名|名前)\s*(?:は|[:：])?\s*[一-龥々]{2,8}(?:\s|　)?[一-龥々]{1,8}"),
+    ),
+)
+
+
+def mask_request_text(text: str) -> dict[str, Any]:
+    masked_text = text
+    detections = []
+    for pii_type, placeholder, pattern in PII_MASK_RULES:
+        masked_text, count = pattern.subn(placeholder, masked_text)
+        if count:
+            detections.append(
+                {"type": pii_type, "placeholder": placeholder, "count": count}
+            )
+    return {
+        "maskedText": masked_text,
+        "detections": detections,
+        "hasDetections": bool(detections),
+        "ruleVersion": MASKING_RULE_VERSION,
+    }
+
+
+async def default_structure_llm_client(
+    masked_text: str, _area_code: str
+) -> dict[str, Any]:
+    is_dog = "犬" in masked_text or "散歩" in masked_text
+    return {
+        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
+        "description": masked_text,
+        "category": "pet_support" if is_dog else "other",
+        "scheduledAt": "2026-08-19T17:00:00+09:00",
+        "estimatedMinutes": 30,
+        "requiredHelpers": 1,
+        "riskLevel": "medium" if is_dog else "low",
+        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in masked_text else [],
+        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+    }
+
+
+StructureLLMClient = Callable[[str, str], Awaitable[dict[str, Any]]]
+structure_llm_client: StructureLLMClient = default_structure_llm_client
+
+
+def configure_structure_llm_client(client: StructureLLMClient) -> None:
+    global structure_llm_client
+    structure_llm_client = client
 
 
 def request_id_for(request: Request) -> str:
@@ -393,20 +472,41 @@ async def structure_request(
     body: StructureInput,
     _current_user: CurrentUser = Depends(get_current_user),
 ):
+    masking = mask_request_text(body.text)
+    if masking["hasDetections"] and not body.maskingConfirmed:
+        masking_metrics["confirmationRequired"] += 1
+        return {
+            **masking,
+            "status": "masking_confirmation_required",
+            "requiresMaskingConfirmation": True,
+            "message": "マスキング箇所を確認し、必要なら元の入力を修正してください",
+        }
     if any(word in body.text for word in ["電気工事", "医療行為", "介護", "送迎"]):
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
-    is_dog = "犬" in body.text or "散歩" in body.text
+    try:
+        result = await structure_llm_client(masking["maskedText"], body.areaCode)
+    except Exception:
+        logger.warning("Request structure service failed after masking")
+        raise HTTPException(503, detail={"code": "STRUCTURE_SERVICE_UNAVAILABLE"})
+    masking_metrics["submitted"] += 1
     return {
-        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
-        "description": body.text,
-        "category": "pet_support" if is_dog else "other",
-        "scheduledAt": "2026-08-19T17:00:00+09:00",
-        "estimatedMinutes": 30,
-        "requiredHelpers": 1,
-        "riskLevel": "medium" if is_dog else "low",
-        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in body.text else [],
-        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+        **result,
+        "masking": {
+            "detections": masking["detections"],
+            "ruleVersion": masking["ruleVersion"],
+            "confirmed": body.maskingConfirmed,
+        },
+        "requiresConfirmation": True,
     }
+
+
+@app.post("/requests/masking-preview", tags=["Requests"])
+async def preview_request_masking(
+    body: StructureInput,
+    _current_user: CurrentUser = Depends(get_current_user),
+):
+    masking_metrics["previewed"] += 1
+    return mask_request_text(body.text)
 
 
 @app.get("/requests", tags=["Requests"])
