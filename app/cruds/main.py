@@ -310,8 +310,23 @@ def ensure_match_participant(match: dict, user_id: str) -> str:
     raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
 
 
+# モックデータの初期化は開発・テスト専用の操作である。明示的に有効化した環境
+# 以外では、存在自体を伏せたまま拒否する。
+MOCK_RESET_ENABLED = os.getenv("MOCK_RESET_ENABLED", "false").lower() in {
+    "1", "true", "yes", "on",
+}
+
+
+async def require_mock_environment() -> None:
+    if not MOCK_RESET_ENABLED:
+        raise HTTPException(404, detail={"code": "NOT_FOUND"})
+
+
 @app.post("/_mock/reset", tags=["Mock control"])
-async def reset_mock():
+async def reset_mock(
+    _: None = Depends(require_mock_environment),
+    current_user: CurrentUser = Depends(get_current_user),
+):
     reset_store()
     async with admin_connection() as conn:
         await conn.execute("select app.mock_reset_requests()")
@@ -757,7 +772,11 @@ async def complete_match(
         match["status"] = "completion_pending"
         new_request_status = "completion_pending"
     async with actor_connection(current_user) as conn:
-        await request_or_404(conn, match["requestId"])
+        # The match participant check above is the authorization boundary.
+        # A helper cannot directly read the request after it leaves the
+        # published state under RLS, but must still be able to confirm
+        # completion. The server-owned match supplies the request ID to the
+        # constrained transition function.
         await conn.fetchval(
             "select app.set_request_status($1, $2::request_status, null, false)",
             uuid.UUID(match["requestId"]),

@@ -3,6 +3,7 @@ import os
 import asyncio
 
 os.environ["SUPERTOKENS_ENABLED"] = "false"
+os.environ["MOCK_RESET_ENABLED"] = "true"
 # Local schema-identical Postgres (see supabase/tests/run.sh). trust auth, no
 # secret involved. sslmode=disable avoids a crash in asyncpg's SSL-negotiation
 # fallback path on native Windows Python when the server doesn't offer TLS.
@@ -301,10 +302,41 @@ def test_unhandled_error_is_sanitized_and_correlated_with_log(caplog) -> None:
     assert error["requestId"] in caplog.text
 
 
+def test_mock_reset_is_hidden_outside_enabled_environment(monkeypatch) -> None:
+    async def unauthenticated() -> CurrentUser:
+        raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
+
+    import app.cruds.main as cruds_main
+
+    monkeypatch.setattr(cruds_main, "MOCK_RESET_ENABLED", False)
+    app.dependency_overrides[get_current_user] = unauthenticated
+
+    response = client.post("/_mock/reset")
+    assert response.status_code == 404
+    app.dependency_overrides[get_current_user] = requester_user
+    assert client.get("/requests", params={"areaCode": "AREA-001"}).status_code == 200
+
+
+def test_mock_reset_rejects_missing_session() -> None:
+    async def unauthenticated() -> CurrentUser:
+        raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
+
+    app.dependency_overrides[get_current_user] = unauthenticated
+    response = client.post("/_mock/reset")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
+
+
+def test_mock_reset_succeeds_for_authenticated_caller_in_enabled_environment() -> None:
+    response = client.post("/_mock/reset")
+    assert response.status_code == 200
+    assert response.json()["reset"] is True
+
+
 def create_match() -> str:
     response = client.post(
         "/applications/app_55/select",
-        json={"requestId": "req_1024", "expectedVersion": 3},
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
     )
     assert response.status_code == 201
     return response.json()["id"]
@@ -358,7 +390,7 @@ def test_complete_match_is_rejected_after_dispute() -> None:
     assert match_after["status"] == "disputed"
     assert match_after["requesterConfirmed"] is False
     assert match_after["completedAt"] is None
-    assert client.get("/requests/req_1024").json()["status"] == "disputed"
+    assert client.get(f"/requests/{SEED_REQUEST_1024}").json()["status"] == "disputed"
 
 
 def test_complete_match_is_rejected_after_completion() -> None:
@@ -383,6 +415,8 @@ def test_complete_match_is_rejected_after_completion() -> None:
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "MATCH_NOT_COMPLETABLE"
+
+
 def test_seeded_profile_uses_member_role() -> None:
     response = client.get("/profile")
     assert response.status_code == 200
