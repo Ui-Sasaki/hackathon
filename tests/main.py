@@ -5,10 +5,12 @@ import asyncio
 os.environ["SUPERTOKENS_ENABLED"] = "false"
 
 import httpx
+import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
 import app.auth as auth_module
+import app.cruds.main as crud_module
 from app.auth import CurrentUser, get_current_user
 from app.main import app
 
@@ -209,6 +211,97 @@ def test_session_dependency_returns_verified_user(monkeypatch) -> None:
     user = asyncio.run(get_current_user(request))
     assert user.user_id == "usr_101"
     assert user.verification_status == "approved"
+
+
+def test_auth_mock_returns_default_user_without_session(monkeypatch) -> None:
+    monkeypatch.setattr(auth_module, "AUTH_MOCK_ENABLED", True)
+    monkeypatch.setattr(auth_module, "AUTH_MOCK_USER_ID", "usr_101")
+    request = Request({"type": "http", "method": "GET", "path": "/profile", "headers": []})
+
+    user = asyncio.run(get_current_user(request))
+
+    assert user.user_id == "usr_101"
+    assert user.role == "requester"
+    assert user.mfa_completed is True
+
+
+def test_auth_mock_can_select_existing_user_by_header(monkeypatch) -> None:
+    monkeypatch.setattr(auth_module, "AUTH_MOCK_ENABLED", True)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/profile",
+            "headers": [(b"x-mock-user-id", b"usr_207")],
+        }
+    )
+
+    user = asyncio.run(get_current_user(request))
+
+    assert user.user_id == "usr_207"
+    assert user.role == "helper"
+
+
+def test_auth_mock_rejects_unknown_user(monkeypatch) -> None:
+    monkeypatch.setattr(auth_module, "AUTH_MOCK_ENABLED", True)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/profile",
+            "headers": [(b"x-mock-user-id", b"unknown")],
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(get_current_user(request))
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {"code": "USER_PROFILE_NOT_FOUND"}
+
+
+def test_signup_profile_is_created_with_safe_defaults() -> None:
+    crud_module.create_user_profile("supertokens-user-id")
+
+    assert crud_module.users_store["supertokens-user-id"] == {
+        "id": "supertokens-user-id",
+        "displayName": "",
+        "role": "requester",
+        "status": "active",
+        "emailVerified": False,
+        "verificationStatus": "unverified",
+    }
+
+
+def test_signup_profile_creation_is_idempotent() -> None:
+    crud_module.create_user_profile("usr_101")
+
+    assert crud_module.users_store["usr_101"]["displayName"] == "山田 花子"
+    assert crud_module.users_store["usr_101"]["verificationStatus"] == "approved"
+
+
+def test_successful_signup_triggers_profile_creation(monkeypatch) -> None:
+    created_user_ids: list[str] = []
+
+    class FakeSignUpPostOkResult:
+        user = type("User", (), {"id": "new-user-id"})()
+
+    class FakeApis:
+        async def sign_up_post(self, *_args, **_kwargs):
+            return FakeSignUpPostOkResult()
+
+        async def password_reset_post(self, *_args, **_kwargs):
+            return object()
+
+    monkeypatch.setattr(
+        auth_module, "SignUpPostOkResult", FakeSignUpPostOkResult, raising=False
+    )
+    monkeypatch.setattr(auth_module, "_user_creator", created_user_ids.append)
+    overridden = auth_module._override_emailpassword_apis(FakeApis())
+
+    asyncio.run(overridden.sign_up_post())
+
+    assert created_user_ids == ["new-user-id"]
 
 
 def test_invalid_session_is_unauthorized(monkeypatch) -> None:

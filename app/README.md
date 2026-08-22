@@ -28,10 +28,31 @@ python -m uvicorn main:app --reload --port 8000
 | `WEBSITE_DOMAIN` | `http://localhost:3000` | CORSで許可するフロントエンド |
 | `AUTH_COOKIE_SECURE` | `true` | CookieのSecure属性 |
 | `AUTH_COOKIE_SAME_SITE` | `lax` | CookieのSameSite属性 |
+| `AUTH_MOCK_ENABLED` | `false` | 開発用の認証モックを有効化 |
+| `AUTH_MOCK_USER_ID` | `usr_101` | 認証モックの既定ユーザーID |
 
 登録、ログイン、ログアウト、パスワード再設定はSuperTokensの`/auth/*` APIを
 利用する。Cookie認証ではHttpOnly/Secure/SameSite Cookieと`anti-csrf`ヘッダーが
 使われる。ローカルHTTP開発時だけ`AUTH_COOKIE_SECURE=false`にする。
+ユーザー登録に成功すると、SuperTokensのユーザーIDに対応するアプリ内プロフィールを
+依頼者・未確認の初期状態で自動作成する。
+
+### SuperTokensなしで機能を試す
+
+ローカル開発時は、次のように起動するとSuperTokensのセッション検証を認証モックへ
+差し替えられる。
+
+```bash
+SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --reload --port 8000
+```
+
+既定では`usr_101`（依頼者）として扱われる。別ユーザーの動作を確認する場合は
+`X-Mock-User-Id: usr_207`（支援者）のように、モックデータに存在するユーザーIDを
+指定する。既定ユーザーは`AUTH_MOCK_USER_ID`でも変更できる。ロール、利用停止状態、
+本人確認状態など、アプリ側の認可判定は通常どおり実行される。
+
+`AUTH_MOCK_ENABLED`はリクエストヘッダーを本人情報として信用する開発専用機能である。
+共有環境や本番環境では有効にしないこと。
 
 `/requests` と `/api/requests` のように、各APIは `/api` 接頭辞の有無に対応する。
 
