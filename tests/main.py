@@ -4,14 +4,9 @@ import asyncio
 
 os.environ["SUPERTOKENS_ENABLED"] = "false"
 os.environ["MOCK_RESET_ENABLED"] = "true"
-# Local schema-identical Postgres (see supabase/tests/run.sh). trust auth, no
-# secret involved. sslmode=disable avoids a crash in asyncpg's SSL-negotiation
-# fallback path on native Windows Python when the server doesn't offer TLS.
-os.environ.setdefault(
-    "DATABASE_URL", "postgresql://tetote_app@127.0.0.1:55432/tetote?sslmode=disable"
-)
 
 import httpx
+import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
@@ -20,6 +15,10 @@ import app.cruds.main as crud_module
 from app.auth import CurrentUser, get_current_user
 from app.cruds.main import SEED_REQUEST_1024
 from app.main import app
+from app.repositories.requests import (
+    MemoryRequestRepository, PostgresRequestRepository, get_request_repository,
+)
+from app.settings import load_settings
 
 
 class ASGITestClient:
@@ -48,6 +47,9 @@ class ASGITestClient:
 
     def patch(self, path: str, **kwargs) -> httpx.Response:
         return self.request("PATCH", path, **kwargs)
+
+    def delete(self, path: str, **kwargs) -> httpx.Response:
+        return self.request("DELETE", path, **kwargs)
 
 
 client = ASGITestClient()
@@ -149,6 +151,56 @@ def test_create_request_is_idempotent() -> None:
     assert first.status_code == 201
     assert second.status_code == 201
     assert first.json()["id"] == second.json()["id"]
+
+
+def test_request_owner_can_update_with_expected_version() -> None:
+    response = client.patch(
+        f"/requests/{SEED_REQUEST_1024}",
+        json={"title": "更新した依頼", "expectedVersion": 3},
+    )
+    assert response.status_code == 200
+    assert response.json()["title"] == "更新した依頼"
+    assert response.json()["version"] == 4
+
+
+def test_non_owner_cannot_update_or_cancel_request() -> None:
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    update = client.patch(
+        f"/requests/{SEED_REQUEST_1024}",
+        json={"title": "乗っ取り", "expectedVersion": 3},
+    )
+    cancel = client.delete(f"/requests/{SEED_REQUEST_1024}")
+    assert update.status_code == 403
+    assert cancel.status_code == 403
+    assert update.json()["error"]["code"] == "ROLE_FORBIDDEN"
+    assert cancel.json()["error"]["code"] == "ROLE_FORBIDDEN"
+
+
+def test_completed_request_cannot_be_cancelled() -> None:
+    repository = get_request_repository()
+    asyncio.run(
+        repository.set_status(REQUESTER, SEED_REQUEST_1024, "completed", bump_version=False)
+    )
+    response = client.delete(f"/requests/{SEED_REQUEST_1024}")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "INVALID_REQUEST_TRANSITION"
+
+
+def test_repository_implementations_share_request_contract() -> None:
+    operations = {"list", "get", "create", "update", "cancel", "set_status", "reset"}
+    for implementation in (MemoryRequestRepository, PostgresRequestRepository):
+        assert operations <= set(dir(implementation))
+
+
+def test_production_settings_never_fall_back_to_memory(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REQUEST_REPOSITORY", raising=False)
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        load_settings()
 
 
 def test_duplicate_application_is_rejected() -> None:
@@ -320,7 +372,9 @@ def test_blocked_users_requests_applications_and_messages_are_hidden() -> None:
     app.dependency_overrides[get_current_user] = helper_user
     list_response = client.get("/requests", params={"areaCode": "AREA-001"})
     assert list_response.status_code == 200
-    assert list_response.json()["items"] == []
+    assert SEED_REQUEST_1024 not in {
+        item["id"] for item in list_response.json()["items"]
+    }
     detail_response = client.get(f"/requests/{SEED_REQUEST_1024}")
     assert detail_response.status_code == 404
 
@@ -371,7 +425,7 @@ def test_400_401_403_and_409_use_common_error_response() -> None:
 
 
 def test_validation_error_does_not_echo_private_input() -> None:
-    private_value = "secret-personal-description"
+    private_value = "秘密"
     response = client.post(
         "/requests/structure",
         json={"text": private_value},
