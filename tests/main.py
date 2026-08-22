@@ -79,10 +79,38 @@ HELPER = CurrentUser(
     email_verified=True,
     verification_status="approved",
 )
+UNVERIFIED_HELPER = CurrentUser(
+    user_id="usr_208",
+    role="helper",
+    status="active",
+    email_verified=True,
+    verification_status="unverified",
+)
+SUSPENDED_HELPER = CurrentUser(
+    user_id="usr_suspended",
+    role="helper",
+    status="suspended",
+    email_verified=True,
+    verification_status="approved",
+)
+SELF_HELPER = CurrentUser(
+    user_id="usr_101",
+    role="helper",
+    status="active",
+    email_verified=True,
+    verification_status="approved",
+)
 
 
 async def requester_user() -> CurrentUser:
     return REQUESTER
+
+
+def override_user(user: CurrentUser) -> None:
+    async def current_user() -> CurrentUser:
+        return user
+
+    app.dependency_overrides[get_current_user] = current_user
 
 
 def setup_function() -> None:
