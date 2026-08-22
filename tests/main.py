@@ -3,6 +3,12 @@ import os
 import asyncio
 
 os.environ["SUPERTOKENS_ENABLED"] = "false"
+# Local schema-identical Postgres (see supabase/tests/run.sh). trust auth, no
+# secret involved. sslmode=disable avoids a crash in asyncpg's SSL-negotiation
+# fallback path on native Windows Python when the server doesn't offer TLS.
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql://tetote_app@127.0.0.1:55432/tetote?sslmode=disable"
+)
 
 import httpx
 from fastapi import HTTPException
@@ -10,6 +16,7 @@ from starlette.requests import Request
 
 import app.auth as auth_module
 from app.auth import CurrentUser, get_current_user
+from app.cruds.main import SEED_REQUEST_1024
 from app.main import app
 
 
@@ -56,14 +63,14 @@ async def raise_http_error(status_code: int) -> None:
 
 REQUESTER = CurrentUser(
     user_id="usr_101",
-    role="requester",
+    role="member",
     status="active",
     email_verified=True,
     verification_status="approved",
 )
 HELPER = CurrentUser(
     user_id="usr_207",
-    role="helper",
+    role="member",
     status="active",
     email_verified=True,
     verification_status="approved",
@@ -103,14 +110,14 @@ def test_structure_request() -> None:
 def test_select_application_with_version_check() -> None:
     response = client.post(
         "/applications/app_55/select",
-        json={"requestId": "req_1024", "expectedVersion": 3},
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
     )
     assert response.status_code == 201
     assert response.json()["status"] == "matched"
 
     conflict = client.post(
         "/applications/app_56/select",
-        json={"requestId": "req_1024", "expectedVersion": 3},
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
@@ -148,7 +155,7 @@ def test_duplicate_application_is_rejected() -> None:
 
     app.dependency_overrides[get_current_user] = helper_user
     response = client.post(
-        "/requests/req_1024/applications",
+        f"/requests/{SEED_REQUEST_1024}/applications",
         json={"message": "対応できます", "availableAt": "2026-08-19T17:00:00+09:00"},
     )
     assert response.status_code == 409
@@ -235,13 +242,13 @@ def test_high_severity_report_suspends_request() -> None:
         "/reports",
         json={
             "targetType": "request",
-            "targetId": "req_1024",
+            "targetId": SEED_REQUEST_1024,
             "reason": "dangerous_work",
             "description": "高所で危険な作業を要求されています",
         },
     )
     assert response.status_code == 201
-    assert client.get("/requests/req_1024").json()["status"] == "suspended"
+    assert client.get(f"/requests/{SEED_REQUEST_1024}").json()["status"] == "suspended"
 
 
 def assert_common_error(response, status_code: int) -> dict:
@@ -376,3 +383,65 @@ def test_complete_match_is_rejected_after_completion() -> None:
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "MATCH_NOT_COMPLETABLE"
+def test_seeded_profile_uses_member_role() -> None:
+    response = client.get("/profile")
+    assert response.status_code == 200
+    assert response.json()["role"] == "member"
+
+
+def test_require_roles_accepts_member(monkeypatch) -> None:
+    async def as_member(_request) -> CurrentUser:
+        return CurrentUser(
+            user_id="usr_101",
+            role="member",
+            status="active",
+            email_verified=True,
+            verification_status="approved",
+        )
+
+    monkeypatch.setattr(auth_module, "get_current_user", as_member)
+    user = asyncio.run(auth_module.require_roles("member")(None))
+    assert user.role == "member"
+
+
+def test_require_roles_rejects_unlisted_role(monkeypatch) -> None:
+    async def as_member(_request) -> CurrentUser:
+        return CurrentUser(
+            user_id="usr_101",
+            role="member",
+            status="active",
+            email_verified=True,
+            verification_status="approved",
+        )
+
+    monkeypatch.setattr(auth_module, "get_current_user", as_member)
+    try:
+        asyncio.run(auth_module.require_roles("admin")(None))
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert exc.detail["code"] == "ROLE_FORBIDDEN"
+    else:
+        raise AssertionError("member must not pass an admin-only dependency")
+
+
+def test_privileged_roles_still_require_mfa(monkeypatch) -> None:
+    for privileged in ("admin", "verifier"):
+
+        async def as_privileged(_request, role: str = privileged) -> CurrentUser:
+            return CurrentUser(
+                user_id="usr_900",
+                role=role,
+                status="active",
+                email_verified=True,
+                verification_status="approved",
+                mfa_completed=False,
+            )
+
+        monkeypatch.setattr(auth_module, "get_current_user", as_privileged)
+        try:
+            asyncio.run(auth_module.require_roles(privileged)(None))
+        except HTTPException as exc:
+            assert exc.status_code == 403
+            assert exc.detail["code"] == "MFA_REQUIRED"
+        else:
+            raise AssertionError(f"{privileged} must require MFA")

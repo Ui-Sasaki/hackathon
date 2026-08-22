@@ -23,7 +23,10 @@ if SUPERTOKENS_ENABLED:
     from supertokens_python.recipe.session.framework.fastapi import verify_session
 
 
-Role = Literal["requester", "helper", "admin", "verification_reviewer"]
+# 利用者の永続的な種別だけを表す。依頼者・支援者は利用者の属性ではなく、
+# 依頼やマッチに対する文脈上のアクターなので、ここには含めない
+# （要件定義書 §5 では双方が依頼作成と応募を行える）。
+Role = Literal["member", "admin", "verifier"]
 
 
 @dataclass(frozen=True)
@@ -150,7 +153,7 @@ def require_roles(*roles: Role, verified: bool = False):
             raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
         if verified and user.verification_status != "approved":
             raise HTTPException(403, detail={"code": "VERIFICATION_REQUIRED"})
-        if user.role in {"admin", "verification_reviewer"} and not user.mfa_completed:
+        if user.role in {"admin", "verifier"} and not user.mfa_completed:
             raise HTTPException(403, detail={"code": "MFA_REQUIRED"})
         return user
 
