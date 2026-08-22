@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -8,6 +8,50 @@ class StructureInput(BaseModel):
 
     text: str = Field(min_length=5, max_length=3000)
     areaCode: str
+
+
+ShortExtractedText = Annotated[str, Field(min_length=1, max_length=200)]
+MissingFieldCode = Literal[
+    "title",
+    "description",
+    "category",
+    "scheduledAt",
+    "estimatedMinutes",
+    "approximateArea",
+    "requiredHelpers",
+    "itemsToBring",
+    "details",
+]
+
+
+class StructuredRequestDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=2000)
+    category: str = Field(min_length=1, max_length=50)
+    scheduledAt: str | None = None
+    estimatedMinutes: int | None = Field(default=None, ge=10, le=240)
+    approximateArea: str = Field(min_length=1, max_length=100)
+    requiredHelpers: int | None = Field(default=None, ge=1, le=5)
+    itemsToBring: list[ShortExtractedText] = Field(max_length=20)
+    warnings: list[ShortExtractedText] = Field(max_length=20)
+    riskCandidates: list[ShortExtractedText] = Field(max_length=20)
+    missingFields: list[MissingFieldCode] = Field(max_length=20)
+
+
+class StructureMetadata(BaseModel):
+    modelName: str
+    promptVersion: str
+    processedAt: str
+
+
+class StructuredRequestResponse(StructuredRequestDraft):
+    status: Literal["draft"]
+    requiresConfirmation: Literal[True]
+    autoPublished: Literal[False]
+    additionalQuestion: str | None = None
+    metadata: StructureMetadata
 
 
 class RequestInput(BaseModel):

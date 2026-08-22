@@ -100,6 +100,24 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
 
+### Claudeによる依頼文の構造化
+
+`CLAUDE_API_ENABLED=true`と`ANTHROPIC_API_KEY`を設定すると、Messages APIの
+`structure_request`ツールをJSON Schema付きで強制選択し、自由記述からタイトル、
+作業内容、カテゴリ、希望日時、所要時間、概算地域、必要人数、持ち物、注意事項、
+危険候補、不足項目を抽出する。接続タイムアウトは`CLAUDE_TIMEOUT_SECONDS`、モデルは
+`CLAUDE_MODEL`で設定する。開発時の既定値は外部通信を行わないローカルモックである。
+
+Claudeのtool inputはPydanticモデルで再検証し、不明な項目、範囲外の値、不正な形式を
+拒否する。不足項目が複数あっても`additionalQuestion`は先頭の1問だけを返す。
+結果は常に`status: draft`、`requiresConfirmation: true`、`autoPublished: false`であり、
+ユーザー確認なしに公開しない。モデル名、プロンプト版、処理日時はレスポンスと
+本文を含まない監査データへ保存する。
+
+system promptとユーザー本文を別メッセージにし、本文内の命令は依頼内容としてのみ
+扱う。APIキー、Claudeの内部エラー、不正な応答内容はレスポンスやログへ出力しない。
+環境変数の例はリポジトリルートの`.env.example`を参照する。
+
 ## エラーレスポンスとトレースID
 
 400、401、403、404、409、422、500 のエラーは、次の共通形式で返す。

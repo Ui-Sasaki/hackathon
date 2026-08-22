@@ -14,6 +14,8 @@ from .main import (
     ReviewInput,
     SelectionInput,
     StructureInput,
+    StructuredRequestDraft,
+    StructuredRequestResponse,
     VerificationInput,
 )
 
