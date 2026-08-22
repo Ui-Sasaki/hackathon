@@ -8,6 +8,7 @@ import math
 import os
 import re
 from typing import Any, Awaitable, Callable
+import uuid
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -82,6 +83,9 @@ ERROR_MESSAGES = {
     "APPLICATION_NOT_FOUND": "応募が見つかりません",
     "MATCH_STATE_CONFLICT": "マッチの状態が更新されているため処理できません",
     "REQUEST_STATE_CONFLICT": "依頼の状態が更新されているため処理できません",
+    "REVIEW_CONTENT_REJECTED": "レビューに投稿できない内容が含まれています",
+    "ACHIEVEMENT_APPROVAL_REQUIRED": "実績の公開には本人の承認が必要です",
+    "ACHIEVEMENT_GENERATION_UNAVAILABLE": "実績を生成できませんでした",
     "VALIDATION_ERROR": "入力内容を確認してください",
     "INTERNAL_SERVER_ERROR": "サーバー内部でエラーが発生しました",
 }
@@ -174,6 +178,20 @@ structure_llm_client: StructureLLMClient = default_structure_llm_client
 def configure_structure_llm_client(client: StructureLLMClient) -> None:
     global structure_llm_client
     structure_llm_client = client
+
+REVIEW_PROHIBITED_PATTERNS = (
+    re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"),
+    re.compile(r"(?<!\d)(?:0\d{1,4}[-ー－]?\d{1,4}[-ー－]?\d{3,4})(?!\d)"),
+    re.compile(r"(?:死ね|消えろ|ばか|馬鹿|クズ)", re.IGNORECASE),
+)
+PII_PATTERNS = (
+    (re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"), "[メールアドレス]"),
+    (re.compile(r"(?<!\d)(?:0\d{1,4}[-ー－]?\d{1,4}[-ー－]?\d{3,4})(?!\d)"), "[電話番号]"),
+    (re.compile(r"(?:東京都|北海道|(?:京都|大阪)府|.{2,3}県).{1,20}[市区町村].{0,30}"), "[住所]"),
+    (re.compile(r"(?:糖尿病|認知症|うつ病|がん|癌|病歴)"), "[健康情報]"),
+)
+ACHIEVEMENT_MODEL_NAME = "mock-achievement-model"
+ACHIEVEMENT_PROMPT_VERSION = "achievement-v1"
 
 
 def request_id_for(request: Request) -> str:
@@ -301,17 +319,91 @@ def get_or_404(store: dict, entity_id: str, error_code: str) -> dict:
     return item
 
 
-# 依頼は Postgres へ永続化された（#4）。この2件は
-# supabase/migrations/20260821000000_user_provisioning.sql の app.mock_reset_requests() が
-# 作る種データの id と一致させてある。id は uuid5（namespace: NAMESPACE_URL,
-# 'tetote:seed:req_1024' / 'tetote:seed:req_1025'）で再現可能に生成した。
+def mask_personal_information(text: str, names: list[str] | None = None) -> str:
+    masked = text
+    for pattern, replacement in PII_PATTERNS:
+        masked = pattern.sub(replacement, masked)
+    for name in names or []:
+        if name:
+            masked = masked.replace(name, "[氏名]")
+    return masked
+
+
+async def default_achievement_generator(payload: dict[str, Any]) -> dict[str, Any]:
+    facts = payload["facts"]
+    positive_ratings = payload["positiveRatings"]
+    strengths = [
+        label
+        for key, label in (
+            ("onTime", "時間厳守"),
+            ("polite", "丁寧さ"),
+            ("safetyAware", "安全への配慮"),
+            ("communicative", "コミュニケーション"),
+        )
+        if positive_ratings[key]
+    ] or ["地域への貢献"]
+    return {
+        "activitySummary": f"地域の支援活動を{facts['totalActivities']}件完了しました。",
+        "strengths": strengths,
+        "generatedText": (
+            f"累計{facts['totalActivities']}回・{facts['totalMinutes']}分の活動を完了。"
+            f"発揮した強み: {'、'.join(strengths)}。この文章はAIが生成しました。"
+        ),
+    }
+
+
+AchievementGenerator = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+achievement_generator: AchievementGenerator = default_achievement_generator
+
+
+def configure_achievement_generator(generator: AchievementGenerator) -> None:
+    global achievement_generator
+    achievement_generator = generator
+
+
+INITIAL_REQUESTS = [
+    {
+        "id": "req_1024",
+        "requesterId": "usr_101",
+        "title": "犬の散歩をお願いしたい",
+        "description": "体調不良のため、小型犬の散歩を30分お願いしたいです。",
+        "category": "pet_support",
+        "riskLevel": "medium",
+        "areaCode": "AREA-001",
+        "areaLabel": "大学周辺・約1km",
+        "distanceKm": 1.2,
+        "scheduledAt": "2026-08-19T17:00:00+09:00",
+        "estimatedMinutes": 30,
+        "requiredHelpers": 1,
+        "acceptedHelpers": 0,
+        "status": "published",
+        "version": 3,
+        "warnings": ["犬の性格とリードの状態を事前に確認してください"],
+        "createdAt": "2026-08-18T10:00:00+09:00",
+    },
+    {
+        "id": "req_1025",
+        "requesterId": "usr_301",
+        "title": "玄関前の雪かきを手伝ってほしい",
+        "description": "玄関から歩道までの雪かきをお願いします。",
+        "category": "snow_removal",
+        "riskLevel": "medium",
+        "areaCode": "AREA-001",
+        "areaLabel": "大学北側・約2km",
+        "distanceKm": 2.1,
+        "scheduledAt": "2026-08-20T09:00:00+09:00",
+        "estimatedMinutes": 45,
+        "requiredHelpers": 2,
+        "acceptedHelpers": 0,
+        "status": "published",
+        "version": 1,
+        "warnings": ["悪天候時は活動を中止してください"],
+        "createdAt": "2026-08-18T11:00:00+09:00",
+    },
+]
+
 SEED_REQUEST_1024 = "5fcfec7f-a8b0-58d4-931e-593d60355ee3"
 SEED_REQUEST_1025 = "39521aee-fc9b-5be6-9652-b3cf45d9107f"
-
-# areaLabel・distanceKm は実際の距離計算（#5・F-02）が入るまでの固定プレースホルダー。
-# 依頼ごとに異なる値を持たせても意味が無いため、新規作成時と同じ値に統一する。
-PLACEHOLDER_AREA_LABEL = "大学周辺・約1km"
-PLACEHOLDER_DISTANCE_KM = 1.0
 
 HELPERS = {
     "usr_207": {
@@ -499,6 +591,37 @@ def record_match_state_change(
             "createdAt": now_iso(),
         }
     )
+
+
+
+
+def admin_can_investigate_match(match_id: str) -> bool:
+    """Allow admin message review only while a related report is open."""
+
+    message_ids = {item["id"] for item in messages.get(match_id, [])}
+    return any(
+        report["status"] == "open"
+        and (
+            (report["targetType"] == "match" and report["targetId"] == match_id)
+            or (
+                report["targetType"] == "message"
+                and report["targetId"] in message_ids
+            )
+        )
+        for report in reports.values()
+    )
+
+
+def message_warnings(body: str) -> list[str]:
+    warning_patterns = (
+        ("phone_number", r"(?<!\d)(?:0\d{1,4}[-ー ]?\d{1,4}[-ー ]?\d{3,4})(?!\d)"),
+        ("bank_account", r"(?:口座|銀行|支店|振込|店番|口座番号)"),
+        (
+            "external_contact",
+            r"(?:https?://|www\.|[^\s@]+@[^\s@]+\.[^\s@]+|LINE(?:\s*ID)?|Instagram|Discord)",
+        ),
+    )
+    return [code for code, pattern in warning_patterns if re.search(pattern, body, re.IGNORECASE)]
 
 
 @app.post("/_mock/reset", tags=["Mock control"])
@@ -888,20 +1011,37 @@ async def get_match(match_id: str, current_user: CurrentUser = Depends(get_curre
 @app.get("/matches/{match_id}/messages", tags=["Messages"])
 async def list_messages(
     match_id: str,
+    cursor: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
 ):
     match = match_or_404(match_id)
-    ensure_match_participant(match, current_user.user_id)
-    return {
-        "items": [
-            item for item in messages.get(match_id, [])
-            if not (
-                item["senderId"] != current_user.user_id
-                and is_blocked_pair(current_user.user_id, item["senderId"])
-            )
-        ],
-        "nextCursor": None,
-    }
+    is_admin_investigation = (
+        current_user.role == "admin" and admin_can_investigate_match(match_id)
+    )
+    if not is_admin_investigation:
+        ensure_match_participant(match, current_user.user_id)
+
+    match_messages = messages.get(match_id, [])
+    start = 0
+    if cursor:
+        cursor_index = next(
+            (index for index, item in enumerate(match_messages) if item["id"] == cursor),
+            None,
+        )
+        if cursor_index is None:
+            raise HTTPException(422, detail={"code": "INVALID_CURSOR"})
+        start = cursor_index + 1
+    page = match_messages[start:start + limit]
+
+    if not is_admin_investigation:
+        read_at = now_iso()
+        for item in page:
+            if item["senderId"] != current_user.user_id and item["readAt"] is None:
+                item["readAt"] = read_at
+
+    next_cursor = page[-1]["id"] if start + limit < len(match_messages) else None
+    return {"items": page, "nextCursor": next_cursor}
 
 
 @app.post("/matches/{match_id}/messages", status_code=201, tags=["Messages"])
@@ -916,6 +1056,7 @@ async def create_message(
         "matchId": match_id,
         "senderId": current_user.user_id,
         "body": body.body,
+        "warnings": message_warnings(body.body),
         "sentAt": now_iso(),
         "readAt": None,
         "moderationStatus": "allowed",
@@ -986,6 +1127,11 @@ async def create_review(
         for review in reviews.values()
     ):
         raise HTTPException(409, detail={"code": "DUPLICATE_REVIEW"})
+    contains_prohibited_content = any(
+        pattern.search(body.comment) for pattern in REVIEW_PROHIBITED_PATTERNS
+    ) or any(pattern.search(body.comment) for pattern, _ in PII_PATTERNS)
+    if contains_prohibited_content:
+        raise HTTPException(422, detail={"code": "REVIEW_CONTENT_REJECTED"})
     item = {
         "id": new_id("review"),
         "matchId": match_id,
@@ -1005,20 +1151,101 @@ async def generate_achievement(
 ):
     match = match_or_404(body.matchId)
     ensure_match_participant(match, current_user.user_id)
+    if match["helperId"] != current_user.user_id:
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
     if match["status"] != "completed":
         raise HTTPException(409, detail={"code": "MATCH_NOT_COMPLETED"})
-    async with actor_connection(current_user) as conn:
-        request_item = await request_or_404(conn, match["requestId"])
+    if body.visibility != "private":
+        raise HTTPException(409, detail={"code": "ACHIEVEMENT_APPROVAL_REQUIRED"})
+
+    completed_matches = [
+        completed_match
+        for completed_match in matches.values()
+        if completed_match["helperId"] == current_user.user_id
+        and completed_match["status"] == "completed"
+        and completed_match.get("requesterConfirmed")
+        and completed_match.get("helperConfirmed")
+    ]
+    category_counts: dict[str, int] = {}
+    total_minutes = 0
+    activities = []
+    requester_names = []
+    for completed_match in completed_matches:
+        request_item = request_or_404(completed_match["requestId"])
+        category = request_item["category"]
+        minutes = request_item["estimatedMinutes"]
+        category_counts[category] = category_counts.get(category, 0) + 1
+        total_minutes += minutes
+        requester = users_store.get(request_item["requesterId"], {})
+        requester_names.append(requester.get("displayName", ""))
+        activities.append(
+            {
+                "category": category,
+                "minutes": minutes,
+                "description": mask_personal_information(
+                    request_item["description"], [requester.get("displayName", "")]
+                ),
+            }
+        )
+    related_reviews = [
+        review
+        for review in reviews.values()
+        if review["revieweeId"] == current_user.user_id
+        and any(item["id"] == review["matchId"] for item in completed_matches)
+    ]
+    facts = {
+        "totalActivities": len(completed_matches),
+        "totalMinutes": total_minutes,
+        "categoryCounts": category_counts,
+    }
+    positive_ratings = {
+        key: sum(1 for review in related_reviews if review[key])
+        for key in ("onTime", "polite", "safetyAware", "communicative")
+    }
+    try:
+        generated = await achievement_generator(
+            {
+                "facts": facts,
+                "activities": activities,
+                "positiveRatings": positive_ratings,
+                "comments": [
+                    mask_personal_information(
+                        review["comment"],
+                        [users_store.get(review["reviewerId"], {}).get("displayName", "")],
+                    )
+                    for review in related_reviews
+                ],
+            }
+        )
+        generated_text = mask_personal_information(
+            str(generated["generatedText"]), requester_names
+        )
+        activity_summary = mask_personal_information(
+            str(generated["activitySummary"]), requester_names
+        )
+        strengths = [
+            mask_personal_information(str(strength), requester_names)
+            for strength in generated["strengths"]
+        ]
+    except Exception as exc:
+        logger.warning("Achievement generation failed", exc_info=exc)
+        raise HTTPException(503, detail={"code": "ACHIEVEMENT_GENERATION_UNAVAILABLE"})
+
+    if "AI" not in generated_text:
+        generated_text = f"{generated_text} この文章はAIが生成しました。"
     item = {
         "id": new_id("ach"),
-        "userId": match["helperId"],
+        "userId": current_user.user_id,
         "matchId": match["id"],
-        "generatedText": "地域住民の依頼に対応し、安全に配慮しながら支援活動を完了した。",
-        "facts": {"category": request_item["category"], "minutes": request_item["estimatedMinutes"]},
-        "visibility": body.visibility,
+        "activitySummary": activity_summary,
+        "strengths": strengths,
+        "generatedText": generated_text,
+        "facts": facts,
+        "aiGenerated": True,
+        "visibility": "private",
         "status": "generated",
-        "modelName": "mock-model",
-        "promptVersion": "mock-v1",
+        "modelName": ACHIEVEMENT_MODEL_NAME,
+        "promptVersion": ACHIEVEMENT_PROMPT_VERSION,
         "generatedAt": now_iso(),
         "approvedAt": None,
     }
@@ -1036,10 +1263,12 @@ async def update_achievement_visibility(
         raise HTTPException(404, detail={"code": "ACHIEVEMENT_NOT_FOUND"})
     if item["userId"] != current_user.user_id:
         raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-    if body.visibility == "public" and not body.approved:
+    if body.visibility != "private" and not body.approved:
         raise HTTPException(409, detail={"code": "ACHIEVEMENT_APPROVAL_REQUIRED"})
     item["visibility"] = body.visibility
-    if body.approved:
+    if body.visibility == "private":
+        item["status"] = "private"
+    elif body.approved:
         item["approvedAt"] = now_iso()
         item["status"] = "approved"
     return item
