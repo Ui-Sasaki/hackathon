@@ -86,6 +86,10 @@ OUTSIDER = CurrentUser(
     email_verified=True,
     verification_status="unverified",
 )
+ADMIN = CurrentUser(
+    user_id="usr_admin", role="admin", status="active", email_verified=True,
+    verification_status="approved", mfa_completed=True,
+)
 
 
 async def requester_user() -> CurrentUser:
@@ -102,9 +106,28 @@ def override_user(user: CurrentUser) -> None:
 def setup_function() -> None:
     app.dependency_overrides[get_current_user] = requester_user
     client.post("/_mock/reset")
-    crud_module.configure_structure_llm_client(crud_module.default_structure_llm_client)
-    for metric in crud_module.masking_metrics:
-        crud_module.masking_metrics[metric] = 0
+    crud_module.configure_achievement_generator(crud_module.default_achievement_generator)
+
+
+def seed_completed_match() -> dict:
+    match = {
+        "id": "match_completed",
+        "requestId": "req_1024",
+        "requesterId": "usr_101",
+        "helperId": "usr_207",
+        "status": "completed",
+        "requesterConfirmed": True,
+        "helperConfirmed": True,
+        "matchedAt": "2026-08-19T17:00:00+09:00",
+        "completedAt": "2026-08-19T17:30:00+09:00",
+    }
+    crud_module.matches[match["id"]] = match
+    crud_module.requests_store["req_1024"]["status"] = "completed"
+    return match
+
+
+async def helper_user() -> CurrentUser:
+    return HELPER
 
 
 def select_default_application() -> str:
@@ -337,6 +360,193 @@ def test_select_application_with_version_check() -> None:
     assert conflict.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
 
 
+def test_match_becomes_completed_only_after_both_participants_confirm() -> None:
+    match_id = select_default_application()
+    response = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "helper"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "completion_pending"
+    assert response.json()["requesterConfirmed"] is True
+    assert response.json()["helperConfirmed"] is False
+    assert crud_module.requests_store["req_1024"]["status"] == "completion_pending"
+
+    use_current_user(HELPER)
+    response = client.post(f"/matches/{match_id}/complete", json={"completed": True})
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["completedAt"] is not None
+    assert crud_module.requests_store["req_1024"]["status"] == "completed"
+    assert [log["newStatus"] for log in crud_module.audit_logs] == [
+        "completion_pending", "completed",
+    ]
+
+
+def test_non_participant_cannot_complete_or_dispute_match() -> None:
+    match_id = select_default_application()
+    use_current_user(OUTSIDER)
+    complete = client.post(f"/matches/{match_id}/complete", json={"completed": True})
+    dispute = client.post(
+        f"/matches/{match_id}/dispute",
+        json={"reason": "活動内容について当事者間で認識が一致しません"},
+    )
+    assert complete.status_code == 403
+    assert dispute.status_code == 403
+    assert crud_module.matches[match_id]["status"] == "matched"
+    assert crud_module.audit_logs == []
+
+
+def test_dispute_changes_match_and_request_status_and_is_audited() -> None:
+    match_id = select_default_application()
+    response = client.post(
+        f"/matches/{match_id}/dispute",
+        json={"reason": "活動内容について当事者間で認識が一致しません"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "disputed"
+    assert crud_module.requests_store["req_1024"]["status"] == "disputed"
+    assert crud_module.audit_logs[-1]["previousStatus"] == "matched"
+    assert crud_module.audit_logs[-1]["newStatus"] == "disputed"
+
+
+def test_invalid_match_state_transitions_are_rejected_with_409() -> None:
+    match_id = select_default_application()
+    assert client.post(
+        f"/matches/{match_id}/complete", json={"completed": True}
+    ).status_code == 200
+    duplicate = client.post(f"/matches/{match_id}/complete", json={"completed": True})
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "MATCH_STATE_CONFLICT"
+
+    use_current_user(HELPER)
+    assert client.post(
+        f"/matches/{match_id}/complete", json={"completed": True}
+    ).status_code == 200
+    response = client.post(
+        f"/matches/{match_id}/dispute",
+        json={"reason": "完了後に状態を変更しようとしています"},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "MATCH_STATE_CONFLICT"
+
+
+def test_reviews_and_achievements_require_completed_match() -> None:
+    match_id = select_default_application()
+    review = {
+        "onTime": True, "polite": True, "safetyAware": True,
+        "communicative": True, "comment": "丁寧に対応してもらいました",
+    }
+    assert client.post(f"/matches/{match_id}/reviews", json=review).status_code == 409
+    assert client.post(
+        "/achievements/generate", json={"matchId": match_id}
+    ).status_code == 409
+    assert client.post(
+        f"/matches/{match_id}/complete", json={"completed": True}
+    ).status_code == 200
+    use_current_user(HELPER)
+    assert client.post(
+        f"/matches/{match_id}/complete", json={"completed": True}
+    ).status_code == 200
+    assert client.post(f"/matches/{match_id}/reviews", json=review).status_code == 201
+    assert client.post(
+        "/achievements/generate", json={"matchId": match_id}
+    ).status_code == 201
+
+
+def create_match() -> str:
+    response = client.post(
+        "/applications/app_55/select",
+        json={"requestId": "req_1024", "expectedVersion": 3},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def override_user(user: CurrentUser) -> None:
+    async def current_user() -> CurrentUser:
+        return user
+
+    app.dependency_overrides[get_current_user] = current_user
+
+
+def test_chat_uses_authenticated_sender_and_server_time_and_warns_contacts() -> None:
+    match_id = create_match()
+    override_user(HELPER)
+
+    response = client.post(
+        f"/matches/{match_id}/messages",
+        json={
+            "body": "電話は090-1234-5678、銀行口座とLINE IDを送ります",
+            "senderId": "forged",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["senderId"] == HELPER.user_id
+    assert response.json()["sentAt"].endswith("Z")
+    assert response.json()["warnings"] == [
+        "phone_number", "bank_account", "external_contact",
+    ]
+
+
+def test_chat_rejects_non_participant_for_read_and_send() -> None:
+    match_id = create_match()
+    override_user(OUTSIDER)
+
+    assert client.get(f"/matches/{match_id}/messages").status_code == 403
+    assert client.post(
+        f"/matches/{match_id}/messages", json={"body": "参加していません"}
+    ).status_code == 403
+
+
+def test_chat_cursor_paging_and_read_state() -> None:
+    match_id = create_match()
+    override_user(HELPER)
+    for index in range(3):
+        assert client.post(
+            f"/matches/{match_id}/messages", json={"body": f"message {index}"}
+        ).status_code == 201
+
+    override_user(REQUESTER)
+    first = client.get(f"/matches/{match_id}/messages", params={"limit": 2})
+    second = client.get(
+        f"/matches/{match_id}/messages",
+        params={"limit": 2, "cursor": first.json()["nextCursor"]},
+    )
+
+    assert len(first.json()["items"]) == 2
+    assert first.json()["nextCursor"] == first.json()["items"][-1]["id"]
+    assert len(second.json()["items"]) == 1
+    assert second.json()["nextCursor"] is None
+    assert all(item["readAt"] is not None for item in first.json()["items"])
+    assert second.json()["items"][0]["readAt"] is not None
+    assert client.get(
+        f"/matches/{match_id}/messages", params={"cursor": "missing"}
+    ).status_code == 422
+
+
+def test_admin_chat_access_requires_open_related_report_and_is_read_only() -> None:
+    match_id = create_match()
+    override_user(HELPER)
+    message = client.post(
+        f"/matches/{match_id}/messages", json={"body": "調査対象メッセージ"}
+    ).json()
+
+    override_user(ADMIN)
+    assert client.get(f"/matches/{match_id}/messages").status_code == 403
+    crud_module.reports["report_chat"] = {
+        "id": "report_chat", "targetType": "message", "targetId": message["id"],
+        "status": "open",
+    }
+    response = client.get(f"/matches/{match_id}/messages")
+    assert response.status_code == 200
+    assert response.json()["items"][0]["readAt"] is None
+    assert client.post(
+        f"/matches/{match_id}/messages", json={"body": "管理者は送信不可"}
+    ).status_code == 403
+
+
 def test_api_prefix_and_profile_update() -> None:
     response = client.patch("/api/profile", json={"displayName": "更新後の名前"})
     assert response.status_code == 200
@@ -446,6 +656,290 @@ def test_blocked_messages_are_hidden_and_sending_resumes_after_unblock() -> None
     assert client.post(
         f"/matches/{match_id}/messages", json={"body": "こちらこそよろしくお願いします"}
     ).status_code == 201
+
+
+def test_review_requires_completed_match_and_is_unique_per_reviewer() -> None:
+    match = seed_completed_match()
+    payload = {
+        "onTime": True,
+        "polite": True,
+        "safetyAware": True,
+        "communicative": True,
+        "comment": "安全に配慮して丁寧に対応してくれました",
+    }
+
+    match["status"] = "completion_pending"
+    incomplete = client.post(f"/matches/{match['id']}/reviews", json=payload)
+    match["status"] = "completed"
+    first = client.post(f"/matches/{match['id']}/reviews", json=payload)
+    duplicate = client.post(f"/matches/{match['id']}/reviews", json=payload)
+
+    assert incomplete.status_code == 409
+    assert first.status_code == 201
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "DUPLICATE_REVIEW"
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "連絡先はhanako@example.comです",
+        "電話番号は090-1234-5678です",
+        "糖尿病のことを皆に伝えます",
+        "本当にクズな対応でした",
+    ],
+)
+def test_review_rejects_personal_or_abusive_content(comment: str) -> None:
+    match = seed_completed_match()
+    response = client.post(
+        f"/matches/{match['id']}/reviews",
+        json={
+            "onTime": False,
+            "polite": False,
+            "safetyAware": False,
+            "communicative": False,
+            "comment": comment,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "REVIEW_CONTENT_REJECTED"
+
+
+def test_achievement_aggregates_completed_activity_and_masks_llm_input() -> None:
+    match = seed_completed_match()
+    crud_module.requests_store["req_1024"]["description"] = (
+        "山田 花子さん（糖尿病）の連絡先は090-1234-5678です"
+    )
+    captured_payload = {}
+
+    async def generator(payload: dict) -> dict:
+        captured_payload.update(payload)
+        return {
+            "activitySummary": "山田 花子さんを支援しました",
+            "strengths": ["山田 花子さんへの丁寧な対応"],
+            "generatedText": "山田 花子さんの依頼を完了しました",
+        }
+
+    crud_module.configure_achievement_generator(generator)
+    app.dependency_overrides[get_current_user] = helper_user
+    response = client.post(
+        "/achievements/generate",
+        json={"matchId": match["id"], "visibility": "private"},
+    )
+
+    assert response.status_code == 201
+    achievement = response.json()
+    assert achievement["facts"] == {
+        "totalActivities": 1,
+        "totalMinutes": 30,
+        "categoryCounts": {"pet_support": 1},
+    }
+    assert achievement["visibility"] == "private"
+    assert achievement["approvedAt"] is None
+    assert achievement["aiGenerated"] is True
+    assert achievement["modelName"] == "mock-achievement-model"
+    assert achievement["promptVersion"] == "achievement-v1"
+    assert "AI" in achievement["generatedText"]
+    serialized_input = str(captured_payload)
+    serialized_output = str(achievement)
+    for private_value in ("山田 花子", "糖尿病", "090-1234-5678"):
+        assert private_value not in serialized_input
+        assert private_value not in serialized_output
+
+
+def test_achievement_generation_requires_helper_and_completed_match() -> None:
+    match = seed_completed_match()
+    requester_response = client.post(
+        "/achievements/generate",
+        json={"matchId": match["id"], "visibility": "private"},
+    )
+    assert requester_response.status_code == 403
+
+    app.dependency_overrides[get_current_user] = helper_user
+    match["status"] = "completion_pending"
+    incomplete_response = client.post(
+        "/achievements/generate",
+        json={"matchId": match["id"], "visibility": "private"},
+    )
+    assert incomplete_response.status_code == 409
+
+
+def test_achievement_can_be_regenerated_and_visibility_is_owner_controlled() -> None:
+    match = seed_completed_match()
+    app.dependency_overrides[get_current_user] = helper_user
+    first = client.post(
+        "/achievements/generate",
+        json={"matchId": match["id"], "visibility": "private"},
+    )
+    second = client.post(
+        "/achievements/generate",
+        json={"matchId": match["id"], "visibility": "private"},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
+
+    app.dependency_overrides[get_current_user] = requester_user
+    forbidden = client.patch(
+        "/achievements/visibility",
+        json={"achievementId": second.json()["id"], "visibility": "private"},
+    )
+    app.dependency_overrides[get_current_user] = helper_user
+    unapproved = client.patch(
+        "/achievements/visibility",
+        json={"achievementId": second.json()["id"], "visibility": "public"},
+    )
+    unapproved_members = client.patch(
+        "/achievements/visibility",
+        json={"achievementId": second.json()["id"], "visibility": "members"},
+    )
+    approved = client.patch(
+        "/achievements/visibility",
+        json={
+            "achievementId": second.json()["id"],
+            "visibility": "public",
+            "approved": True,
+        },
+    )
+    private = client.patch(
+        "/achievements/visibility",
+        json={"achievementId": second.json()["id"], "visibility": "private"},
+    )
+    assert forbidden.status_code == 403
+    assert unapproved.status_code == 409
+    assert unapproved_members.status_code == 409
+    assert approved.json()["status"] == "approved"
+    assert approved.json()["approvedAt"] is not None
+    assert private.json()["visibility"] == "private"
+    assert private.json()["status"] == "private"
+
+
+def test_generation_failure_preserves_existing_public_achievement() -> None:
+    match = seed_completed_match()
+    existing = {
+        "id": "ach_public",
+        "userId": "usr_207",
+        "visibility": "public",
+        "status": "approved",
+        "generatedText": "既存の公開実績",
+    }
+    crud_module.achievements[existing["id"]] = existing.copy()
+
+    async def unavailable(_payload: dict) -> dict:
+        raise TimeoutError("secret provider failure")
+
+    crud_module.configure_achievement_generator(unavailable)
+    app.dependency_overrides[get_current_user] = helper_user
+    response = client.post(
+        "/achievements/generate",
+        json={"matchId": match["id"], "visibility": "private"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "ACHIEVEMENT_GENERATION_UNAVAILABLE"
+    assert crud_module.achievements == {existing["id"]: existing}
+
+
+def application_payload() -> dict[str, str]:
+    return {"message": "対応できます", "availableAt": "2099-08-19T17:00:00+09:00"}
+
+
+def test_helper_can_apply_and_withdraw_own_application() -> None:
+    override_user(UNVERIFIED_HELPER)
+    request_item = crud_module.requests_store["req_1025"]
+    request_item["scheduledAt"] = "2099-08-20T09:00:00+09:00"
+
+    created = client.post(
+        "/requests/req_1025/applications", json=application_payload()
+    )
+    withdrawn = client.post(f"/applications/{created.json()['id']}/withdraw")
+
+    assert created.status_code == 201
+    assert withdrawn.status_code == 200
+    assert withdrawn.json()["status"] == "withdrawn"
+
+
+def test_self_application_is_rejected() -> None:
+    override_user(SELF_HELPER)
+    crud_module.requests_store["req_1024"]["scheduledAt"] = "2099-08-19T17:00:00+09:00"
+
+    response = client.post(
+        "/requests/req_1024/applications", json=application_payload()
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "SELF_APPLICATION_NOT_ALLOWED"
+
+
+@pytest.mark.parametrize("status", ["matched", "suspended", "cancelled"])
+def test_application_rejects_request_that_is_not_open(status: str) -> None:
+    override_user(UNVERIFIED_HELPER)
+    request_item = crud_module.requests_store["req_1025"]
+    request_item.update({"status": status, "scheduledAt": "2099-08-20T09:00:00+09:00"})
+
+    response = client.post(
+        "/requests/req_1025/applications", json=application_payload()
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "REQUEST_NOT_OPEN"
+
+
+def test_application_rejects_expired_request() -> None:
+    override_user(UNVERIFIED_HELPER)
+    crud_module.requests_store["req_1025"]["scheduledAt"] = "2020-01-01T00:00:00Z"
+
+    response = client.post(
+        "/requests/req_1025/applications", json=application_payload()
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "REQUEST_EXPIRED"
+
+
+def test_application_requires_verification_when_request_requires_it() -> None:
+    override_user(UNVERIFIED_HELPER)
+    request_item = crud_module.requests_store["req_1025"]
+    request_item.update(
+        {"scheduledAt": "2099-08-20T09:00:00+09:00", "verificationRequired": True}
+    )
+
+    response = client.post(
+        "/requests/req_1025/applications", json=application_payload()
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "VERIFICATION_REQUIRED"
+
+
+def test_suspended_user_cannot_apply_or_withdraw() -> None:
+    override_user(SUSPENDED_HELPER)
+    request_item = crud_module.requests_store["req_1025"]
+    request_item["scheduledAt"] = "2099-08-20T09:00:00+09:00"
+
+    apply_response = client.post(
+        "/requests/req_1025/applications", json=application_payload()
+    )
+    crud_module.applications["app_suspended"] = {
+        "id": "app_suspended", "requestId": "req_1025",
+        "helperId": SUSPENDED_HELPER.user_id, "status": "applied",
+    }
+    withdraw_response = client.post("/applications/app_suspended/withdraw")
+
+    assert apply_response.status_code == 403
+    assert apply_response.json()["error"]["code"] == "USER_SUSPENDED"
+    assert withdraw_response.status_code == 403
+    assert withdraw_response.json()["error"]["code"] == "USER_SUSPENDED"
+
+
+def test_only_application_owner_can_withdraw() -> None:
+    override_user(UNVERIFIED_HELPER)
+
+    response = client.post("/applications/app_55/withdraw")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "ROLE_FORBIDDEN"
 
 
 def test_protected_endpoint_rejects_missing_session() -> None:
