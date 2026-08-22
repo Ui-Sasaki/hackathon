@@ -1,8 +1,16 @@
 import logging
 import os
 import asyncio
+from copy import deepcopy
 
 os.environ["SUPERTOKENS_ENABLED"] = "false"
+os.environ["MOCK_RESET_ENABLED"] = "true"
+# Local schema-identical Postgres (see supabase/tests/run.sh). trust auth, no
+# secret involved. sslmode=disable avoids a crash in asyncpg's SSL-negotiation
+# fallback path on native Windows Python when the server doesn't offer TLS.
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql://tetote_app@127.0.0.1:55432/tetote?sslmode=disable"
+)
 
 import httpx
 import pytest
@@ -12,6 +20,7 @@ from starlette.requests import Request
 import app.auth as auth_module
 import app.cruds.main as crud_module
 from app.auth import CurrentUser, get_current_user
+from app.cruds.main import SEED_REQUEST_1024
 from app.main import app
 
 
@@ -58,14 +67,14 @@ async def raise_http_error(status_code: int) -> None:
 
 REQUESTER = CurrentUser(
     user_id="usr_101",
-    role="requester",
+    role="member",
     status="active",
     email_verified=True,
     verification_status="approved",
 )
 HELPER = CurrentUser(
     user_id="usr_207",
-    role="helper",
+    role="member",
     status="active",
     email_verified=True,
     verification_status="approved",
@@ -116,6 +125,79 @@ def test_list_requests() -> None:
     assert len(response.json()["items"]) == 2
 
 
+def add_search_request(request_id: str, **changes) -> None:
+    item = deepcopy(crud_module.INITIAL_REQUESTS[0])
+    item.update(
+        {
+            "id": request_id,
+            "createdAt": f"2026-08-21T00:00:{int(request_id.split('_')[-1]):02d}+00:00",
+            **changes,
+        }
+    )
+    crud_module.requests_store[request_id] = item
+
+
+def test_request_search_filters_and_excludes_closed_or_expired_requests() -> None:
+    add_search_request(
+        "req_01", category="cleaning", requiredHelpers=2,
+        scheduledAt="2026-09-01T10:00:00+09:00", requesterId="usr_101",
+    )
+    add_search_request("req_02", status="cancelled")
+    add_search_request("req_03", scheduledAt="2020-01-01T00:00:00+00:00")
+
+    response = client.get(
+        "/requests",
+        params={
+            "category": "cleaning", "requiredHelpers": 2,
+            "verificationStatus": "approved",
+            "scheduledFrom": "2026-09-01T00:00:00+09:00",
+            "scheduledTo": "2026-09-02T00:00:00+09:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == ["req_01"]
+
+
+def test_request_search_uses_profile_area_and_never_returns_precise_location() -> None:
+    response = client.get("/requests", params={"maxDistanceKm": 2})
+
+    assert response.status_code == 200
+    assert response.json()["items"]
+    for item in response.json()["items"]:
+        assert "latitude" not in item
+        assert "longitude" not in item
+        assert "streetAddress" not in item
+        assert item["distanceKm"] <= 2
+
+    detail = client.get("/requests/req_1024").json()
+    assert "latitude" not in detail
+    assert "longitude" not in detail
+    assert "streetAddress" not in detail
+
+
+def test_request_search_cursor_paging_has_default_page_size_20() -> None:
+    for index in range(1, 22):
+        add_search_request(f"req_{index:02d}")
+
+    first = client.get("/requests")
+    assert first.status_code == 200
+    assert len(first.json()["items"]) == 20
+    assert first.json()["nextCursor"] is not None
+
+    second = client.get("/requests", params={"cursor": first.json()["nextCursor"]})
+    first_ids = {item["id"] for item in first.json()["items"]}
+    second_ids = {item["id"] for item in second.json()["items"]}
+    assert len(second_ids) == 3
+    assert first_ids.isdisjoint(second_ids)
+
+
+def test_request_search_validates_limit_cursor_and_location_pair() -> None:
+    assert client.get("/requests", params={"limit": 101}).status_code == 422
+    assert client.get("/requests", params={"cursor": "not-a-cursor"}).status_code == 422
+    assert client.get("/requests", params={"latitude": 35.0}).status_code == 422
+
+
 def test_structure_request() -> None:
     response = client.post(
         "/requests/structure",
@@ -128,14 +210,14 @@ def test_structure_request() -> None:
 def test_select_application_with_version_check() -> None:
     response = client.post(
         "/applications/app_55/select",
-        json={"requestId": "req_1024", "expectedVersion": 3},
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
     )
     assert response.status_code == 201
     assert response.json()["status"] == "matched"
 
     conflict = client.post(
         "/applications/app_56/select",
-        json={"requestId": "req_1024", "expectedVersion": 3},
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
@@ -267,7 +349,7 @@ def test_duplicate_application_is_rejected() -> None:
 
     app.dependency_overrides[get_current_user] = helper_user
     response = client.post(
-        "/requests/req_1024/applications",
+        f"/requests/{SEED_REQUEST_1024}/applications",
         json={"message": "対応できます", "availableAt": "2026-08-19T17:00:00+09:00"},
     )
     assert response.status_code == 409
@@ -445,13 +527,102 @@ def test_high_severity_report_suspends_request() -> None:
         "/reports",
         json={
             "targetType": "request",
-            "targetId": "req_1024",
+            "targetId": SEED_REQUEST_1024,
             "reason": "dangerous_work",
             "description": "高所で危険な作業を要求されています",
         },
     )
     assert response.status_code == 201
-    assert client.get("/requests/req_1024").json()["status"] == "suspended"
+    report = response.json()
+    assert report["reporterId"] == REQUESTER.user_id
+    assert report["targetId"] == SEED_REQUEST_1024
+    assert report["reason"] == "dangerous_work"
+    assert report["description"] == "高所で危険な作業を要求されています"
+    assert report["severity"] == "high"
+    assert report["createdAt"].endswith("Z")
+    assert client.get(f"/requests/{SEED_REQUEST_1024}").json()["status"] == "suspended"
+    assert [event["eventType"] for event in crud_module.audit_logs] == [
+        "report_created",
+        "request_auto_suspended",
+    ]
+
+
+def test_reporter_id_cannot_be_supplied_by_client() -> None:
+    response = client.post(
+        "/reports",
+        json={
+            "reporterId": "attacker-controlled",
+            "targetType": "user",
+            "targetId": HELPER.user_id,
+            "reason": "harassment",
+            "description": "不適切なメッセージが繰り返し送られました",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["reporterId"] == REQUESTER.user_id
+
+
+def test_block_and_unblock_are_scoped_to_authenticated_user_and_audited() -> None:
+    blocked = client.post(f"/users/{HELPER.user_id}/block", json={"blocked": True})
+    assert blocked.status_code == 201
+    assert blocked.json()["blocked"] is True
+    assert (REQUESTER.user_id, HELPER.user_id) in crud_module.blocks
+
+    unblocked = client.post(f"/users/{HELPER.user_id}/block", json={"blocked": False})
+    assert unblocked.status_code == 201
+    assert unblocked.json()["blocked"] is False
+    assert (REQUESTER.user_id, HELPER.user_id) not in crud_module.blocks
+    assert [event["eventType"] for event in crud_module.audit_logs] == [
+        "user_blocked",
+        "user_unblocked",
+    ]
+
+
+def test_self_block_is_rejected_without_audit_event() -> None:
+    response = client.post(f"/users/{REQUESTER.user_id}/block", json={"blocked": True})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "SELF_BLOCK_NOT_ALLOWED"
+    assert crud_module.audit_logs == []
+
+
+def test_blocked_users_requests_applications_and_messages_are_hidden() -> None:
+    # The requester no longer sees applications from a helper they blocked.
+    assert client.post(f"/users/{HELPER.user_id}/block", json={"blocked": True}).status_code == 201
+    applications_response = client.get(f"/requests/{SEED_REQUEST_1024}/applications")
+    assert applications_response.status_code == 200
+    assert "usr_207" not in {
+        item["helperId"] for item in applications_response.json()["items"]
+    }
+
+    # The blocked helper can no longer discover the requester's requests.
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    list_response = client.get("/requests", params={"areaCode": "AREA-001"})
+    assert list_response.status_code == 200
+    assert list_response.json()["items"] == []
+    detail_response = client.get(f"/requests/{SEED_REQUEST_1024}")
+    assert detail_response.status_code == 404
+
+
+def test_messages_from_blocked_user_are_hidden() -> None:
+    match_id = create_match()
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    sent = client.post(f"/matches/{match_id}/messages", json={"body": "対応できます"})
+    assert sent.status_code == 201
+
+    app.dependency_overrides[get_current_user] = requester_user
+    assert client.post(f"/users/{HELPER.user_id}/block", json={"blocked": True}).status_code == 201
+    response = client.get(f"/matches/{match_id}/messages")
+    assert response.status_code == 200
+    assert response.json()["items"] == []
 
 
 def assert_common_error(response, status_code: int) -> dict:
@@ -502,3 +673,182 @@ def test_unhandled_error_is_sanitized_and_correlated_with_log(caplog) -> None:
     assert "private database failure" not in response.text
     assert "user@example.com" not in response.text
     assert error["requestId"] in caplog.text
+
+
+def test_mock_reset_is_hidden_outside_enabled_environment(monkeypatch) -> None:
+    async def unauthenticated() -> CurrentUser:
+        raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
+
+    import app.cruds.main as cruds_main
+
+    monkeypatch.setattr(cruds_main, "MOCK_RESET_ENABLED", False)
+    app.dependency_overrides[get_current_user] = unauthenticated
+
+    response = client.post("/_mock/reset")
+    assert response.status_code == 404
+    app.dependency_overrides[get_current_user] = requester_user
+    assert client.get("/requests", params={"areaCode": "AREA-001"}).status_code == 200
+
+
+def test_mock_reset_rejects_missing_session() -> None:
+    async def unauthenticated() -> CurrentUser:
+        raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
+
+    app.dependency_overrides[get_current_user] = unauthenticated
+    response = client.post("/_mock/reset")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
+
+
+def test_mock_reset_succeeds_for_authenticated_caller_in_enabled_environment() -> None:
+    response = client.post("/_mock/reset")
+    assert response.status_code == 200
+    assert response.json()["reset"] is True
+
+
+def create_match() -> str:
+    response = client.post(
+        "/applications/app_55/select",
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def test_complete_match_needs_both_parties_and_tolerates_repeat() -> None:
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    match_id = create_match()
+    first = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "requester"},
+    )
+    assert first.status_code == 200
+    assert first.json()["status"] == "completion_pending"
+
+    repeated = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "requester"},
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["status"] == "completion_pending"
+
+    app.dependency_overrides[get_current_user] = helper_user
+    second = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "helper"},
+    )
+    assert second.status_code == 200
+    assert second.json()["status"] == "completed"
+
+
+def test_complete_match_is_rejected_after_dispute() -> None:
+    match_id = create_match()
+    disputed = client.post(
+        f"/matches/{match_id}/dispute",
+        json={"reason": "作業内容の認識が食い違ったため確認したい"},
+    )
+    assert disputed.status_code == 200
+    assert disputed.json()["status"] == "disputed"
+
+    conflict = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "requester"},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "MATCH_NOT_COMPLETABLE"
+
+    match_after = client.get(f"/matches/{match_id}").json()
+    assert match_after["status"] == "disputed"
+    assert match_after["requesterConfirmed"] is False
+    assert match_after["completedAt"] is None
+    assert client.get(f"/requests/{SEED_REQUEST_1024}").json()["status"] == "disputed"
+
+
+def test_complete_match_is_rejected_after_completion() -> None:
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    match_id = create_match()
+    client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "requester"},
+    )
+    app.dependency_overrides[get_current_user] = helper_user
+    completed = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "helper"},
+    )
+    assert completed.json()["status"] == "completed"
+
+    conflict = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "helper"},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "MATCH_NOT_COMPLETABLE"
+
+
+def test_seeded_profile_uses_member_role() -> None:
+    response = client.get("/profile")
+    assert response.status_code == 200
+    assert response.json()["role"] == "member"
+
+
+def test_require_roles_accepts_member(monkeypatch) -> None:
+    async def as_member(_request) -> CurrentUser:
+        return CurrentUser(
+            user_id="usr_101",
+            role="member",
+            status="active",
+            email_verified=True,
+            verification_status="approved",
+        )
+
+    monkeypatch.setattr(auth_module, "get_current_user", as_member)
+    user = asyncio.run(auth_module.require_roles("member")(None))
+    assert user.role == "member"
+
+
+def test_require_roles_rejects_unlisted_role(monkeypatch) -> None:
+    async def as_member(_request) -> CurrentUser:
+        return CurrentUser(
+            user_id="usr_101",
+            role="member",
+            status="active",
+            email_verified=True,
+            verification_status="approved",
+        )
+
+    monkeypatch.setattr(auth_module, "get_current_user", as_member)
+    try:
+        asyncio.run(auth_module.require_roles("admin")(None))
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert exc.detail["code"] == "ROLE_FORBIDDEN"
+    else:
+        raise AssertionError("member must not pass an admin-only dependency")
+
+
+def test_privileged_roles_still_require_mfa(monkeypatch) -> None:
+    for privileged in ("admin", "verifier"):
+
+        async def as_privileged(_request, role: str = privileged) -> CurrentUser:
+            return CurrentUser(
+                user_id="usr_900",
+                role=role,
+                status="active",
+                email_verified=True,
+                verification_status="approved",
+                mfa_completed=False,
+            )
+
+        monkeypatch.setattr(auth_module, "get_current_user", as_privileged)
+        try:
+            asyncio.run(auth_module.require_roles(privileged)(None))
+        except HTTPException as exc:
+            assert exc.status_code == 403
+            assert exc.detail["code"] == "MFA_REQUIRED"
+        else:
+            raise AssertionError(f"{privileged} must require MFA")
