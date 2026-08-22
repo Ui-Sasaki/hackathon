@@ -1,8 +1,11 @@
 from copy import deepcopy
+import asyncio
 from datetime import datetime, timezone
+import json
 import logging
 import os
-from typing import Any
+import random
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -23,8 +26,9 @@ from app.schemas import (
     AchievementInput, AchievementVisibilityInput, ApplicationInput,
     BlockInput, CompletionInput, DisputeInput, MessageInput, ProfileUpdateInput,
     ReportInput, RequestInput, RequestUpdateInput, ReviewInput, SelectionInput,
-    StructureInput, VerificationInput,
+    StructureInput, StructuredRequestOutput, VerificationInput,
 )
+from pydantic import ValidationError
 
 
 app = FastAPI(
@@ -89,6 +93,91 @@ STATUS_ERROR_CODES = {
     500: "INTERNAL_SERVER_ERROR",
 }
 logger = logging.getLogger(__name__)
+
+MAX_LLM_RETRIES = 2
+RETRYABLE_LLM_FAILURES = {"timeout", "connection", "rate_limit", "server", "invalid_response"}
+llm_failure_metrics = {
+    "timeout": 0,
+    "connection": 0,
+    "rate_limit": 0,
+    "server": 0,
+    "invalid_response": 0,
+    "authentication": 0,
+    "client": 0,
+    "fallback": 0,
+}
+
+
+class LLMServiceError(Exception):
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"LLM service returned status {status_code}")
+        self.status_code = status_code
+
+
+async def default_structure_generator(body: StructureInput) -> dict[str, Any]:
+    is_dog = "犬" in body.text or "散歩" in body.text
+    return {
+        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
+        "description": body.text,
+        "category": "pet_support" if is_dog else "other",
+        "scheduledAt": "2026-08-19T17:00:00+09:00",
+        "estimatedMinutes": 30,
+        "requiredHelpers": 1,
+        "riskLevel": "medium" if is_dog else "low",
+        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in body.text else [],
+        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+    }
+
+
+StructureGenerator = Callable[[StructureInput], Awaitable[dict[str, Any] | str]]
+RetrySleeper = Callable[[float], Awaitable[None]]
+structure_generator: StructureGenerator = default_structure_generator
+retry_sleeper: RetrySleeper = asyncio.sleep
+
+
+def configure_structure_generator(generator: StructureGenerator) -> None:
+    global structure_generator
+    structure_generator = generator
+
+
+def configure_retry_sleeper(sleeper: RetrySleeper) -> None:
+    global retry_sleeper
+    retry_sleeper = sleeper
+
+
+def classify_llm_failure(exc: Exception) -> tuple[str, bool]:
+    if isinstance(exc, TimeoutError):
+        return "timeout", True
+    if isinstance(exc, ConnectionError):
+        return "connection", True
+    if isinstance(exc, (json.JSONDecodeError, ValidationError, KeyError, TypeError)):
+        return "invalid_response", True
+    if isinstance(exc, LLMServiceError):
+        if exc.status_code == 429:
+            return "rate_limit", True
+        if 500 <= exc.status_code <= 599:
+            return "server", True
+        if exc.status_code in {401, 403}:
+            return "authentication", False
+        return "client", False
+    return "server", False
+
+
+def fixed_rule_prohibition(text: str) -> str | None:
+    prohibited_terms = (
+        "電気工事",
+        "医療行為",
+        "介護",
+        "送迎",
+        "買い物代行",
+        "高所作業",
+        "危険工具",
+        "チェーンソー",
+        "金銭管理",
+        "通帳",
+        "暗証番号",
+    )
+    return next((term for term in prohibited_terms if term in text), None)
 
 
 def request_id_for(request: Request) -> str:
@@ -393,19 +482,48 @@ async def structure_request(
     body: StructureInput,
     _current_user: CurrentUser = Depends(get_current_user),
 ):
-    if any(word in body.text for word in ["電気工事", "医療行為", "介護", "送迎"]):
+    prohibited_term = fixed_rule_prohibition(body.text)
+    if prohibited_term:
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
-    is_dog = "犬" in body.text or "散歩" in body.text
+    last_category = "server"
+    for attempt in range(MAX_LLM_RETRIES + 1):
+        try:
+            raw_result = await structure_generator(body)
+            if isinstance(raw_result, str):
+                raw_result = json.loads(raw_result)
+            result = StructuredRequestOutput.model_validate(raw_result)
+            return {
+                **result.model_dump(),
+                "mode": "ai",
+                "attemptCount": attempt + 1,
+                "requiresConfirmation": True,
+            }
+        except Exception as exc:
+            category, retryable = classify_llm_failure(exc)
+            last_category = category
+            llm_failure_metrics[category] += 1
+            logger.warning(
+                "LLM structure failure category=%s attempt=%s retryable=%s",
+                category,
+                attempt + 1,
+                retryable,
+            )
+            if not retryable or attempt >= MAX_LLM_RETRIES:
+                break
+            delay_seconds = (0.1 * (2**attempt)) + random.uniform(0, 0.05)
+            await retry_sleeper(delay_seconds)
+
+    llm_failure_metrics["fallback"] += 1
     return {
-        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
-        "description": body.text,
-        "category": "pet_support" if is_dog else "other",
-        "scheduledAt": "2026-08-19T17:00:00+09:00",
-        "estimatedMinutes": 30,
-        "requiredHelpers": 1,
-        "riskLevel": "medium" if is_dog else "low",
-        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in body.text else [],
-        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+        "mode": "manual",
+        "fallbackReason": last_category,
+        "originalInput": {"text": body.text, "areaCode": body.areaCode},
+        "manualForm": {
+            "description": body.text,
+            "areaCode": body.areaCode,
+        },
+        "requiresConfirmation": True,
+        "autoPublished": False,
     }
 
 
@@ -429,6 +547,10 @@ async def create_request(
     idempotency_key: str = Header(alias="Idempotency-Key"),
     current_user: CurrentUser = Depends(get_current_user),
 ):
+    if fixed_rule_prohibition(f"{body.title} {body.description} {body.category}"):
+        raise HTTPException(
+            422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"}
+        )
     cache_key = ("create_request", current_user.user_id, idempotency_key)
     if cache_key in idempotency_store:
         return idempotency_store[cache_key]

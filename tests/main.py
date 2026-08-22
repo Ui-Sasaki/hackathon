@@ -79,6 +79,14 @@ async def requester_user() -> CurrentUser:
 def setup_function() -> None:
     app.dependency_overrides[get_current_user] = requester_user
     client.post("/_mock/reset")
+    crud_module.configure_structure_generator(crud_module.default_structure_generator)
+
+    async def no_retry_wait(_seconds: float) -> None:
+        return None
+
+    crud_module.configure_retry_sleeper(no_retry_wait)
+    for metric in crud_module.llm_failure_metrics:
+        crud_module.llm_failure_metrics[metric] = 0
 
 
 def test_health() -> None:
@@ -100,6 +108,150 @@ def test_structure_request() -> None:
     )
     assert response.status_code == 200
     assert response.json()["category"] == "pet_support"
+    assert response.json()["requiresConfirmation"] is True
+
+
+def valid_structured_request() -> dict:
+    return {
+        "title": "庭の片付け",
+        "description": "庭の落ち葉を片付けてください",
+        "category": "cleaning",
+        "scheduledAt": "2026-08-25T10:00:00+09:00",
+        "estimatedMinutes": 30,
+        "requiredHelpers": 1,
+        "riskLevel": "low",
+        "missingFields": [],
+        "warnings": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("failure", "category"),
+    [
+        (TimeoutError("provider timeout"), "timeout"),
+        (ConnectionError("provider connection"), "connection"),
+        (crud_module.LLMServiceError(429), "rate_limit"),
+        (crud_module.LLMServiceError(503), "server"),
+        ("{invalid-json", "invalid_response"),
+    ],
+)
+def test_retryable_llm_failures_retry_twice_then_use_manual_fallback(
+    failure, category: str
+) -> None:
+    attempts = 0
+
+    async def failing_generator(_body):
+        nonlocal attempts
+        attempts += 1
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    crud_module.configure_structure_generator(failing_generator)
+    response = client.post(
+        "/requests/structure",
+        json={"text": "庭の片付けをお願いしたい", "areaCode": "AREA-001"},
+    )
+
+    assert response.status_code == 200
+    assert attempts == 3
+    assert response.json()["mode"] == "manual"
+    assert response.json()["fallbackReason"] == category
+    assert response.json()["originalInput"]["text"] == "庭の片付けをお願いしたい"
+    assert response.json()["autoPublished"] is False
+    assert crud_module.llm_failure_metrics[category] == 3
+    assert crud_module.llm_failure_metrics["fallback"] == 1
+
+
+def test_retry_uses_exponential_backoff_and_can_recover() -> None:
+    attempts = 0
+    delays = []
+
+    async def eventually_successful(_body):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise TimeoutError("temporary")
+        return valid_structured_request()
+
+    async def record_delay(seconds: float) -> None:
+        delays.append(seconds)
+
+    crud_module.configure_structure_generator(eventually_successful)
+    crud_module.configure_retry_sleeper(record_delay)
+    response = client.post(
+        "/requests/structure",
+        json={"text": "庭の片付けをお願いしたい", "areaCode": "AREA-001"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "ai"
+    assert response.json()["attemptCount"] == 3
+    assert len(delays) == 2
+    assert 0.1 <= delays[0] <= 0.15
+    assert 0.2 <= delays[1] <= 0.25
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403])
+def test_non_retryable_llm_errors_fall_back_without_retry(status_code: int) -> None:
+    attempts = 0
+
+    async def rejected(_body):
+        nonlocal attempts
+        attempts += 1
+        raise crud_module.LLMServiceError(status_code)
+
+    crud_module.configure_structure_generator(rejected)
+    response = client.post(
+        "/requests/structure",
+        json={"text": "庭の片付けをお願いしたい", "areaCode": "AREA-001"},
+    )
+
+    assert response.status_code == 200
+    assert attempts == 1
+    assert response.json()["mode"] == "manual"
+    expected = "authentication" if status_code in {401, 403} else "client"
+    assert response.json()["fallbackReason"] == expected
+
+
+def test_llm_failure_does_not_expose_internal_exception_or_secret(caplog) -> None:
+    async def broken(_body):
+        raise RuntimeError("api-key=secret-key user@example.com")
+
+    crud_module.configure_structure_generator(broken)
+    with caplog.at_level(logging.WARNING, logger="app.cruds.main"):
+        response = client.post(
+            "/requests/structure",
+            json={"text": "庭の片付けをお願いしたい", "areaCode": "AREA-001"},
+        )
+
+    assert response.status_code == 200
+    assert "secret-key" not in response.text
+    assert "user@example.com" not in response.text
+    assert "secret-key" not in caplog.text
+    assert "user@example.com" not in caplog.text
+
+
+@pytest.mark.parametrize("prohibited_title", ["電気工事", "チェーンソー作業", "通帳の管理"])
+def test_manual_request_still_rejects_prohibited_work(prohibited_title: str) -> None:
+    response = client.post(
+        "/requests",
+        headers={"Idempotency-Key": "manual-danger"},
+        json={
+            "title": prohibited_title,
+            "description": "コンセントを交換してください",
+            "category": "other",
+            "scheduledAt": "2026-08-25T10:00:00+09:00",
+            "estimatedMinutes": 30,
+            "requiredHelpers": 1,
+            "areaCode": "AREA-001",
+            "riskLevel": "low",
+            "confirmed": True,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "PROHIBITED_REQUEST"
 
 
 def test_select_application_with_version_check() -> None:

@@ -13,7 +13,7 @@ from .main import (
     RequestUpdateInput,
     ReviewInput,
     SelectionInput,
-    StructureInput,
+    StructureInput, StructuredRequestOutput,
     VerificationInput,
 )
 

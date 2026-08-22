@@ -10,6 +10,20 @@ class StructureInput(BaseModel):
     areaCode: str
 
 
+class StructuredRequestOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=2000)
+    category: str = Field(min_length=1, max_length=50)
+    scheduledAt: str
+    estimatedMinutes: int = Field(ge=10, le=240)
+    requiredHelpers: int = Field(ge=1, le=5)
+    riskLevel: Literal["low", "medium"]
+    missingFields: list[str]
+    warnings: list[str]
+
+
 class RequestInput(BaseModel):
     title: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=2000)
