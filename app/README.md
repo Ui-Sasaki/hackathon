@@ -100,6 +100,11 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
 
+完了確認は認証済みの依頼者・支援者本人だけが実行できる。片方の確認後は
+`completion_pending`、双方の確認後は `completed` となり、レビューと実績生成は
+`completed` のマッチだけで利用できる。マッチングキャンセルは `disputed` へ遷移し、
+完了済み・キャンセル済みなどからの不正な再遷移は 409 を返す。状態変更は監査ログへ記録する。
+
 ## エラーレスポンスとトレースID
 
 400、401、403、404、409、422、500 のエラーは、次の共通形式で返す。

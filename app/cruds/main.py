@@ -74,6 +74,7 @@ ERROR_MESSAGES = {
     "REQUEST_NOT_FOUND": "依頼が見つかりません",
     "MATCH_NOT_FOUND": "マッチが見つかりません",
     "APPLICATION_NOT_FOUND": "応募が見つかりません",
+    "MATCH_STATE_CONFLICT": "マッチの状態が更新されているため処理できません",
     "REQUEST_STATE_CONFLICT": "依頼の状態が更新されているため処理できません",
     "VALIDATION_ERROR": "入力内容を確認してください",
     "INTERNAL_SERVER_ERROR": "サーバー内部でエラーが発生しました",
@@ -273,6 +274,7 @@ HELPERS = {
 def reset_store() -> None:
     global requests_store, applications, matches, messages, reviews, achievements
     global profile_store, users_store, verifications, reports, blocks, idempotency_store
+    global audit_logs
     profile_store = {
         "id": "usr_101",
         "displayName": "山田 花子",
@@ -318,6 +320,7 @@ def reset_store() -> None:
     messages = {}
     reviews = {}
     achievements = {}
+    audit_logs = []
     verifications = {}
     reports = {}
     blocks = set()
@@ -361,6 +364,28 @@ def ensure_match_participant(match: dict, user_id: str) -> str:
     if match["helperId"] == user_id:
         return "helper"
     raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+
+
+def record_match_state_change(
+    match: dict,
+    actor_id: str,
+    previous_status: str,
+) -> None:
+    audit_logs.append(
+        {
+            "id": new_id("audit"),
+            "actorId": actor_id,
+            "eventType": "match.status_changed",
+            "targetType": "match",
+            "targetId": match["id"],
+            "result": "success",
+            "previousStatus": previous_status,
+            "newStatus": match["status"],
+            "ipHash": None,
+            "userAgent": None,
+            "createdAt": now_iso(),
+        }
+    )
 
 
 @app.post("/_mock/reset", tags=["Mock control"])
@@ -653,8 +678,11 @@ async def complete_match(
 ):
     match = match_or_404(match_id)
     actor_role = ensure_match_participant(match, current_user.user_id)
-    if body.actorRole != actor_role:
-        raise HTTPException(403, detail={"code": "ACTOR_ROLE_MISMATCH"})
+    if match["status"] not in {"matched", "in_progress", "completion_pending"}:
+        raise HTTPException(409, detail={"code": "MATCH_STATE_CONFLICT"})
+    if match[f"{actor_role}Confirmed"]:
+        raise HTTPException(409, detail={"code": "MATCH_STATE_CONFLICT"})
+    previous_status = match["status"]
     match[f"{actor_role}Confirmed"] = True
     if match["requesterConfirmed"] and match["helperConfirmed"]:
         match["status"] = "completed"
@@ -663,6 +691,7 @@ async def complete_match(
     else:
         match["status"] = "completion_pending"
         request_or_404(match["requestId"])["status"] = "completion_pending"
+    record_match_state_change(match, current_user.user_id, previous_status)
     return match
 
 
@@ -674,10 +703,12 @@ async def dispute_match(
 ):
     match = match_or_404(match_id)
     ensure_match_participant(match, current_user.user_id)
-    if match["status"] in {"completed", "disputed"}:
-        raise HTTPException(409, detail={"code": "MATCH_NOT_DISPUTABLE"})
+    if match["status"] not in {"matched", "in_progress", "completion_pending"}:
+        raise HTTPException(409, detail={"code": "MATCH_STATE_CONFLICT"})
+    previous_status = match["status"]
     match.update({"status": "disputed", "disputeReason": body.reason, "disputedAt": now_iso()})
     request_or_404(match["requestId"])["status"] = "disputed"
+    record_match_state_change(match, current_user.user_id, previous_status)
     return match
 
 
