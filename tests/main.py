@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+from copy import deepcopy
 
 os.environ["SUPERTOKENS_ENABLED"] = "false"
 
@@ -91,6 +92,79 @@ def test_list_requests() -> None:
     response = client.get("/requests", params={"areaCode": "AREA-001"})
     assert response.status_code == 200
     assert len(response.json()["items"]) == 2
+
+
+def add_search_request(request_id: str, **changes) -> None:
+    item = deepcopy(crud_module.INITIAL_REQUESTS[0])
+    item.update(
+        {
+            "id": request_id,
+            "createdAt": f"2026-08-21T00:00:{int(request_id.split('_')[-1]):02d}+00:00",
+            **changes,
+        }
+    )
+    crud_module.requests_store[request_id] = item
+
+
+def test_request_search_filters_and_excludes_closed_or_expired_requests() -> None:
+    add_search_request(
+        "req_01", category="cleaning", requiredHelpers=2,
+        scheduledAt="2026-09-01T10:00:00+09:00", requesterId="usr_101",
+    )
+    add_search_request("req_02", status="cancelled")
+    add_search_request("req_03", scheduledAt="2020-01-01T00:00:00+00:00")
+
+    response = client.get(
+        "/requests",
+        params={
+            "category": "cleaning", "requiredHelpers": 2,
+            "verificationStatus": "approved",
+            "scheduledFrom": "2026-09-01T00:00:00+09:00",
+            "scheduledTo": "2026-09-02T00:00:00+09:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == ["req_01"]
+
+
+def test_request_search_uses_profile_area_and_never_returns_precise_location() -> None:
+    response = client.get("/requests", params={"maxDistanceKm": 2})
+
+    assert response.status_code == 200
+    assert response.json()["items"]
+    for item in response.json()["items"]:
+        assert "latitude" not in item
+        assert "longitude" not in item
+        assert "streetAddress" not in item
+        assert item["distanceKm"] <= 2
+
+    detail = client.get("/requests/req_1024").json()
+    assert "latitude" not in detail
+    assert "longitude" not in detail
+    assert "streetAddress" not in detail
+
+
+def test_request_search_cursor_paging_has_default_page_size_20() -> None:
+    for index in range(1, 22):
+        add_search_request(f"req_{index:02d}")
+
+    first = client.get("/requests")
+    assert first.status_code == 200
+    assert len(first.json()["items"]) == 20
+    assert first.json()["nextCursor"] is not None
+
+    second = client.get("/requests", params={"cursor": first.json()["nextCursor"]})
+    first_ids = {item["id"] for item in first.json()["items"]}
+    second_ids = {item["id"] for item in second.json()["items"]}
+    assert len(second_ids) == 3
+    assert first_ids.isdisjoint(second_ids)
+
+
+def test_request_search_validates_limit_cursor_and_location_pair() -> None:
+    assert client.get("/requests", params={"limit": 101}).status_code == 422
+    assert client.get("/requests", params={"cursor": "not-a-cursor"}).status_code == 422
+    assert client.get("/requests", params={"latitude": 35.0}).status_code == 422
 
 
 def test_structure_request() -> None:
