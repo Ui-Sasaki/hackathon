@@ -1,6 +1,8 @@
 import logging
 import os
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 os.environ["SUPERTOKENS_ENABLED"] = "false"
 
@@ -116,6 +118,45 @@ def test_select_application_with_version_check() -> None:
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
+
+
+def test_select_application_updates_related_records_atomically() -> None:
+    response = client.post(
+        "/applications/app_55/select",
+        json={"requestId": "req_1024", "expectedVersion": 3},
+    )
+
+    assert response.status_code == 201
+    match = response.json()
+    assert match["applicationId"] == "app_55"
+    assert crud_module.applications["app_55"]["status"] == "selected"
+    assert crud_module.applications["app_56"]["status"] == "not_selected"
+    assert crud_module.requests_store["req_1024"]["acceptedHelpers"] == 1
+    assert crud_module.requests_store["req_1024"]["status"] == "matched"
+    assert list(crud_module.matches) == [match["id"]]
+
+
+def test_concurrent_selections_never_exceed_required_helpers() -> None:
+    barrier = Barrier(2)
+
+    def select(application_id: str) -> httpx.Response:
+        barrier.wait()
+        return client.post(
+            f"/applications/{application_id}/select",
+            json={"requestId": "req_1024", "expectedVersion": 3},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(executor.map(select, ["app_55", "app_56"]))
+
+    assert sorted(response.status_code for response in responses) == [201, 409]
+    conflict = next(response for response in responses if response.status_code == 409)
+    assert conflict.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
+    assert crud_module.requests_store["req_1024"]["acceptedHelpers"] == 1
+    assert len(crud_module.matches) == 1
+    assert sorted(
+        application["status"] for application in crud_module.applications.values()
+    ) == ["not_selected", "selected"]
 
 
 def test_api_prefix_and_profile_update() -> None:
