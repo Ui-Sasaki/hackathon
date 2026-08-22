@@ -301,6 +301,88 @@ def test_unhandled_error_is_sanitized_and_correlated_with_log(caplog) -> None:
     assert error["requestId"] in caplog.text
 
 
+def create_match() -> str:
+    response = client.post(
+        "/applications/app_55/select",
+        json={"requestId": "req_1024", "expectedVersion": 3},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def test_complete_match_needs_both_parties_and_tolerates_repeat() -> None:
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    match_id = create_match()
+    first = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "requester"},
+    )
+    assert first.status_code == 200
+    assert first.json()["status"] == "completion_pending"
+
+    repeated = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "requester"},
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["status"] == "completion_pending"
+
+    app.dependency_overrides[get_current_user] = helper_user
+    second = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "helper"},
+    )
+    assert second.status_code == 200
+    assert second.json()["status"] == "completed"
+
+
+def test_complete_match_is_rejected_after_dispute() -> None:
+    match_id = create_match()
+    disputed = client.post(
+        f"/matches/{match_id}/dispute",
+        json={"reason": "作業内容の認識が食い違ったため確認したい"},
+    )
+    assert disputed.status_code == 200
+    assert disputed.json()["status"] == "disputed"
+
+    conflict = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "requester"},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "MATCH_NOT_COMPLETABLE"
+
+    match_after = client.get(f"/matches/{match_id}").json()
+    assert match_after["status"] == "disputed"
+    assert match_after["requesterConfirmed"] is False
+    assert match_after["completedAt"] is None
+    assert client.get("/requests/req_1024").json()["status"] == "disputed"
+
+
+def test_complete_match_is_rejected_after_completion() -> None:
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    match_id = create_match()
+    client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "requester"},
+    )
+    app.dependency_overrides[get_current_user] = helper_user
+    completed = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "helper"},
+    )
+    assert completed.json()["status"] == "completed"
+
+    conflict = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "helper"},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "MATCH_NOT_COMPLETABLE"
 def test_seeded_profile_uses_member_role() -> None:
     response = client.get("/profile")
     assert response.status_code == 200
