@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+from threading import Lock
 from typing import Any, Awaitable, Callable
 import uuid
 from uuid import uuid4
@@ -100,6 +101,7 @@ STATUS_ERROR_CODES = {
     500: "INTERNAL_SERVER_ERROR",
 }
 logger = logging.getLogger(__name__)
+selection_lock = Lock()
 
 MASKING_RULE_VERSION = "pii-mask-v1"
 masking_metrics = {"previewed": 0, "confirmationRequired": 0, "submitted": 0}
@@ -937,13 +939,15 @@ async def select_application(
     body: SelectionInput,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    application = applications.get(application_id)
-    if not application:
-        raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
-    if application["requestId"] != body.requestId:
-        raise HTTPException(409, detail={"code": "APPLICATION_REQUEST_MISMATCH"})
-    async with actor_connection(current_user) as conn:
-        request_item = await request_or_404(conn, body.requestId)
+    # This critical section is the in-memory equivalent of the production
+    # Supabase RPC transaction: validation and all related writes are atomic.
+    with selection_lock:
+        application = applications.get(application_id)
+        if not application:
+            raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
+        if application["requestId"] != body.requestId:
+            raise HTTPException(409, detail={"code": "APPLICATION_REQUEST_MISMATCH"})
+        request_item = request_or_404(body.requestId)
         if request_item["requesterId"] != current_user.user_id:
             raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
         if request_item["version"] != body.expectedVersion:
@@ -958,47 +962,39 @@ async def select_application(
             raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
         if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
             raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
-        # matches への insert が accepted_helpers の増分そのものなので、この値自体は
-        # どこにも永続化しない。#7 が実装する排他ロック（トランザクション境界・
-        # 同時実行制御）はここでは行わない。既存の振る舞いを壊さないための
-        # 最小限の書き込みに留める。
+
+        match = {
+            "id": new_id("match"),
+            "requestId": request_item["id"],
+            "applicationId": application["id"],
+            "requesterId": request_item["requesterId"],
+            "helperId": application["helperId"],
+            "status": "matched",
+            "requesterConfirmed": False,
+            "helperConfirmed": False,
+            "matchedAt": now_iso(),
+            "completedAt": None,
+        }
+        application["status"] = "selected"
+        application["updatedAt"] = match["matchedAt"]
+        request_item["acceptedHelpers"] += 1
+        request_item["version"] += 1
         capacity_reached = (
-            request_item["acceptedHelpers"] + 1 >= request_item["requiredHelpers"]
+            request_item["acceptedHelpers"] >= request_item["requiredHelpers"]
         )
-        new_status = "matched" if capacity_reached else "matching"
-        updated = await conn.fetchval(
-            "select app.set_request_status($1, $2::request_status, $3)",
-            uuid.UUID(request_item["id"]),
-            new_status,
-            request_item["version"],
-        )
-        if updated is None:
-            raise HTTPException(
-                409,
-                detail={
-                    "code": "REQUEST_STATE_CONFLICT",
-                    "currentVersion": request_item["version"],
-                },
-            )
-    application["status"] = "selected"
-    if capacity_reached:
-        for other in applications.values():
-            if other["requestId"] == request_item["id"] and other["status"] == "applied":
-                other["status"] = "not_selected"
-    match = {
-        "id": new_id("match"),
-        "requestId": request_item["id"],
-        "requesterId": request_item["requesterId"],
-        "helperId": application["helperId"],
-        "status": "matched",
-        "requesterConfirmed": False,
-        "helperConfirmed": False,
-        "matchedAt": now_iso(),
-        "completedAt": None,
-    }
-    matches[match["id"]] = match
-    messages[match["id"]] = []
-    return match
+        request_item["status"] = "matched" if capacity_reached else "matching"
+        request_item["updatedAt"] = match["matchedAt"]
+        if capacity_reached:
+            for other in applications.values():
+                if (
+                    other["requestId"] == request_item["id"]
+                    and other["status"] == "applied"
+                ):
+                    other["status"] = "not_selected"
+                    other["updatedAt"] = match["matchedAt"]
+        matches[match["id"]] = match
+        messages[match["id"]] = []
+        return match
 
 
 @app.get("/matches/{match_id}", tags=["Matches"])
