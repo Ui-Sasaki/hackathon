@@ -38,6 +38,7 @@ class MessageInput(BaseModel):
 
 class CompletionInput(BaseModel):
     completed: Literal[True]
+    actorRole: Literal["requester", "helper"]
 
 
 class ReviewInput(BaseModel):
