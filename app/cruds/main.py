@@ -1,8 +1,13 @@
+from copy import deepcopy
+import base64
+import binascii
 from datetime import datetime, timezone
+import json
 import logging
+import math
 import os
-from typing import Any
-import uuid
+import re
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -13,7 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.auth import (
-    SUPERTOKENS_ENABLED, CurrentUser, configure_user_lookup, cors_headers, get_current_user,
+    SUPERTOKENS_ENABLED, CurrentUser, configure_user_creator, configure_user_lookup,
+    cors_headers, get_current_user,
 )
 from app.repositories.requests import RequestRepository, get_request_repository
 from app.services.requests import cancel_owned_request, require_request, update_owned_request
@@ -90,6 +96,84 @@ STATUS_ERROR_CODES = {
     500: "INTERNAL_SERVER_ERROR",
 }
 logger = logging.getLogger(__name__)
+
+MASKING_RULE_VERSION = "pii-mask-v1"
+masking_metrics = {"previewed": 0, "confirmationRequired": 0, "submitted": 0}
+PII_MASK_RULES = (
+    (
+        "email",
+        "[メールアドレス]",
+        re.compile(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９._%+－-]+[@＠][A-Za-z0-9Ａ-Ｚａ-ｚ０-９.-]+[.．][A-Za-zＡ-Ｚａ-ｚ]{2,}"),
+    ),
+    (
+        "phone",
+        "[電話番号]",
+        re.compile(r"(?<![0-9０-９])[0０][0-9０-９]{1,4}[-ー－―]?[0-9０-９]{1,4}[-ー－―]?[0-9０-９]{3,4}(?![0-9０-９])"),
+    ),
+    (
+        "postal_code",
+        "[郵便番号]",
+        re.compile(r"〒?\s*[0-9０-９]{3}[-ー－―][0-9０-９]{4}"),
+    ),
+    (
+        "certificate_number",
+        "[証明書番号]",
+        re.compile(r"(?:免許証|学生証|証明書)(?:番号|No[.．]?)?\s*[:：]?\s*[A-Za-zＡ-Ｚａ-ｚ0-9０-９-]{5,}"),
+    ),
+    (
+        "address",
+        "[詳細住所]",
+        re.compile(r"(?:東京都|北海道|(?:京都|大阪)府|.{2,3}県).{1,20}(?:市|区|町|村).{1,30}(?:[0-9０-９]+(?:[-ー－―丁目番地号][0-9０-９]*)+|丁目)"),
+    ),
+    (
+        "name",
+        "[氏名]",
+        re.compile(r"(?:氏名|名前)\s*(?:は|[:：])?\s*[一-龥々]{2,8}(?:\s|　)?[一-龥々]{1,8}"),
+    ),
+)
+
+
+def mask_request_text(text: str) -> dict[str, Any]:
+    masked_text = text
+    detections = []
+    for pii_type, placeholder, pattern in PII_MASK_RULES:
+        masked_text, count = pattern.subn(placeholder, masked_text)
+        if count:
+            detections.append(
+                {"type": pii_type, "placeholder": placeholder, "count": count}
+            )
+    return {
+        "maskedText": masked_text,
+        "detections": detections,
+        "hasDetections": bool(detections),
+        "ruleVersion": MASKING_RULE_VERSION,
+    }
+
+
+async def default_structure_llm_client(
+    masked_text: str, _area_code: str
+) -> dict[str, Any]:
+    is_dog = "犬" in masked_text or "散歩" in masked_text
+    return {
+        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
+        "description": masked_text,
+        "category": "pet_support" if is_dog else "other",
+        "scheduledAt": "2026-08-19T17:00:00+09:00",
+        "estimatedMinutes": 30,
+        "requiredHelpers": 1,
+        "riskLevel": "medium" if is_dog else "low",
+        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in masked_text else [],
+        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+    }
+
+
+StructureLLMClient = Callable[[str, str], Awaitable[dict[str, Any]]]
+structure_llm_client: StructureLLMClient = default_structure_llm_client
+
+
+def configure_structure_llm_client(client: StructureLLMClient) -> None:
+    global structure_llm_client
+    structure_llm_client = client
 
 
 def request_id_for(request: Request) -> str:
@@ -241,6 +325,16 @@ HELPERS = {
     },
 }
 
+AREA_CENTERS = {
+    "AREA-001": (35.6812, 139.7671),
+}
+
+PUBLIC_REQUEST_FIELDS = {
+    "id", "requesterId", "title", "description", "category", "riskLevel",
+    "areaCode", "areaLabel", "scheduledAt", "estimatedMinutes",
+    "requiredHelpers", "acceptedHelpers", "status", "warnings", "createdAt",
+}
+
 
 def reset_store() -> None:
     global applications, matches, messages, reviews, achievements
@@ -264,6 +358,11 @@ def reset_store() -> None:
         "usr_208": {
             **HELPERS["usr_208"], "role": "member", "status": "active",
             "emailVerified": True,
+        },
+        "usr_301": {
+            "id": "usr_301", "displayName": "鈴木 雪", "role": "requester",
+            "status": "active", "emailVerified": True,
+            "verificationStatus": "unverified", "areaCode": "AREA-001",
         },
     }
     applications = {
@@ -301,6 +400,23 @@ reset_store()
 configure_user_lookup(lambda user_id: users_store.get(user_id))
 
 
+def create_user_profile(user_id: str) -> None:
+    """Create the application-side profile linked to a SuperTokens user."""
+
+    users_store.setdefault(
+        user_id,
+        {
+            "id": user_id,
+            "displayName": "",
+            "role": "requester",
+            "status": "active",
+            "emailVerified": False,
+            "verificationStatus": "unverified",
+        },
+    )
+
+
+configure_user_creator(create_user_profile)
 def match_or_404(match_id: str) -> dict:
     return get_or_404(matches, match_id, "MATCH_NOT_FOUND")
 
@@ -394,6 +510,15 @@ async def structure_request(
     body: StructureInput,
     _current_user: CurrentUser = Depends(get_current_user),
 ):
+    masking = mask_request_text(body.text)
+    if masking["hasDetections"] and not body.maskingConfirmed:
+        masking_metrics["confirmationRequired"] += 1
+        return {
+            **masking,
+            "status": "masking_confirmation_required",
+            "requiresMaskingConfirmation": True,
+            "message": "マスキング箇所を確認し、必要なら元の入力を修正してください",
+        }
     if any(word in body.text for word in ["電気工事", "医療行為", "介護", "送迎"]):
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
     is_dog = "犬" in body.text or "散歩" in body.text
@@ -420,6 +545,16 @@ async def request_or_404(
 async def list_requests(
     category: str | None = None,
     areaCode: str | None = None,
+    scheduledFrom: datetime | None = None,
+    scheduledTo: datetime | None = None,
+    maxDistanceKm: float | None = Query(default=None, gt=0, le=100),
+    requiredHelpers: int | None = Query(default=None, ge=1, le=5),
+    verificationStatus: str | None = Query(
+        default=None, pattern="^(unverified|pending|approved|rejected)$",
+    ),
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+    cursor: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
