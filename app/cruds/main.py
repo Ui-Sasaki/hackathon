@@ -243,7 +243,8 @@ HELPERS = {
 
 def reset_store() -> None:
     global applications, matches, messages, reviews, achievements
-    global profile_store, users_store, verifications, reports, blocks, idempotency_store
+    global profile_store, users_store, verifications, reports, blocks, audit_logs
+    global idempotency_store
     profile_store = {
         "id": "usr_101",
         "displayName": "山田 花子",
@@ -291,6 +292,7 @@ def reset_store() -> None:
     verifications = {}
     reports = {}
     blocks = set()
+    audit_logs = []
     idempotency_store = {}
 
 
@@ -308,6 +310,40 @@ def ensure_match_participant(match: dict, user_id: str) -> str:
     if match["helperId"] == user_id:
         return "helper"
     raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+
+
+def is_blocked_pair(first_user_id: str, second_user_id: str) -> bool:
+    """Return whether either user has blocked the other."""
+
+    return (
+        (first_user_id, second_user_id) in blocks
+        or (second_user_id, first_user_id) in blocks
+    )
+
+
+def record_audit_event(
+    *,
+    actor_id: str,
+    event_type: str,
+    target_type: str,
+    target_id: str,
+    result: str = "success",
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Append an immutable mock audit event without recording request content."""
+
+    audit_logs.append(
+        {
+            "id": new_id("audit"),
+            "actorId": actor_id,
+            "eventType": event_type,
+            "targetType": target_type,
+            "targetId": target_id,
+            "result": result,
+            "detail": detail or {},
+            "createdAt": now_iso(),
+        }
+    )
 
 
 # モックデータの初期化は開発・テスト専用の操作である。明示的に有効化した環境
@@ -462,6 +498,10 @@ async def list_requests(
             limit,
         )
     items = [_request_row_to_api(row) for row in rows]
+    items = [
+        item for item in items
+        if not is_blocked_pair(current_user.user_id, item["requesterId"])
+    ]
     return {"items": items, "nextCursor": None}
 
 
@@ -511,7 +551,10 @@ async def get_request(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     async with actor_connection(current_user) as conn:
-        return await request_or_404(conn, request_id)
+        item = await request_or_404(conn, request_id)
+    if is_blocked_pair(current_user.user_id, item["requesterId"]):
+        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
+    return item
 
 
 @app.patch("/requests/{request_id}", tags=["Requests"])
@@ -588,6 +631,7 @@ async def list_applications(
             {**item, "helper": HELPERS[item["helperId"]]}
             for item in applications.values()
             if item["requestId"] == request_id
+            and not is_blocked_pair(current_user.user_id, item["helperId"])
         ]
     }
 
@@ -600,6 +644,8 @@ async def create_application(
 ):
     async with actor_connection(current_user) as conn:
         request_item = await request_or_404(conn, request_id)
+    if is_blocked_pair(current_user.user_id, request_item["requesterId"]):
+        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
     if request_item["status"] != "published":
         raise HTTPException(409, detail={"code": "REQUEST_NOT_OPEN"})
     if request_item["requesterId"] == current_user.user_id:
@@ -722,8 +768,18 @@ async def list_messages(
     match_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    ensure_match_participant(match_or_404(match_id), current_user.user_id)
-    return {"items": messages.get(match_id, []), "nextCursor": None}
+    match = match_or_404(match_id)
+    ensure_match_participant(match, current_user.user_id)
+    return {
+        "items": [
+            item for item in messages.get(match_id, [])
+            if not (
+                item["senderId"] != current_user.user_id
+                and is_blocked_pair(current_user.user_id, item["senderId"])
+            )
+        ],
+        "nextCursor": None,
+    }
 
 
 @app.post("/matches/{match_id}/messages", status_code=201, tags=["Messages"])
@@ -917,6 +973,13 @@ async def create_report(
         "createdAt": now_iso(),
     }
     reports[item["id"]] = item
+    record_audit_event(
+        actor_id=current_user.user_id,
+        event_type="report_created",
+        target_type=body.targetType,
+        target_id=body.targetId,
+        detail={"reportId": item["id"], "severity": item["severity"]},
+    )
     if item["severity"] == "high" and body.targetType == "request":
         try:
             target_id = uuid.UUID(body.targetId)
@@ -927,6 +990,13 @@ async def create_report(
                 await conn.fetchval(
                     "select app.set_request_status($1, 'suspended')", target_id
                 )
+            record_audit_event(
+                actor_id=current_user.user_id,
+                event_type="request_auto_suspended",
+                target_type="request",
+                target_id=body.targetId,
+                detail={"reportId": item["id"]},
+            )
     return item
 
 
@@ -938,8 +1008,17 @@ async def set_user_block(
 ):
     if user_id == current_user.user_id:
         raise HTTPException(422, detail={"code": "SELF_BLOCK_NOT_ALLOWED"})
+    if user_id not in users_store:
+        raise HTTPException(404, detail={"code": "USER_PROFILE_NOT_FOUND"})
+    relation = (current_user.user_id, user_id)
     if body.blocked:
-        blocks.add(user_id)
+        blocks.add(relation)
     else:
-        blocks.discard(user_id)
-    return {"userId": user_id, "blocked": user_id in blocks, "updatedAt": now_iso()}
+        blocks.discard(relation)
+    record_audit_event(
+        actor_id=current_user.user_id,
+        event_type="user_blocked" if body.blocked else "user_unblocked",
+        target_type="user",
+        target_id=user_id,
+    )
+    return {"userId": user_id, "blocked": relation in blocks, "updatedAt": now_iso()}

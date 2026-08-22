@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 import app.auth as auth_module
+import app.cruds.main as crud_module
 from app.auth import CurrentUser, get_current_user
 from app.cruds.main import SEED_REQUEST_1024
 from app.main import app
@@ -249,7 +250,96 @@ def test_high_severity_report_suspends_request() -> None:
         },
     )
     assert response.status_code == 201
+    report = response.json()
+    assert report["reporterId"] == REQUESTER.user_id
+    assert report["targetId"] == SEED_REQUEST_1024
+    assert report["reason"] == "dangerous_work"
+    assert report["description"] == "高所で危険な作業を要求されています"
+    assert report["severity"] == "high"
+    assert report["createdAt"].endswith("Z")
     assert client.get(f"/requests/{SEED_REQUEST_1024}").json()["status"] == "suspended"
+    assert [event["eventType"] for event in crud_module.audit_logs] == [
+        "report_created",
+        "request_auto_suspended",
+    ]
+
+
+def test_reporter_id_cannot_be_supplied_by_client() -> None:
+    response = client.post(
+        "/reports",
+        json={
+            "reporterId": "attacker-controlled",
+            "targetType": "user",
+            "targetId": HELPER.user_id,
+            "reason": "harassment",
+            "description": "不適切なメッセージが繰り返し送られました",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["reporterId"] == REQUESTER.user_id
+
+
+def test_block_and_unblock_are_scoped_to_authenticated_user_and_audited() -> None:
+    blocked = client.post(f"/users/{HELPER.user_id}/block", json={"blocked": True})
+    assert blocked.status_code == 201
+    assert blocked.json()["blocked"] is True
+    assert (REQUESTER.user_id, HELPER.user_id) in crud_module.blocks
+
+    unblocked = client.post(f"/users/{HELPER.user_id}/block", json={"blocked": False})
+    assert unblocked.status_code == 201
+    assert unblocked.json()["blocked"] is False
+    assert (REQUESTER.user_id, HELPER.user_id) not in crud_module.blocks
+    assert [event["eventType"] for event in crud_module.audit_logs] == [
+        "user_blocked",
+        "user_unblocked",
+    ]
+
+
+def test_self_block_is_rejected_without_audit_event() -> None:
+    response = client.post(f"/users/{REQUESTER.user_id}/block", json={"blocked": True})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "SELF_BLOCK_NOT_ALLOWED"
+    assert crud_module.audit_logs == []
+
+
+def test_blocked_users_requests_applications_and_messages_are_hidden() -> None:
+    # The requester no longer sees applications from a helper they blocked.
+    assert client.post(f"/users/{HELPER.user_id}/block", json={"blocked": True}).status_code == 201
+    applications_response = client.get(f"/requests/{SEED_REQUEST_1024}/applications")
+    assert applications_response.status_code == 200
+    assert "usr_207" not in {
+        item["helperId"] for item in applications_response.json()["items"]
+    }
+
+    # The blocked helper can no longer discover the requester's requests.
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    list_response = client.get("/requests", params={"areaCode": "AREA-001"})
+    assert list_response.status_code == 200
+    assert list_response.json()["items"] == []
+    detail_response = client.get(f"/requests/{SEED_REQUEST_1024}")
+    assert detail_response.status_code == 404
+
+
+def test_messages_from_blocked_user_are_hidden() -> None:
+    match_id = create_match()
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    sent = client.post(f"/matches/{match_id}/messages", json={"body": "対応できます"})
+    assert sent.status_code == 201
+
+    app.dependency_overrides[get_current_user] = requester_user
+    assert client.post(f"/users/{HELPER.user_id}/block", json={"blocked": True}).status_code == 201
+    response = client.get(f"/matches/{match_id}/messages")
+    assert response.status_code == 200
+    assert response.json()["items"] == []
 
 
 def assert_common_error(response, status_code: int) -> dict:
