@@ -99,6 +99,84 @@ STATUS_ERROR_CODES = {
 }
 logger = logging.getLogger(__name__)
 
+MASKING_RULE_VERSION = "pii-mask-v1"
+masking_metrics = {"previewed": 0, "confirmationRequired": 0, "submitted": 0}
+PII_MASK_RULES = (
+    (
+        "email",
+        "[メールアドレス]",
+        re.compile(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９._%+－-]+[@＠][A-Za-z0-9Ａ-Ｚａ-ｚ０-９.-]+[.．][A-Za-zＡ-Ｚａ-ｚ]{2,}"),
+    ),
+    (
+        "phone",
+        "[電話番号]",
+        re.compile(r"(?<![0-9０-９])[0０][0-9０-９]{1,4}[-ー－―]?[0-9０-９]{1,4}[-ー－―]?[0-9０-９]{3,4}(?![0-9０-９])"),
+    ),
+    (
+        "postal_code",
+        "[郵便番号]",
+        re.compile(r"〒?\s*[0-9０-９]{3}[-ー－―][0-9０-９]{4}"),
+    ),
+    (
+        "certificate_number",
+        "[証明書番号]",
+        re.compile(r"(?:免許証|学生証|証明書)(?:番号|No[.．]?)?\s*[:：]?\s*[A-Za-zＡ-Ｚａ-ｚ0-9０-９-]{5,}"),
+    ),
+    (
+        "address",
+        "[詳細住所]",
+        re.compile(r"(?:東京都|北海道|(?:京都|大阪)府|.{2,3}県).{1,20}(?:市|区|町|村).{1,30}(?:[0-9０-９]+(?:[-ー－―丁目番地号][0-9０-９]*)+|丁目)"),
+    ),
+    (
+        "name",
+        "[氏名]",
+        re.compile(r"(?:氏名|名前)\s*(?:は|[:：])?\s*[一-龥々]{2,8}(?:\s|　)?[一-龥々]{1,8}"),
+    ),
+)
+
+
+def mask_request_text(text: str) -> dict[str, Any]:
+    masked_text = text
+    detections = []
+    for pii_type, placeholder, pattern in PII_MASK_RULES:
+        masked_text, count = pattern.subn(placeholder, masked_text)
+        if count:
+            detections.append(
+                {"type": pii_type, "placeholder": placeholder, "count": count}
+            )
+    return {
+        "maskedText": masked_text,
+        "detections": detections,
+        "hasDetections": bool(detections),
+        "ruleVersion": MASKING_RULE_VERSION,
+    }
+
+
+async def default_structure_llm_client(
+    masked_text: str, _area_code: str
+) -> dict[str, Any]:
+    is_dog = "犬" in masked_text or "散歩" in masked_text
+    return {
+        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
+        "description": masked_text,
+        "category": "pet_support" if is_dog else "other",
+        "scheduledAt": "2026-08-19T17:00:00+09:00",
+        "estimatedMinutes": 30,
+        "requiredHelpers": 1,
+        "riskLevel": "medium" if is_dog else "low",
+        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in masked_text else [],
+        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+    }
+
+
+StructureLLMClient = Callable[[str, str], Awaitable[dict[str, Any]]]
+structure_llm_client: StructureLLMClient = default_structure_llm_client
+
+
+def configure_structure_llm_client(client: StructureLLMClient) -> None:
+    global structure_llm_client
+    structure_llm_client = client
+
 REVIEW_PROHIBITED_PATTERNS = (
     re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"),
     re.compile(r"(?<!\d)(?:0\d{1,4}[-ー－]?\d{1,4}[-ー－]?\d{3,4})(?!\d)"),
@@ -314,6 +392,9 @@ INITIAL_REQUESTS = [
         "createdAt": "2026-08-18T11:00:00+09:00",
     },
 ]
+
+SEED_REQUEST_1024 = "5fcfec7f-a8b0-58d4-931e-593d60355ee3"
+SEED_REQUEST_1025 = "39521aee-fc9b-5be6-9652-b3cf45d9107f"
 
 HELPERS = {
     "usr_207": {
