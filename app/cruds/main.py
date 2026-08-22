@@ -1,6 +1,10 @@
 from copy import deepcopy
+import base64
+import binascii
 from datetime import datetime, timezone
+import json
 import logging
+import math
 import os
 import re
 from typing import Any, Awaitable, Callable
@@ -17,6 +21,7 @@ from app.auth import (
     SUPERTOKENS_ENABLED, CurrentUser, configure_user_creator, configure_user_lookup,
     cors_headers, get_current_user,
 )
+from app.db import actor_connection, admin_connection
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
@@ -329,14 +334,25 @@ HELPERS = {
     },
 }
 
+AREA_CENTERS = {
+    "AREA-001": (35.6812, 139.7671),
+}
+
+PUBLIC_REQUEST_FIELDS = {
+    "id", "requesterId", "title", "description", "category", "riskLevel",
+    "areaCode", "areaLabel", "scheduledAt", "estimatedMinutes",
+    "requiredHelpers", "acceptedHelpers", "status", "warnings", "createdAt",
+}
+
 
 def reset_store() -> None:
-    global requests_store, applications, matches, messages, reviews, achievements
-    global profile_store, users_store, verifications, reports, blocks, idempotency_store
+    global applications, matches, messages, reviews, achievements
+    global profile_store, users_store, verifications, reports, blocks, audit_logs
+    global idempotency_store
     profile_store = {
         "id": "usr_101",
         "displayName": "山田 花子",
-        "role": "requester",
+        "role": "member",
         "emailVerified": True,
         "verificationStatus": "approved",
         "areaCode": "AREA-001",
@@ -345,19 +361,23 @@ def reset_store() -> None:
     users_store = {
         profile_store["id"]: profile_store,
         "usr_207": {
-            **HELPERS["usr_207"], "role": "helper", "status": "active",
+            **HELPERS["usr_207"], "role": "member", "status": "active",
             "emailVerified": True,
         },
         "usr_208": {
-            **HELPERS["usr_208"], "role": "helper", "status": "active",
+            **HELPERS["usr_208"], "role": "member", "status": "active",
             "emailVerified": True,
         },
+        "usr_301": {
+            "id": "usr_301", "displayName": "鈴木 雪", "role": "requester",
+            "status": "active", "emailVerified": True,
+            "verificationStatus": "unverified", "areaCode": "AREA-001",
+        },
     }
-    requests_store = {item["id"]: deepcopy(item) for item in INITIAL_REQUESTS}
     applications = {
         "app_55": {
             "id": "app_55",
-            "requestId": "req_1024",
+            "requestId": SEED_REQUEST_1024,
             "helperId": "usr_207",
             "message": "犬の散歩経験があります",
             "availableAt": "2026-08-19T17:00:00+09:00",
@@ -366,7 +386,7 @@ def reset_store() -> None:
         },
         "app_56": {
             "id": "app_56",
-            "requestId": "req_1024",
+            "requestId": SEED_REQUEST_1024,
             "helperId": "usr_208",
             "message": "18時以降なら対応できます",
             "availableAt": "2026-08-19T18:00:00+09:00",
@@ -381,6 +401,7 @@ def reset_store() -> None:
     verifications = {}
     reports = {}
     blocks = set()
+    audit_logs = []
     idempotency_store = {}
 
 
@@ -405,12 +426,6 @@ def create_user_profile(user_id: str) -> None:
 
 
 configure_user_creator(create_user_profile)
-
-
-def request_or_404(request_id: str) -> dict:
-    return get_or_404(requests_store, request_id, "REQUEST_NOT_FOUND")
-
-
 def match_or_404(match_id: str) -> dict:
     return get_or_404(matches, match_id, "MATCH_NOT_FOUND")
 
@@ -423,9 +438,60 @@ def ensure_match_participant(match: dict, user_id: str) -> str:
     raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
 
 
+def is_blocked_pair(first_user_id: str, second_user_id: str) -> bool:
+    """Return whether either user has blocked the other."""
+
+    return (
+        (first_user_id, second_user_id) in blocks
+        or (second_user_id, first_user_id) in blocks
+    )
+
+
+def record_audit_event(
+    *,
+    actor_id: str,
+    event_type: str,
+    target_type: str,
+    target_id: str,
+    result: str = "success",
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Append an immutable mock audit event without recording request content."""
+
+    audit_logs.append(
+        {
+            "id": new_id("audit"),
+            "actorId": actor_id,
+            "eventType": event_type,
+            "targetType": target_type,
+            "targetId": target_id,
+            "result": result,
+            "detail": detail or {},
+            "createdAt": now_iso(),
+        }
+    )
+
+
+# モックデータの初期化は開発・テスト専用の操作である。明示的に有効化した環境
+# 以外では、存在自体を伏せたまま拒否する。
+MOCK_RESET_ENABLED = os.getenv("MOCK_RESET_ENABLED", "false").lower() in {
+    "1", "true", "yes", "on",
+}
+
+
+async def require_mock_environment() -> None:
+    if not MOCK_RESET_ENABLED:
+        raise HTTPException(404, detail={"code": "NOT_FOUND"})
+
+
 @app.post("/_mock/reset", tags=["Mock control"])
-async def reset_mock():
+async def reset_mock(
+    _: None = Depends(require_mock_environment),
+    current_user: CurrentUser = Depends(get_current_user),
+):
     reset_store()
+    async with admin_connection() as conn:
+        await conn.execute("select app.mock_reset_requests()")
     return {"reset": True}
 
 
@@ -453,34 +519,85 @@ async def structure_request(
     body: StructureInput,
     _current_user: CurrentUser = Depends(get_current_user),
 ):
+    masking = mask_request_text(body.text)
+    if masking["hasDetections"] and not body.maskingConfirmed:
+        masking_metrics["confirmationRequired"] += 1
+        return {
+            **masking,
+            "status": "masking_confirmation_required",
+            "requiresMaskingConfirmation": True,
+            "message": "マスキング箇所を確認し、必要なら元の入力を修正してください",
+        }
     if any(word in body.text for word in ["電気工事", "医療行為", "介護", "送迎"]):
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
-    is_dog = "犬" in body.text or "散歩" in body.text
+    try:
+        result = await structure_llm_client(masking["maskedText"], body.areaCode)
+    except Exception:
+        logger.warning("Request structure service failed after masking")
+        raise HTTPException(503, detail={"code": "STRUCTURE_SERVICE_UNAVAILABLE"})
+    masking_metrics["submitted"] += 1
     return {
-        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
-        "description": body.text,
-        "category": "pet_support" if is_dog else "other",
-        "scheduledAt": "2026-08-19T17:00:00+09:00",
-        "estimatedMinutes": 30,
-        "requiredHelpers": 1,
-        "riskLevel": "medium" if is_dog else "low",
-        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in body.text else [],
-        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+        **result,
+        "masking": {
+            "detections": masking["detections"],
+            "ruleVersion": masking["ruleVersion"],
+            "confirmed": body.maskingConfirmed,
+        },
+        "requiresConfirmation": True,
     }
+
+
+@app.post("/requests/masking-preview", tags=["Requests"])
+async def preview_request_masking(
+    body: StructureInput,
+    _current_user: CurrentUser = Depends(get_current_user),
+):
+    masking_metrics["previewed"] += 1
+    return mask_request_text(body.text)
 
 
 @app.get("/requests", tags=["Requests"])
 async def list_requests(
     category: str | None = None,
     areaCode: str | None = None,
+    scheduledFrom: datetime | None = None,
+    scheduledTo: datetime | None = None,
+    maxDistanceKm: float | None = Query(default=None, gt=0, le=100),
+    requiredHelpers: int | None = Query(default=None, ge=1, le=5),
+    verificationStatus: str | None = Query(
+        default=None, pattern="^(unverified|pending|approved|rejected)$",
+    ),
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+    cursor: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    items = [item for item in requests_store.values() if item["status"] == "published"]
-    if category:
-        items = [item for item in items if item["category"] == category]
-    if areaCode:
-        items = [item for item in items if item["areaCode"] == areaCode]
-    return {"items": items[:limit], "nextCursor": None}
+    async with actor_connection(current_user) as conn:
+        rows = await conn.fetch(
+            """
+            select r.id, r.title, r.original_text, r.category_id, r.risk_level,
+                   r.area_code, r.scheduled_at, r.estimated_minutes, r.required_helpers,
+                   r.status, r.version, r.created_at, r.updated_at,
+                   app.auth_subject_of(r.requester_id) as requester_auth_subject,
+                   (select count(*) from matches m where m.request_id = r.id) as accepted_helpers
+              from requests r
+             where r.status = 'published'
+               and ($1::text is null or r.category_id = $1)
+               and ($2::text is null or r.area_code = $2)
+             order by r.created_at desc, r.id desc
+             limit $3
+            """,
+            category,
+            areaCode,
+            limit,
+        )
+    items = [_request_row_to_api(row) for row in rows]
+    items = [
+        item for item in items
+        if not is_blocked_pair(current_user.user_id, item["requesterId"])
+    ]
+    return {"items": items, "nextCursor": None}
 
 
 @app.post("/requests", status_code=201, tags=["Requests"])
@@ -492,27 +609,47 @@ async def create_request(
     cache_key = ("create_request", current_user.user_id, idempotency_key)
     if cache_key in idempotency_store:
         return idempotency_store[cache_key]
-    request_id = new_id("req")
-    item = {
-        "id": request_id,
-        "requesterId": current_user.user_id,
-        **body.model_dump(exclude={"confirmed"}),
-        "areaLabel": "大学周辺・約1km",
-        "distanceKm": 1.0,
-        "acceptedHelpers": 0,
-        "status": "published",
-        "version": 1,
-        "warnings": [],
-        "createdAt": now_iso(),
-    }
-    requests_store[request_id] = item
+    async with actor_connection(current_user) as conn:
+        row = await conn.fetchrow(
+            """
+            insert into requests (
+                requester_id, title, original_text, category_id, risk_level,
+                area_code, scheduled_at, estimated_minutes, required_helpers
+            ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            returning id, title, original_text, category_id, risk_level,
+                      area_code, scheduled_at, estimated_minutes, required_helpers,
+                      status, version, created_at, updated_at
+            """,
+            await conn.fetchval("select app.current_actor()"),
+            body.title,
+            body.description,
+            body.category,
+            body.riskLevel,
+            body.areaCode,
+            datetime.fromisoformat(body.scheduledAt),
+            body.estimatedMinutes,
+            body.requiredHelpers,
+        )
+        item = _request_row_to_api({**dict(row), "requester_auth_subject": current_user.user_id,
+                                     "accepted_helpers": 0})
     idempotency_store[cache_key] = item
     return item
 
 
+# #20: このエンドポイントは元々認証を要求せず、依頼の状態も検査していなかった。
+# RLS は未認証アクター（app.actor_id 未設定）に一律 deny を返すため、Postgres へ
+# 接続した時点で認証必須が構造として強制される。get_current_user() が無効な
+# セッションを 401 で弾き、RLS が届かない行を 404 として隠す。
 @app.get("/requests/{request_id}", tags=["Requests"])
-async def get_request(request_id: str):
-    return request_or_404(request_id)
+async def get_request(
+    request_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    async with actor_connection(current_user) as conn:
+        item = await request_or_404(conn, request_id)
+    if is_blocked_pair(current_user.user_id, item["requesterId"]):
+        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
+    return item
 
 
 @app.patch("/requests/{request_id}", tags=["Requests"])
@@ -521,22 +658,38 @@ async def update_request(
     body: RequestUpdateInput,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    item = request_or_404(request_id)
-    if item["requesterId"] != current_user.user_id:
-        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-    if item["status"] not in {"draft", "pending_review", "published"}:
-        raise HTTPException(409, detail={"code": "REQUEST_NOT_EDITABLE"})
-    if item["version"] != body.expectedVersion:
-        raise HTTPException(
-            409, detail={"code": "REQUEST_STATE_CONFLICT", "currentVersion": item["version"]}
+    async with actor_connection(current_user) as conn:
+        item = await request_or_404(conn, request_id)
+        if item["requesterId"] != current_user.user_id:
+            raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+        if item["status"] not in {"draft", "pending_review", "published"}:
+            raise HTTPException(409, detail={"code": "REQUEST_NOT_EDITABLE"})
+        if item["version"] != body.expectedVersion:
+            raise HTTPException(
+                409, detail={"code": "REQUEST_STATE_CONFLICT", "currentVersion": item["version"]}
+            )
+        changes = body.model_dump(exclude={"expectedVersion"}, exclude_none=True)
+        if "requiredHelpers" in changes and changes["requiredHelpers"] < item["acceptedHelpers"]:
+            raise HTTPException(409, detail={"code": "HELPER_COUNT_CONFLICT"})
+        if not changes:
+            return item
+        # version は関数側の WHERE でも検査する。request_or_404 の読み取りと
+        # この呼び出しの間に他の更新が割り込んでいたら、0件更新で楽観ロックが働く。
+        updated = await conn.fetchval(
+            "select app.update_request($1, $2, $3, $4, $5, $6, $7)",
+            uuid.UUID(request_id),
+            item["version"],
+            changes.get("title"),
+            changes.get("description"),
+            datetime.fromisoformat(changes["scheduledAt"]) if "scheduledAt" in changes else None,
+            changes.get("estimatedMinutes"),
+            changes.get("requiredHelpers"),
         )
-    changes = body.model_dump(exclude={"expectedVersion"}, exclude_none=True)
-    if "requiredHelpers" in changes and changes["requiredHelpers"] < item["acceptedHelpers"]:
-        raise HTTPException(409, detail={"code": "HELPER_COUNT_CONFLICT"})
-    item.update(changes)
-    item["version"] += 1
-    item["updatedAt"] = now_iso()
-    return item
+        if updated is None:
+            raise HTTPException(
+                409, detail={"code": "REQUEST_STATE_CONFLICT", "currentVersion": item["version"]}
+            )
+        return await request_or_404(conn, request_id)
 
 
 @app.delete("/requests/{request_id}", status_code=204, tags=["Requests"])
@@ -544,13 +697,15 @@ async def cancel_request(
     request_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    item = request_or_404(request_id)
-    if item["requesterId"] != current_user.user_id:
-        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-    if item["status"] in {"completed", "cancelled"}:
-        raise HTTPException(409, detail={"code": "INVALID_REQUEST_TRANSITION"})
-    item["status"] = "cancelled"
-    item["version"] += 1
+    async with actor_connection(current_user) as conn:
+        item = await request_or_404(conn, request_id)
+        if item["requesterId"] != current_user.user_id:
+            raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+        if item["status"] in {"completed", "cancelled"}:
+            raise HTTPException(409, detail={"code": "INVALID_REQUEST_TRANSITION"})
+        await conn.fetchval(
+            "select app.set_request_status($1, 'cancelled')", uuid.UUID(request_id)
+        )
     for application in applications.values():
         if application["requestId"] == request_id and application["status"] == "applied":
             application["status"] = "cancelled"
@@ -562,7 +717,8 @@ async def list_applications(
     request_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    request_item = request_or_404(request_id)
+    async with actor_connection(current_user) as conn:
+        request_item = await request_or_404(conn, request_id)
     if request_item["requesterId"] != current_user.user_id:
         raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
     return {
@@ -570,6 +726,7 @@ async def list_applications(
             {**item, "helper": HELPERS[item["helperId"]]}
             for item in applications.values()
             if item["requestId"] == request_id
+            and not is_blocked_pair(current_user.user_id, item["helperId"])
         ]
     }
 
@@ -580,7 +737,10 @@ async def create_application(
     body: ApplicationInput,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    request_item = request_or_404(request_id)
+    async with actor_connection(current_user) as conn:
+        request_item = await request_or_404(conn, request_id)
+    if is_blocked_pair(current_user.user_id, request_item["requesterId"]):
+        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
     if request_item["status"] != "published":
         raise HTTPException(409, detail={"code": "REQUEST_NOT_OPEN"})
     if request_item["requesterId"] == current_user.user_id:
@@ -632,23 +792,45 @@ async def select_application(
         raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
     if application["requestId"] != body.requestId:
         raise HTTPException(409, detail={"code": "APPLICATION_REQUEST_MISMATCH"})
-    request_item = request_or_404(body.requestId)
-    if request_item["requesterId"] != current_user.user_id:
-        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-    if request_item["version"] != body.expectedVersion:
-        raise HTTPException(
-            409,
-            detail={"code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"]},
+    async with actor_connection(current_user) as conn:
+        request_item = await request_or_404(conn, body.requestId)
+        if request_item["requesterId"] != current_user.user_id:
+            raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+        if request_item["version"] != body.expectedVersion:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "currentVersion": request_item["version"],
+                },
+            )
+        if application["status"] != "applied":
+            raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
+        if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
+            raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
+        # matches への insert が accepted_helpers の増分そのものなので、この値自体は
+        # どこにも永続化しない。#7 が実装する排他ロック（トランザクション境界・
+        # 同時実行制御）はここでは行わない。既存の振る舞いを壊さないための
+        # 最小限の書き込みに留める。
+        capacity_reached = (
+            request_item["acceptedHelpers"] + 1 >= request_item["requiredHelpers"]
         )
-    if application["status"] != "applied":
-        raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
-    if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
-        raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
+        new_status = "matched" if capacity_reached else "matching"
+        updated = await conn.fetchval(
+            "select app.set_request_status($1, $2::request_status, $3)",
+            uuid.UUID(request_item["id"]),
+            new_status,
+            request_item["version"],
+        )
+        if updated is None:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "currentVersion": request_item["version"],
+                },
+            )
     application["status"] = "selected"
-    request_item["acceptedHelpers"] += 1
-    request_item["version"] += 1
-    capacity_reached = request_item["acceptedHelpers"] >= request_item["requiredHelpers"]
-    request_item["status"] = "matched" if capacity_reached else "matching"
     if capacity_reached:
         for other in applications.values():
             if other["requestId"] == request_item["id"] and other["status"] == "applied":
@@ -681,8 +863,18 @@ async def list_messages(
     match_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    ensure_match_participant(match_or_404(match_id), current_user.user_id)
-    return {"items": messages.get(match_id, []), "nextCursor": None}
+    match = match_or_404(match_id)
+    ensure_match_participant(match, current_user.user_id)
+    return {
+        "items": [
+            item for item in messages.get(match_id, [])
+            if not (
+                item["senderId"] != current_user.user_id
+                and is_blocked_pair(current_user.user_id, item["senderId"])
+            )
+        ],
+        "nextCursor": None,
+    }
 
 
 @app.post("/matches/{match_id}/messages", status_code=201, tags=["Messages"])
@@ -705,6 +897,11 @@ async def create_message(
     return item
 
 
+# 完了確認を受け付けるマッチ状態。ここを明示しないと disputed や completed を
+# 完了操作で上書きできる。状態を変える前に検査すること。
+COMPLETABLE_MATCH_STATUSES = {"matched", "completion_pending"}
+
+
 @app.post("/matches/{match_id}/complete", tags=["Matches"])
 async def complete_match(
     match_id: str,
@@ -715,14 +912,27 @@ async def complete_match(
     actor_role = ensure_match_participant(match, current_user.user_id)
     if body.actorRole != actor_role:
         raise HTTPException(403, detail={"code": "ACTOR_ROLE_MISMATCH"})
+    if match["status"] not in COMPLETABLE_MATCH_STATUSES:
+        raise HTTPException(409, detail={"code": "MATCH_NOT_COMPLETABLE"})
     match[f"{actor_role}Confirmed"] = True
     if match["requesterConfirmed"] and match["helperConfirmed"]:
         match["status"] = "completed"
         match["completedAt"] = now_iso()
-        request_or_404(match["requestId"])["status"] = "completed"
+        new_request_status = "completed"
     else:
         match["status"] = "completion_pending"
-        request_or_404(match["requestId"])["status"] = "completion_pending"
+        new_request_status = "completion_pending"
+    async with actor_connection(current_user) as conn:
+        # The match participant check above is the authorization boundary.
+        # A helper cannot directly read the request after it leaves the
+        # published state under RLS, but must still be able to confirm
+        # completion. The server-owned match supplies the request ID to the
+        # constrained transition function.
+        await conn.fetchval(
+            "select app.set_request_status($1, $2::request_status, null, false)",
+            uuid.UUID(match["requestId"]),
+            new_request_status,
+        )
     return match
 
 
@@ -737,7 +947,12 @@ async def dispute_match(
     if match["status"] in {"completed", "disputed"}:
         raise HTTPException(409, detail={"code": "MATCH_NOT_DISPUTABLE"})
     match.update({"status": "disputed", "disputeReason": body.reason, "disputedAt": now_iso()})
-    request_or_404(match["requestId"])["status"] = "disputed"
+    async with actor_connection(current_user) as conn:
+        await request_or_404(conn, match["requestId"])
+        await conn.fetchval(
+            "select app.set_request_status($1, 'disputed', null, false)",
+            uuid.UUID(match["requestId"]),
+        )
     return match
 
 
@@ -941,11 +1156,30 @@ async def create_report(
         "createdAt": now_iso(),
     }
     reports[item["id"]] = item
+    record_audit_event(
+        actor_id=current_user.user_id,
+        event_type="report_created",
+        target_type=body.targetType,
+        target_id=body.targetId,
+        detail={"reportId": item["id"], "severity": item["severity"]},
+    )
     if item["severity"] == "high" and body.targetType == "request":
-        target = requests_store.get(body.targetId)
-        if target:
-            target["status"] = "suspended"
-            target["version"] += 1
+        try:
+            target_id = uuid.UUID(body.targetId)
+        except ValueError:
+            target_id = None
+        if target_id is not None:
+            async with actor_connection(current_user) as conn:
+                await conn.fetchval(
+                    "select app.set_request_status($1, 'suspended')", target_id
+                )
+            record_audit_event(
+                actor_id=current_user.user_id,
+                event_type="request_auto_suspended",
+                target_type="request",
+                target_id=body.targetId,
+                detail={"reportId": item["id"]},
+            )
     return item
 
 
@@ -957,8 +1191,17 @@ async def set_user_block(
 ):
     if user_id == current_user.user_id:
         raise HTTPException(422, detail={"code": "SELF_BLOCK_NOT_ALLOWED"})
+    if user_id not in users_store:
+        raise HTTPException(404, detail={"code": "USER_PROFILE_NOT_FOUND"})
+    relation = (current_user.user_id, user_id)
     if body.blocked:
-        blocks.add(user_id)
+        blocks.add(relation)
     else:
-        blocks.discard(user_id)
-    return {"userId": user_id, "blocked": user_id in blocks, "updatedAt": now_iso()}
+        blocks.discard(relation)
+    record_audit_event(
+        actor_id=current_user.user_id,
+        event_type="user_blocked" if body.blocked else "user_unblocked",
+        target_type="user",
+        target_id=user_id,
+    )
+    return {"userId": user_id, "blocked": relation in blocks, "updatedAt": now_iso()}
