@@ -519,20 +519,32 @@ async def structure_request(
             "requiresMaskingConfirmation": True,
             "message": "マスキング箇所を確認し、必要なら元の入力を修正してください",
         }
-    if any(word in body.text for word in ["電気工事", "医療行為", "介護", "送迎"]):
+    if any(word in masking["maskedText"] for word in ["電気工事", "医療行為", "介護", "送迎"]):
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
-    is_dog = "犬" in body.text or "散歩" in body.text
+    try:
+        result = await structure_llm_client(masking["maskedText"], body.areaCode)
+    except Exception:
+        logger.warning("Request structure service failed after masking")
+        raise HTTPException(503, detail={"code": "STRUCTURE_SERVICE_UNAVAILABLE"})
+    masking_metrics["submitted"] += 1
     return {
-        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
-        "description": body.text,
-        "category": "pet_support" if is_dog else "other",
-        "scheduledAt": "2026-08-19T17:00:00+09:00",
-        "estimatedMinutes": 30,
-        "requiredHelpers": 1,
-        "riskLevel": "medium" if is_dog else "low",
-        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in body.text else [],
-        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+        **result,
+        "masking": {
+            "detections": masking["detections"],
+            "ruleVersion": masking["ruleVersion"],
+            "confirmed": body.maskingConfirmed,
+        },
+        "requiresConfirmation": True,
     }
+
+
+@app.post("/requests/masking-preview", tags=["Requests"])
+async def preview_request_masking(
+    body: StructureInput,
+    _current_user: CurrentUser = Depends(get_current_user),
+):
+    masking_metrics["previewed"] += 1
+    return mask_request_text(body.text)
 
 
 async def request_or_404(
