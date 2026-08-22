@@ -109,6 +109,8 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
 
+### レビュー・AI実績プロフィール
+
 レビューは完了済みマッチの当事者だけが各1件投稿でき、個人情報や攻撃的表現を
 含むコメントは拒否する。実績生成は支援者本人が実行し、双方が完了確認した活動
 だけを累計回数・時間・カテゴリ別件数へ集計する。依頼者の氏名、連絡先、住所、
@@ -118,6 +120,14 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 と再生成は常に非公開であり、本人が内容を承認した場合だけ会員向けまたは公開へ
 変更できる。生成処理が失敗した場合、新しい実績は保存せず、既存の公開実績を
 維持する。累計値などの事実データをプロフィール更新APIから変更することはできない。
+
+### 応募・取り下げ
+
+`POST /requests/{id}/applications` は有効な支援者だけが利用でき、自分の依頼、
+重複応募、募集終了・停止・期限切れ依頼への応募を拒否する。
+`verificationRequired` が有効な依頼では、本人確認済みの支援者だけが応募できる。
+`POST /applications/{id}/withdraw` は応募者本人だけが実行でき、利用停止ユーザーの
+応募・取り下げはいずれも拒否する。
 
 ## エラーレスポンスとトレースID
 
