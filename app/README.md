@@ -129,6 +129,15 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 `POST /applications/{id}/withdraw` は応募者本人だけが実行でき、利用停止ユーザーの
 応募・取り下げはいずれも拒否する。
 
+### チャット
+
+`GET /matches/{id}/messages` と `POST /matches/{id}/messages` はマッチ当事者だけが
+利用できる。取得は `limit`（標準20件、上限100件）と `cursor` によるページングに
+対応し、受信者が取得したメッセージにはサーバー時刻の `readAt` が記録される。
+送信者IDと送信日時は認証セッションとサーバーから設定し、電話番号、口座情報、
+外部連絡先を検出した場合は `warnings` を返す。管理者は関連する未解決の通報がある
+場合に限り調査目的で取得でき、メッセージ送信や既読更新は行えない。
+
 ## エラーレスポンスとトレースID
 
 400、401、403、404、409、422、500 のエラーは、次の共通形式で返す。

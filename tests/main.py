@@ -79,26 +79,13 @@ HELPER = CurrentUser(
     email_verified=True,
     verification_status="approved",
 )
-UNVERIFIED_HELPER = CurrentUser(
-    user_id="usr_208",
-    role="helper",
-    status="active",
-    email_verified=True,
+OUTSIDER = CurrentUser(
+    user_id="usr_208", role="helper", status="active", email_verified=True,
     verification_status="unverified",
 )
-SUSPENDED_HELPER = CurrentUser(
-    user_id="usr_suspended",
-    role="helper",
-    status="suspended",
-    email_verified=True,
-    verification_status="approved",
-)
-SELF_HELPER = CurrentUser(
-    user_id="usr_101",
-    role="helper",
-    status="active",
-    email_verified=True,
-    verification_status="approved",
+ADMIN = CurrentUser(
+    user_id="usr_admin", role="admin", status="active", email_verified=True,
+    verification_status="approved", mfa_completed=True,
 )
 
 
@@ -352,6 +339,99 @@ def test_select_application_with_version_check() -> None:
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
+
+
+def create_match() -> str:
+    response = client.post(
+        "/applications/app_55/select",
+        json={"requestId": "req_1024", "expectedVersion": 3},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def override_user(user: CurrentUser) -> None:
+    async def current_user() -> CurrentUser:
+        return user
+
+    app.dependency_overrides[get_current_user] = current_user
+
+
+def test_chat_uses_authenticated_sender_and_server_time_and_warns_contacts() -> None:
+    match_id = create_match()
+    override_user(HELPER)
+
+    response = client.post(
+        f"/matches/{match_id}/messages",
+        json={
+            "body": "電話は090-1234-5678、銀行口座とLINE IDを送ります",
+            "senderId": "forged",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["senderId"] == HELPER.user_id
+    assert response.json()["sentAt"].endswith("Z")
+    assert response.json()["warnings"] == [
+        "phone_number", "bank_account", "external_contact",
+    ]
+
+
+def test_chat_rejects_non_participant_for_read_and_send() -> None:
+    match_id = create_match()
+    override_user(OUTSIDER)
+
+    assert client.get(f"/matches/{match_id}/messages").status_code == 403
+    assert client.post(
+        f"/matches/{match_id}/messages", json={"body": "参加していません"}
+    ).status_code == 403
+
+
+def test_chat_cursor_paging_and_read_state() -> None:
+    match_id = create_match()
+    override_user(HELPER)
+    for index in range(3):
+        assert client.post(
+            f"/matches/{match_id}/messages", json={"body": f"message {index}"}
+        ).status_code == 201
+
+    override_user(REQUESTER)
+    first = client.get(f"/matches/{match_id}/messages", params={"limit": 2})
+    second = client.get(
+        f"/matches/{match_id}/messages",
+        params={"limit": 2, "cursor": first.json()["nextCursor"]},
+    )
+
+    assert len(first.json()["items"]) == 2
+    assert first.json()["nextCursor"] == first.json()["items"][-1]["id"]
+    assert len(second.json()["items"]) == 1
+    assert second.json()["nextCursor"] is None
+    assert all(item["readAt"] is not None for item in first.json()["items"])
+    assert second.json()["items"][0]["readAt"] is not None
+    assert client.get(
+        f"/matches/{match_id}/messages", params={"cursor": "missing"}
+    ).status_code == 422
+
+
+def test_admin_chat_access_requires_open_related_report_and_is_read_only() -> None:
+    match_id = create_match()
+    override_user(HELPER)
+    message = client.post(
+        f"/matches/{match_id}/messages", json={"body": "調査対象メッセージ"}
+    ).json()
+
+    override_user(ADMIN)
+    assert client.get(f"/matches/{match_id}/messages").status_code == 403
+    crud_module.reports["report_chat"] = {
+        "id": "report_chat", "targetType": "message", "targetId": message["id"],
+        "status": "open",
+    }
+    response = client.get(f"/matches/{match_id}/messages")
+    assert response.status_code == 200
+    assert response.json()["items"][0]["readAt"] is None
+    assert client.post(
+        f"/matches/{match_id}/messages", json={"body": "管理者は送信不可"}
+    ).status_code == 403
 
 
 def test_api_prefix_and_profile_update() -> None:

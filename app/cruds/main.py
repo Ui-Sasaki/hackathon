@@ -8,6 +8,7 @@ import math
 import os
 import re
 from typing import Any, Awaitable, Callable
+import uuid
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -524,7 +525,6 @@ def ensure_match_participant(match: dict, user_id: str) -> str:
         return "helper"
     raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
 
-
 def is_blocked_pair(first_user_id: str, second_user_id: str) -> bool:
     """Return whether either user has blocked the other."""
 
@@ -559,8 +559,6 @@ def record_audit_event(
     )
 
 
-# モックデータの初期化は開発・テスト専用の操作である。明示的に有効化した環境
-# 以外では、存在自体を伏せたまま拒否する。
 MOCK_RESET_ENABLED = os.getenv("MOCK_RESET_ENABLED", "false").lower() in {
     "1", "true", "yes", "on",
 }
@@ -569,6 +567,35 @@ MOCK_RESET_ENABLED = os.getenv("MOCK_RESET_ENABLED", "false").lower() in {
 async def require_mock_environment() -> None:
     if not MOCK_RESET_ENABLED:
         raise HTTPException(404, detail={"code": "NOT_FOUND"})
+
+
+def admin_can_investigate_match(match_id: str) -> bool:
+    """Allow admin message review only while a related report is open."""
+
+    message_ids = {item["id"] for item in messages.get(match_id, [])}
+    return any(
+        report["status"] == "open"
+        and (
+            (report["targetType"] == "match" and report["targetId"] == match_id)
+            or (
+                report["targetType"] == "message"
+                and report["targetId"] in message_ids
+            )
+        )
+        for report in reports.values()
+    )
+
+
+def message_warnings(body: str) -> list[str]:
+    warning_patterns = (
+        ("phone_number", r"(?<!\d)(?:0\d{1,4}[-ー ]?\d{1,4}[-ー ]?\d{3,4})(?!\d)"),
+        ("bank_account", r"(?:口座|銀行|支店|振込|店番|口座番号)"),
+        (
+            "external_contact",
+            r"(?:https?://|www\.|[^\s@]+@[^\s@]+\.[^\s@]+|LINE(?:\s*ID)?|Instagram|Discord)",
+        ),
+    )
+    return [code for code, pattern in warning_patterns if re.search(pattern, body, re.IGNORECASE)]
 
 
 @app.post("/_mock/reset", tags=["Mock control"])
@@ -958,20 +985,37 @@ async def get_match(match_id: str, current_user: CurrentUser = Depends(get_curre
 @app.get("/matches/{match_id}/messages", tags=["Messages"])
 async def list_messages(
     match_id: str,
+    cursor: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
 ):
     match = match_or_404(match_id)
-    ensure_match_participant(match, current_user.user_id)
-    return {
-        "items": [
-            item for item in messages.get(match_id, [])
-            if not (
-                item["senderId"] != current_user.user_id
-                and is_blocked_pair(current_user.user_id, item["senderId"])
-            )
-        ],
-        "nextCursor": None,
-    }
+    is_admin_investigation = (
+        current_user.role == "admin" and admin_can_investigate_match(match_id)
+    )
+    if not is_admin_investigation:
+        ensure_match_participant(match, current_user.user_id)
+
+    match_messages = messages.get(match_id, [])
+    start = 0
+    if cursor:
+        cursor_index = next(
+            (index for index, item in enumerate(match_messages) if item["id"] == cursor),
+            None,
+        )
+        if cursor_index is None:
+            raise HTTPException(422, detail={"code": "INVALID_CURSOR"})
+        start = cursor_index + 1
+    page = match_messages[start:start + limit]
+
+    if not is_admin_investigation:
+        read_at = now_iso()
+        for item in page:
+            if item["senderId"] != current_user.user_id and item["readAt"] is None:
+                item["readAt"] = read_at
+
+    next_cursor = page[-1]["id"] if start + limit < len(match_messages) else None
+    return {"items": page, "nextCursor": next_cursor}
 
 
 @app.post("/matches/{match_id}/messages", status_code=201, tags=["Messages"])
@@ -986,6 +1030,7 @@ async def create_message(
         "matchId": match_id,
         "senderId": current_user.user_id,
         "body": body.body,
+        "warnings": message_warnings(body.body),
         "sentAt": now_iso(),
         "readAt": None,
         "moderationStatus": "allowed",
