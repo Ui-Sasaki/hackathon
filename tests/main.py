@@ -413,16 +413,115 @@ def test_create_request_is_idempotent() -> None:
 
 
 def test_duplicate_application_is_rejected() -> None:
-    async def helper_user() -> CurrentUser:
-        return HELPER
-
-    app.dependency_overrides[get_current_user] = helper_user
+    override_user(HELPER)
+    crud_module.requests_store["req_1024"]["scheduledAt"] = "2099-08-19T17:00:00+09:00"
     response = client.post(
         f"/requests/{SEED_REQUEST_1024}/applications",
         json={"message": "対応できます", "availableAt": "2026-08-19T17:00:00+09:00"},
     )
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "DUPLICATE_APPLICATION"
+
+
+def application_payload() -> dict[str, str]:
+    return {"message": "対応できます", "availableAt": "2099-08-19T17:00:00+09:00"}
+
+
+def test_helper_can_apply_and_withdraw_own_application() -> None:
+    override_user(UNVERIFIED_HELPER)
+    request_item = crud_module.requests_store["req_1025"]
+    request_item["scheduledAt"] = "2099-08-20T09:00:00+09:00"
+
+    created = client.post(
+        "/requests/req_1025/applications", json=application_payload()
+    )
+    withdrawn = client.post(f"/applications/{created.json()['id']}/withdraw")
+
+    assert created.status_code == 201
+    assert withdrawn.status_code == 200
+    assert withdrawn.json()["status"] == "withdrawn"
+
+
+def test_self_application_is_rejected() -> None:
+    override_user(SELF_HELPER)
+    crud_module.requests_store["req_1024"]["scheduledAt"] = "2099-08-19T17:00:00+09:00"
+
+    response = client.post(
+        "/requests/req_1024/applications", json=application_payload()
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "SELF_APPLICATION_NOT_ALLOWED"
+
+
+@pytest.mark.parametrize("status", ["matched", "suspended", "cancelled"])
+def test_application_rejects_request_that_is_not_open(status: str) -> None:
+    override_user(UNVERIFIED_HELPER)
+    request_item = crud_module.requests_store["req_1025"]
+    request_item.update({"status": status, "scheduledAt": "2099-08-20T09:00:00+09:00"})
+
+    response = client.post(
+        "/requests/req_1025/applications", json=application_payload()
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "REQUEST_NOT_OPEN"
+
+
+def test_application_rejects_expired_request() -> None:
+    override_user(UNVERIFIED_HELPER)
+    crud_module.requests_store["req_1025"]["scheduledAt"] = "2020-01-01T00:00:00Z"
+
+    response = client.post(
+        "/requests/req_1025/applications", json=application_payload()
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "REQUEST_EXPIRED"
+
+
+def test_application_requires_verification_when_request_requires_it() -> None:
+    override_user(UNVERIFIED_HELPER)
+    request_item = crud_module.requests_store["req_1025"]
+    request_item.update(
+        {"scheduledAt": "2099-08-20T09:00:00+09:00", "verificationRequired": True}
+    )
+
+    response = client.post(
+        "/requests/req_1025/applications", json=application_payload()
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "VERIFICATION_REQUIRED"
+
+
+def test_suspended_user_cannot_apply_or_withdraw() -> None:
+    override_user(SUSPENDED_HELPER)
+    request_item = crud_module.requests_store["req_1025"]
+    request_item["scheduledAt"] = "2099-08-20T09:00:00+09:00"
+
+    apply_response = client.post(
+        "/requests/req_1025/applications", json=application_payload()
+    )
+    crud_module.applications["app_suspended"] = {
+        "id": "app_suspended", "requestId": "req_1025",
+        "helperId": SUSPENDED_HELPER.user_id, "status": "applied",
+    }
+    withdraw_response = client.post("/applications/app_suspended/withdraw")
+
+    assert apply_response.status_code == 403
+    assert apply_response.json()["error"]["code"] == "USER_SUSPENDED"
+    assert withdraw_response.status_code == 403
+    assert withdraw_response.json()["error"]["code"] == "USER_SUSPENDED"
+
+
+def test_only_application_owner_can_withdraw() -> None:
+    override_user(UNVERIFIED_HELPER)
+
+    response = client.post("/applications/app_55/withdraw")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "ROLE_FORBIDDEN"
 
 
 def test_protected_endpoint_rejects_missing_session() -> None:
