@@ -18,7 +18,10 @@ if SUPERTOKENS_ENABLED:
     from supertokens_python.exceptions import SuperTokensError
     from supertokens_python.recipe import emailpassword, multifactorauth, session
     from supertokens_python.recipe.emailpassword import EmailPasswordOverrideConfig
-    from supertokens_python.recipe.emailpassword.interfaces import PasswordResetPostOkResult
+    from supertokens_python.recipe.emailpassword.interfaces import (
+        PasswordResetPostOkResult,
+        SignUpPostOkResult,
+    )
     from supertokens_python.recipe.session.asyncio import revoke_all_sessions_for_user
     from supertokens_python.recipe.session.framework.fastapi import verify_session
 
@@ -42,8 +45,25 @@ def _env_bool(name: str, default: bool) -> bool:
     return os.getenv(name, str(default)).lower() in {"1", "true", "yes", "on"}
 
 
+_user_creator: Callable[[str], None] = lambda _user_id: None
+
+
+def configure_user_creator(creator: Callable[[str], None]) -> None:
+    """Configure application-profile creation after a successful sign-up."""
+
+    global _user_creator
+    _user_creator = creator
+
+
 def _override_emailpassword_apis(original):
+    original_sign_up_post = original.sign_up_post
     original_password_reset_post = original.password_reset_post
+
+    async def sign_up_post(*args, **kwargs):
+        result = await original_sign_up_post(*args, **kwargs)
+        if isinstance(result, SignUpPostOkResult):
+            _user_creator(result.user.id)
+        return result
 
     async def password_reset_post(*args, **kwargs):
         result = await original_password_reset_post(*args, **kwargs)
@@ -53,6 +73,7 @@ def _override_emailpassword_apis(original):
             await revoke_all_sessions_for_user(result.user.id)
         return result
 
+    original.sign_up_post = sign_up_post
     original.password_reset_post = password_reset_post
     return original
 

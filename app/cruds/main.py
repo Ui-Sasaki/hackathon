@@ -13,7 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.auth import (
-    SUPERTOKENS_ENABLED, CurrentUser, configure_user_lookup, cors_headers, get_current_user,
+    SUPERTOKENS_ENABLED, CurrentUser, configure_user_creator, configure_user_lookup,
+    cors_headers, get_current_user,
 )
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
@@ -325,6 +326,25 @@ def reset_store() -> None:
 
 reset_store()
 configure_user_lookup(lambda user_id: users_store.get(user_id))
+
+
+def create_user_profile(user_id: str) -> None:
+    """Create the application-side profile linked to a SuperTokens user."""
+
+    users_store.setdefault(
+        user_id,
+        {
+            "id": user_id,
+            "displayName": "",
+            "role": "requester",
+            "status": "active",
+            "emailVerified": False,
+            "verificationStatus": "unverified",
+        },
+    )
+
+
+configure_user_creator(create_user_profile)
 
 
 def request_or_404(request_id: str) -> dict:
