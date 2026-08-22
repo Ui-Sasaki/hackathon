@@ -2,6 +2,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import logging
 import os
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -363,6 +364,35 @@ def ensure_match_participant(match: dict, user_id: str) -> str:
     raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
 
 
+def admin_can_investigate_match(match_id: str) -> bool:
+    """Allow admin message review only while a related report is open."""
+
+    message_ids = {item["id"] for item in messages.get(match_id, [])}
+    return any(
+        report["status"] == "open"
+        and (
+            (report["targetType"] == "match" and report["targetId"] == match_id)
+            or (
+                report["targetType"] == "message"
+                and report["targetId"] in message_ids
+            )
+        )
+        for report in reports.values()
+    )
+
+
+def message_warnings(body: str) -> list[str]:
+    warning_patterns = (
+        ("phone_number", r"(?<!\d)(?:0\d{1,4}[-ー ]?\d{1,4}[-ー ]?\d{3,4})(?!\d)"),
+        ("bank_account", r"(?:口座|銀行|支店|振込|店番|口座番号)"),
+        (
+            "external_contact",
+            r"(?:https?://|www\.|[^\s@]+@[^\s@]+\.[^\s@]+|LINE(?:\s*ID)?|Instagram|Discord)",
+        ),
+    )
+    return [code for code, pattern in warning_patterns if re.search(pattern, body, re.IGNORECASE)]
+
+
 @app.post("/_mock/reset", tags=["Mock control"])
 async def reset_mock():
     reset_store()
@@ -619,10 +649,37 @@ async def get_match(match_id: str, current_user: CurrentUser = Depends(get_curre
 @app.get("/matches/{match_id}/messages", tags=["Messages"])
 async def list_messages(
     match_id: str,
+    cursor: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    ensure_match_participant(match_or_404(match_id), current_user.user_id)
-    return {"items": messages.get(match_id, []), "nextCursor": None}
+    match = match_or_404(match_id)
+    is_admin_investigation = (
+        current_user.role == "admin" and admin_can_investigate_match(match_id)
+    )
+    if not is_admin_investigation:
+        ensure_match_participant(match, current_user.user_id)
+
+    match_messages = messages.get(match_id, [])
+    start = 0
+    if cursor:
+        cursor_index = next(
+            (index for index, item in enumerate(match_messages) if item["id"] == cursor),
+            None,
+        )
+        if cursor_index is None:
+            raise HTTPException(422, detail={"code": "INVALID_CURSOR"})
+        start = cursor_index + 1
+    page = match_messages[start:start + limit]
+
+    if not is_admin_investigation:
+        read_at = now_iso()
+        for item in page:
+            if item["senderId"] != current_user.user_id and item["readAt"] is None:
+                item["readAt"] = read_at
+
+    next_cursor = page[-1]["id"] if start + limit < len(match_messages) else None
+    return {"items": page, "nextCursor": next_cursor}
 
 
 @app.post("/matches/{match_id}/messages", status_code=201, tags=["Messages"])
@@ -637,6 +694,7 @@ async def create_message(
         "matchId": match_id,
         "senderId": current_user.user_id,
         "body": body.body,
+        "warnings": message_warnings(body.body),
         "sentAt": now_iso(),
         "readAt": None,
         "moderationStatus": "allowed",
