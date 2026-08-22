@@ -90,6 +90,7 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/auth/user/password/reset` | パスワード再設定・既存セッション失効 |
 | GET / PATCH | `/profile` | プロフィール取得・更新 |
 | POST | `/requests/structure` | 依頼文の構造化 |
+| POST | `/requests/masking-preview` | LLM送信前の個人情報マスキング確認 |
 | GET / POST | `/requests` | 依頼一覧・作成 |
 | GET / PATCH / DELETE | `/requests/{id}` | 依頼取得・更新・取消 |
 | POST | `/requests/{id}/applications` | 依頼への応募 |
