@@ -80,7 +80,10 @@ HELPER = CurrentUser(
     verification_status="approved",
 )
 OUTSIDER = CurrentUser(
-    user_id="usr_208", role="helper", status="active", email_verified=True,
+    user_id="usr_208",
+    role="helper",
+    status="active",
+    email_verified=True,
     verification_status="unverified",
 )
 ADMIN = CurrentUser(
@@ -125,6 +128,22 @@ def seed_completed_match() -> dict:
 
 async def helper_user() -> CurrentUser:
     return HELPER
+
+
+def select_default_application() -> str:
+    response = client.post(
+        "/applications/app_55/select",
+        json={"requestId": "req_1024", "expectedVersion": 3},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def use_current_user(user: CurrentUser) -> None:
+    async def current_user() -> CurrentUser:
+        return user
+
+    app.dependency_overrides[get_current_user] = current_user
 
 
 def test_health() -> None:
@@ -339,6 +358,100 @@ def test_select_application_with_version_check() -> None:
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
+
+
+def test_match_becomes_completed_only_after_both_participants_confirm() -> None:
+    match_id = select_default_application()
+    response = client.post(
+        f"/matches/{match_id}/complete",
+        json={"completed": True, "actorRole": "helper"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "completion_pending"
+    assert response.json()["requesterConfirmed"] is True
+    assert response.json()["helperConfirmed"] is False
+    assert crud_module.requests_store["req_1024"]["status"] == "completion_pending"
+
+    use_current_user(HELPER)
+    response = client.post(f"/matches/{match_id}/complete", json={"completed": True})
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["completedAt"] is not None
+    assert crud_module.requests_store["req_1024"]["status"] == "completed"
+    assert [log["newStatus"] for log in crud_module.audit_logs] == [
+        "completion_pending", "completed",
+    ]
+
+
+def test_non_participant_cannot_complete_or_dispute_match() -> None:
+    match_id = select_default_application()
+    use_current_user(OUTSIDER)
+    complete = client.post(f"/matches/{match_id}/complete", json={"completed": True})
+    dispute = client.post(
+        f"/matches/{match_id}/dispute",
+        json={"reason": "活動内容について当事者間で認識が一致しません"},
+    )
+    assert complete.status_code == 403
+    assert dispute.status_code == 403
+    assert crud_module.matches[match_id]["status"] == "matched"
+    assert crud_module.audit_logs == []
+
+
+def test_dispute_changes_match_and_request_status_and_is_audited() -> None:
+    match_id = select_default_application()
+    response = client.post(
+        f"/matches/{match_id}/dispute",
+        json={"reason": "活動内容について当事者間で認識が一致しません"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "disputed"
+    assert crud_module.requests_store["req_1024"]["status"] == "disputed"
+    assert crud_module.audit_logs[-1]["previousStatus"] == "matched"
+    assert crud_module.audit_logs[-1]["newStatus"] == "disputed"
+
+
+def test_invalid_match_state_transitions_are_rejected_with_409() -> None:
+    match_id = select_default_application()
+    assert client.post(
+        f"/matches/{match_id}/complete", json={"completed": True}
+    ).status_code == 200
+    duplicate = client.post(f"/matches/{match_id}/complete", json={"completed": True})
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "MATCH_STATE_CONFLICT"
+
+    use_current_user(HELPER)
+    assert client.post(
+        f"/matches/{match_id}/complete", json={"completed": True}
+    ).status_code == 200
+    response = client.post(
+        f"/matches/{match_id}/dispute",
+        json={"reason": "完了後に状態を変更しようとしています"},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "MATCH_STATE_CONFLICT"
+
+
+def test_reviews_and_achievements_require_completed_match() -> None:
+    match_id = select_default_application()
+    review = {
+        "onTime": True, "polite": True, "safetyAware": True,
+        "communicative": True, "comment": "丁寧に対応してもらいました",
+    }
+    assert client.post(f"/matches/{match_id}/reviews", json=review).status_code == 409
+    assert client.post(
+        "/achievements/generate", json={"matchId": match_id}
+    ).status_code == 409
+    assert client.post(
+        f"/matches/{match_id}/complete", json={"completed": True}
+    ).status_code == 200
+    use_current_user(HELPER)
+    assert client.post(
+        f"/matches/{match_id}/complete", json={"completed": True}
+    ).status_code == 200
+    assert client.post(f"/matches/{match_id}/reviews", json=review).status_code == 201
+    assert client.post(
+        "/achievements/generate", json={"matchId": match_id}
+    ).status_code == 201
 
 
 def create_match() -> str:

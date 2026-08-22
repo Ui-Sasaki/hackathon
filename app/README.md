@@ -109,6 +109,13 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
 
+### 完了確認・マッチングキャンセル
+
+完了確認は認証済みの依頼者・支援者本人だけが実行できる。片方の確認後は
+`completion_pending`、双方の確認後は `completed` となり、レビューと実績生成は
+`completed` のマッチだけで利用できる。マッチングキャンセルは `disputed` へ遷移し、
+完了済み・キャンセル済みなどからの不正な再遷移は 409 を返す。状態変更は監査ログへ記録する。
+
 ### レビュー・AI実績プロフィール
 
 レビューは完了済みマッチの当事者だけが各1件投稿でき、個人情報や攻撃的表現を
