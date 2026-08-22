@@ -2,7 +2,8 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import logging
 import os
-from typing import Any
+import re
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -22,7 +23,7 @@ from app.routers import system_router
 from app.schemas import (
     AchievementInput, AchievementVisibilityInput, ApplicationInput,
     BlockInput, CompletionInput, DisputeInput, MessageInput, ProfileUpdateInput,
-    ReportInput, RequestInput, RequestUpdateInput, ReviewInput, SelectionInput,
+    ReportInput, RequestInput, RequestUpdateInput, ReviewInput, RiskAssessmentInput, SelectionInput,
     StructureInput, VerificationInput,
 )
 
@@ -89,6 +90,81 @@ STATUS_ERROR_CODES = {
     500: "INTERNAL_SERVER_ERROR",
 }
 logger = logging.getLogger(__name__)
+
+RISK_RULE_VERSION = "risk-rules-v1"
+RISK_MODEL_NAME = "mock-risk-model"
+RISK_PROMPT_VERSION = "risk-assessment-v1"
+RISK_PRIORITY = {"low": 0, "review_required": 1, "high": 2}
+HIGH_RISK_RULES = {
+    "MEDICAL_WORK": ("医療行為", "医療処置", "注射", "投薬"),
+    "CARE_WORK": ("介護", "入浴介助", "排泄介助"),
+    "ELECTRICAL_WORK": ("電気工事", "配線工事", "コンセント交換"),
+    "HIGH_PLACE_WORK": ("高所作業", "高所で", "屋根", "脚立で2階"),
+    "DANGEROUS_TOOL": ("危険工具", "チェーンソー", "丸ノコ", "溶接機"),
+    "MONEY_MANAGEMENT": ("金銭管理", "通帳", "暗証番号", "現金を預け"),
+    "TRANSPORT": ("送迎", "車で運んで"),
+    "SHOPPING_PROXY": ("買い物代行", "代理購入"),
+}
+REVIEW_RISK_RULES = {
+    "HEIGHT_UNCLEAR": ("脚立", "はしご"),
+    "TOOL_UNCLEAR": ("電動工具", "刃物"),
+}
+RISK_PII_PATTERNS = (
+    re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"),
+    re.compile(r"(?<!\d)0\d{1,4}-?\d{1,4}-?\d{3,4}(?!\d)"),
+    re.compile(r"(?:東京都|北海道|(?:京都|大阪)府|.{2,3}県).{1,20}[市区町村].{0,30}"),
+)
+
+
+async def default_risk_generator(_masked_text: str) -> dict[str, Any]:
+    return {"level": "low", "reasonCodes": []}
+
+
+RiskGenerator = Callable[[str], Awaitable[dict[str, Any]]]
+risk_generator: RiskGenerator = default_risk_generator
+
+
+def configure_risk_generator(generator: RiskGenerator) -> None:
+    global risk_generator
+    risk_generator = generator
+
+
+def mask_risk_input(text: str) -> str:
+    masked = text
+    for pattern in RISK_PII_PATTERNS:
+        masked = pattern.sub("[個人情報]", masked)
+    return masked
+
+
+def fixed_risk_reasons(text: str, scheduled_at: str | None) -> tuple[str, list[str]]:
+    high_reasons = [
+        code
+        for code, terms in HIGH_RISK_RULES.items()
+        if any(term in text for term in terms)
+    ]
+    weight_matches = [int(value) for value in re.findall(r"(\d{1,3})\s*kg", text, re.I)]
+    if any(weight >= 30 for weight in weight_matches):
+        high_reasons.append("EXCESSIVE_WEIGHT")
+    if high_reasons:
+        return "high", sorted(set(high_reasons))
+
+    review_reasons = [
+        code
+        for code, terms in REVIEW_RISK_RULES.items()
+        if any(term in text for term in terms)
+    ]
+    if any(20 <= weight < 30 for weight in weight_matches):
+        review_reasons.append("HEAVY_OBJECT_REVIEW")
+    if scheduled_at:
+        try:
+            hour = datetime.fromisoformat(scheduled_at.replace("Z", "+00:00")).hour
+            if hour >= 22 or hour < 5:
+                review_reasons.append("LATE_NIGHT_WORK")
+        except ValueError:
+            review_reasons.append("SCHEDULE_UNCLEAR")
+    if review_reasons:
+        return "review_required", sorted(set(review_reasons))
+    return "low", []
 
 
 def request_id_for(request: Request) -> str:
@@ -202,6 +278,55 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:8]}"
 
 
+async def assess_request_risk(
+    text: str, scheduled_at: str | None, actor_id: str
+) -> dict[str, Any]:
+    fixed_level, fixed_reasons = fixed_risk_reasons(text, scheduled_at)
+    llm_level = "review_required"
+    llm_reasons = ["LLM_ASSESSMENT_UNAVAILABLE"]
+    try:
+        llm_result = await risk_generator(mask_risk_input(text))
+        candidate_level = llm_result.get("level")
+        if candidate_level not in {"low", "review_required", "high"}:
+            llm_level = "review_required"
+            llm_reasons = ["LLM_ASSESSMENT_UNCLEAR"]
+        else:
+            llm_level = candidate_level
+            raw_reasons = llm_result.get("reasonCodes", [])
+            if not isinstance(raw_reasons, list) or any(
+                not isinstance(code, str)
+                or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", code)
+                for code in raw_reasons[:20]
+            ):
+                llm_level = "high" if candidate_level == "high" else "review_required"
+                llm_reasons = ["LLM_REASON_CODES_INVALID"]
+            else:
+                llm_reasons = raw_reasons[:20]
+    except Exception:
+        logger.warning("Risk LLM assessment failed; routing to review")
+
+    final_level = max((fixed_level, llm_level), key=RISK_PRIORITY.get)
+    assessment = {
+        "id": new_id("risk"),
+        "level": final_level,
+        "reasonCodes": sorted(set(fixed_reasons + llm_reasons)),
+        "fixedRuleLevel": fixed_level,
+        "llmLevel": llm_level,
+        "publicationAllowed": final_level == "low",
+        "nextStatus": (
+            "published"
+            if final_level == "low"
+            else "pending_review" if final_level == "review_required" else "rejected"
+        ),
+        "ruleVersion": RISK_RULE_VERSION,
+        "modelName": RISK_MODEL_NAME,
+        "promptVersion": RISK_PROMPT_VERSION,
+        "assessedAt": now_iso(),
+    }
+    risk_assessments[assessment["id"]] = {**assessment, "actorId": actor_id}
+    return assessment
+
+
 def get_or_404(store: dict, entity_id: str, error_code: str) -> dict:
     item = store.get(entity_id)
     if item is None:
@@ -273,6 +398,7 @@ HELPERS = {
 def reset_store() -> None:
     global requests_store, applications, matches, messages, reviews, achievements
     global profile_store, users_store, verifications, reports, blocks, idempotency_store
+    global risk_assessments
     profile_store = {
         "id": "usr_101",
         "displayName": "山田 花子",
@@ -322,6 +448,7 @@ def reset_store() -> None:
     reports = {}
     blocks = set()
     idempotency_store = {}
+    risk_assessments = {}
 
 
 reset_store()
@@ -391,10 +518,18 @@ async def update_profile(
 @app.post("/requests/structure", tags=["Requests"])
 async def structure_request(
     body: StructureInput,
-    _current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    if any(word in body.text for word in ["電気工事", "医療行為", "介護", "送迎"]):
-        raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
+    assessment = await assess_request_risk(body.text, None, current_user.user_id)
+    if assessment["level"] == "high":
+        raise HTTPException(
+            422,
+            detail={
+                "code": "HIGH_RISK_REQUEST",
+                "riskLevel": "high",
+                "reasonCodes": assessment["reasonCodes"],
+            },
+        )
     is_dog = "犬" in body.text or "散歩" in body.text
     return {
         "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
@@ -403,10 +538,20 @@ async def structure_request(
         "scheduledAt": "2026-08-19T17:00:00+09:00",
         "estimatedMinutes": 30,
         "requiredHelpers": 1,
-        "riskLevel": "medium" if is_dog else "low",
+        "riskLevel": assessment["level"],
         "missingFields": ["犬の大きさ"] if is_dog and "小型" not in body.text else [],
         "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+        "riskAssessment": assessment,
+        "publicationStatus": assessment["nextStatus"],
     }
+
+
+@app.post("/requests/risk-assessment", tags=["Requests"])
+async def assess_risk(
+    body: RiskAssessmentInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return await assess_request_risk(body.text, body.scheduledAt, current_user.user_id)
 
 
 @app.get("/requests", tags=["Requests"])
@@ -432,6 +577,20 @@ async def create_request(
     cache_key = ("create_request", current_user.user_id, idempotency_key)
     if cache_key in idempotency_store:
         return idempotency_store[cache_key]
+    assessment = await assess_request_risk(
+        f"{body.title} {body.description} {body.category}",
+        body.scheduledAt,
+        current_user.user_id,
+    )
+    if assessment["level"] == "high":
+        raise HTTPException(
+            422,
+            detail={
+                "code": "HIGH_RISK_REQUEST",
+                "riskLevel": "high",
+                "reasonCodes": assessment["reasonCodes"],
+            },
+        )
     request_id = new_id("req")
     item = {
         "id": request_id,
@@ -440,7 +599,9 @@ async def create_request(
         "areaLabel": "大学周辺・約1km",
         "distanceKm": 1.0,
         "acceptedHelpers": 0,
-        "status": "published",
+        "riskLevel": assessment["level"],
+        "riskAssessmentId": assessment["id"],
+        "status": assessment["nextStatus"],
         "version": 1,
         "warnings": [],
         "createdAt": now_iso(),
@@ -473,7 +634,35 @@ async def update_request(
     changes = body.model_dump(exclude={"expectedVersion"}, exclude_none=True)
     if "requiredHelpers" in changes and changes["requiredHelpers"] < item["acceptedHelpers"]:
         raise HTTPException(409, detail={"code": "HELPER_COUNT_CONFLICT"})
+    risk_fields = {"title", "description", "scheduledAt"}
+    assessment = None
+    if risk_fields & changes.keys():
+        assessment = await assess_request_risk(
+            " ".join(
+                [
+                    changes.get("title", item["title"]),
+                    changes.get("description", item["description"]),
+                    item["category"],
+                ]
+            ),
+            changes.get("scheduledAt", item["scheduledAt"]),
+            current_user.user_id,
+        )
+        if assessment["level"] == "high":
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "HIGH_RISK_REQUEST",
+                    "riskLevel": "high",
+                    "reasonCodes": assessment["reasonCodes"],
+                },
+            )
     item.update(changes)
+    if assessment:
+        item["riskLevel"] = assessment["level"]
+        item["riskAssessmentId"] = assessment["id"]
+        if assessment["level"] == "review_required":
+            item["status"] = "pending_review"
     item["version"] += 1
     item["updatedAt"] = now_iso()
     return item

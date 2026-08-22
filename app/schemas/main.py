@@ -10,6 +10,13 @@ class StructureInput(BaseModel):
     areaCode: str
 
 
+class RiskAssessmentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=5, max_length=3000)
+    scheduledAt: str | None = None
+
+
 class RequestInput(BaseModel):
     title: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=2000)

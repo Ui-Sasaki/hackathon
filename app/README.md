@@ -83,6 +83,7 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/auth/user/password/reset` | パスワード再設定・既存セッション失効 |
 | GET / PATCH | `/profile` | プロフィール取得・更新 |
 | POST | `/requests/structure` | 依頼文の構造化 |
+| POST | `/requests/risk-assessment` | 固定ルール・LLMによる危険度判定 |
 | GET / POST | `/requests` | 依頼一覧・作成 |
 | GET / PATCH / DELETE | `/requests/{id}` | 依頼取得・更新・取消 |
 | POST | `/requests/{id}/applications` | 依頼への応募 |
@@ -99,6 +100,19 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/users/{id}/block` | ブロック・解除 |
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
+
+### 危険度判定
+
+危険度は`low`、`review_required`、`high`の3段階で返す。医療・介護・
+電気工事、高所、危険工具、金銭管理、送迎、買い物代行、30kg以上の重量物は
+固定ルールで`high`とし、公開を拒否する。20kg以上30kg未満、深夜帯、用途が
+明確でない脚立・電動工具は`review_required`として`pending_review`へ送る。
+
+固定ルールとLLMのうち高い危険度を最終結果に採用するため、LLMが固定ルールの
+禁止判定を解除することはない。LLMの応答が不明または利用不能な場合も安全側の
+`review_required`とする。LLM入力前に電話番号、メール、詳細住所をマスクする。
+監査データには理由コード、固定ルール版、モデル名、プロンプト版、判定日時を
+保存するが、依頼本文は保存しない。依頼構造化と手動投稿にも同じ判定を適用する。
 
 ## エラーレスポンスとトレースID
 

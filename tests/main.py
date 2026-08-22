@@ -79,6 +79,7 @@ async def requester_user() -> CurrentUser:
 def setup_function() -> None:
     app.dependency_overrides[get_current_user] = requester_user
     client.post("/_mock/reset")
+    crud_module.configure_risk_generator(crud_module.default_risk_generator)
 
 
 def test_health() -> None:
@@ -100,6 +101,186 @@ def test_structure_request() -> None:
     )
     assert response.status_code == 200
     assert response.json()["category"] == "pet_support"
+
+
+@pytest.mark.parametrize(
+    ("text", "reason_code"),
+    [
+        ("利用者への医療行為を手伝ってください", "MEDICAL_WORK"),
+        ("高齢者の介護を手伝ってください", "CARE_WORK"),
+        ("自宅の電気工事をお願いします", "ELECTRICAL_WORK"),
+        ("屋根の雪下ろしをお願いします", "HIGH_PLACE_WORK"),
+        ("チェーンソーで木を切ってください", "DANGEROUS_TOOL"),
+        ("通帳を預けるので金銭管理をお願いします", "MONEY_MANAGEMENT"),
+        ("病院まで車で送迎してください", "TRANSPORT"),
+        ("日用品の買い物代行をお願いします", "SHOPPING_PROXY"),
+    ],
+)
+def test_fixed_rules_classify_out_of_scope_work_as_high(
+    text: str, reason_code: str
+) -> None:
+    async def incorrectly_low(_text: str) -> dict:
+        return {"level": "low", "reasonCodes": ["LLM_LOW"]}
+
+    crud_module.configure_risk_generator(incorrectly_low)
+    response = client.post("/requests/risk-assessment", json={"text": text})
+
+    assert response.status_code == 200
+    assessment = response.json()
+    assert assessment["level"] == "high"
+    assert assessment["publicationAllowed"] is False
+    assert assessment["nextStatus"] == "rejected"
+    assert reason_code in assessment["reasonCodes"]
+    assert assessment["fixedRuleLevel"] == "high"
+    assert assessment["llmLevel"] == "low"
+
+
+@pytest.mark.parametrize(
+    ("weight", "expected_level"),
+    [(19, "low"), (20, "review_required"), (29, "review_required"), (30, "high")],
+)
+def test_weight_boundaries_are_deterministic(weight: int, expected_level: str) -> None:
+    response = client.post(
+        "/requests/risk-assessment",
+        json={"text": f"重さ{weight}kgの荷物を移動してください"},
+    )
+    assert response.status_code == 200
+    assert response.json()["level"] == expected_level
+
+
+def test_review_required_and_llm_high_control_publication_state() -> None:
+    review = client.post(
+        "/requests/risk-assessment",
+        json={
+            "text": "脚立を使うかもしれない清掃です",
+            "scheduledAt": "2026-08-25T23:00:00+09:00",
+        },
+    )
+
+    async def high_risk(_text: str) -> dict:
+        return {"level": "high", "reasonCodes": ["CONTEXTUAL_DANGER"]}
+
+    crud_module.configure_risk_generator(high_risk)
+    high = client.post(
+        "/requests/risk-assessment", json={"text": "特殊な作業を手伝ってください"}
+    )
+
+    assert review.json()["level"] == "review_required"
+    assert review.json()["nextStatus"] == "pending_review"
+    assert {"HEIGHT_UNCLEAR", "LATE_NIGHT_WORK"}.issubset(review.json()["reasonCodes"])
+    assert high.json()["level"] == "high"
+    assert high.json()["reasonCodes"] == ["CONTEXTUAL_DANGER"]
+
+
+def test_risk_llm_receives_masked_input_and_audit_omits_original_text() -> None:
+    captured = []
+
+    async def capture(masked_text: str) -> dict:
+        captured.append(masked_text)
+        return {"level": "low", "reasonCodes": []}
+
+    crud_module.configure_risk_generator(capture)
+    original = "東京都新宿区1-2-3です。電話090-1234-5678へ連絡してください"
+    response = client.post("/requests/risk-assessment", json={"text": original})
+
+    assert response.status_code == 200
+    assert "東京都新宿区" not in captured[0]
+    assert "090-1234-5678" not in captured[0]
+    audit = crud_module.risk_assessments[response.json()["id"]]
+    assert "text" not in audit
+    assert "ruleVersion" in audit
+    assert "modelName" in audit
+    assert "promptVersion" in audit
+    assert "assessedAt" in audit
+
+
+def test_unclear_or_failed_llm_assessment_routes_to_review() -> None:
+    async def unclear(_text: str) -> dict:
+        return {"level": "unknown", "reasonCodes": []}
+
+    crud_module.configure_risk_generator(unclear)
+    unclear_response = client.post(
+        "/requests/risk-assessment", json={"text": "内容を相談したい作業です"}
+    )
+
+    async def unavailable(_text: str) -> dict:
+        raise TimeoutError("private provider error")
+
+    crud_module.configure_risk_generator(unavailable)
+    failed_response = client.post(
+        "/requests/risk-assessment", json={"text": "内容を相談したい作業です"}
+    )
+
+    assert unclear_response.json()["level"] == "review_required"
+    assert "LLM_ASSESSMENT_UNCLEAR" in unclear_response.json()["reasonCodes"]
+    assert failed_response.json()["level"] == "review_required"
+    assert "LLM_ASSESSMENT_UNAVAILABLE" in failed_response.json()["reasonCodes"]
+
+
+def request_payload(title: str, description: str, scheduled_at: str) -> dict:
+    return {
+        "title": title,
+        "description": description,
+        "category": "other",
+        "scheduledAt": scheduled_at,
+        "estimatedMinutes": 30,
+        "requiredHelpers": 1,
+        "areaCode": "AREA-001",
+        "riskLevel": "low",
+        "confirmed": True,
+    }
+
+
+def test_create_request_rejects_high_risk_and_routes_review_required() -> None:
+    rejected = client.post(
+        "/requests",
+        headers={"Idempotency-Key": "high-risk"},
+        json=request_payload(
+            "電気工事", "コンセント交換をお願いします", "2026-08-25T10:00:00+09:00"
+        ),
+    )
+    pending = client.post(
+        "/requests",
+        headers={"Idempotency-Key": "review-risk"},
+        json=request_payload(
+            "夜間の片付け", "部屋を片付けてください", "2026-08-25T23:00:00+09:00"
+        ),
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "HIGH_RISK_REQUEST"
+    assert pending.status_code == 201
+    assert pending.json()["status"] == "pending_review"
+    assert pending.json()["riskLevel"] == "review_required"
+
+
+def test_update_request_cannot_bypass_high_risk_assessment() -> None:
+    response = client.patch(
+        "/requests/req_1024",
+        json={"description": "電気工事をしてください", "expectedVersion": 3},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "HIGH_RISK_REQUEST"
+    assert crud_module.requests_store["req_1024"]["description"] == (
+        "体調不良のため、小型犬の散歩を30分お願いしたいです。"
+    )
+    assert crud_module.requests_store["req_1024"]["status"] == "published"
+
+
+def test_invalid_llm_reason_codes_are_not_exposed() -> None:
+    async def unsafe_reason(_text: str) -> dict:
+        return {"level": "high", "reasonCodes": ["090-1234-5678"]}
+
+    crud_module.configure_risk_generator(unsafe_reason)
+    response = client.post(
+        "/requests/risk-assessment", json={"text": "内容を相談したい作業です"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["level"] == "high"
+    assert response.json()["reasonCodes"] == ["LLM_REASON_CODES_INVALID"]
+    assert "090-1234-5678" not in response.text
 
 
 def test_select_application_with_version_check() -> None:

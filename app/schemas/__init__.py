@@ -12,6 +12,7 @@ from .main import (
     RequestInput,
     RequestUpdateInput,
     ReviewInput,
+    RiskAssessmentInput,
     SelectionInput,
     StructureInput,
     VerificationInput,
