@@ -92,6 +92,13 @@ async def requester_user() -> CurrentUser:
     return REQUESTER
 
 
+def override_user(user: CurrentUser) -> None:
+    async def current_user() -> CurrentUser:
+        return user
+
+    app.dependency_overrides[get_current_user] = current_user
+
+
 def setup_function() -> None:
     app.dependency_overrides[get_current_user] = requester_user
     client.post("/_mock/reset")
@@ -357,10 +364,8 @@ def test_create_request_is_idempotent() -> None:
 
 
 def test_duplicate_application_is_rejected() -> None:
-    async def helper_user() -> CurrentUser:
-        return HELPER
-
-    app.dependency_overrides[get_current_user] = helper_user
+    override_user(HELPER)
+    crud_module.requests_store["req_1024"]["scheduledAt"] = "2099-08-19T17:00:00+09:00"
     response = client.post(
         f"/requests/{SEED_REQUEST_1024}/applications",
         json={"message": "対応できます", "availableAt": "2026-08-19T17:00:00+09:00"},
