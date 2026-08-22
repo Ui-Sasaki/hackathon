@@ -70,6 +70,13 @@ HELPER = CurrentUser(
     email_verified=True,
     verification_status="approved",
 )
+OUTSIDER = CurrentUser(
+    user_id="usr_208",
+    role="helper",
+    status="active",
+    email_verified=True,
+    verification_status="unverified",
+)
 
 
 async def requester_user() -> CurrentUser:
@@ -79,6 +86,22 @@ async def requester_user() -> CurrentUser:
 def setup_function() -> None:
     app.dependency_overrides[get_current_user] = requester_user
     client.post("/_mock/reset")
+
+
+def select_default_application() -> str:
+    response = client.post(
+        "/applications/app_55/select",
+        json={"requestId": "req_1024", "expectedVersion": 3},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def use_current_user(user: CurrentUser) -> None:
+    async def current_user() -> CurrentUser:
+        return user
+
+    app.dependency_overrides[get_current_user] = current_user
 
 
 def test_health() -> None:
@@ -155,6 +178,80 @@ def test_duplicate_application_is_rejected() -> None:
     )
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "DUPLICATE_APPLICATION"
+
+
+def test_block_relationships_are_scoped_to_the_blocker_and_hide_requests() -> None:
+    use_current_user(HELPER)
+    blocked = client.post("/users/usr_101/block", json={"blocked": True})
+    assert blocked.status_code == 201
+    assert blocked.json()["blocked"] is True
+    assert crud_module.blocks == {(HELPER.user_id, REQUESTER.user_id)}
+    assert "req_1024" not in {
+        item["id"] for item in client.get("/requests").json()["items"]
+    }
+    assert client.get("/requests/req_1024").status_code == 404
+
+    use_current_user(OUTSIDER)
+    assert client.post(
+        "/users/usr_101/block", json={"blocked": False}
+    ).status_code == 201
+    assert crud_module.blocks == {(HELPER.user_id, REQUESTER.user_id)}
+
+    use_current_user(HELPER)
+    assert client.post(
+        "/users/usr_101/block", json={"blocked": False}
+    ).status_code == 201
+    assert client.get("/requests/req_1024").status_code == 200
+
+
+def test_blocked_applications_are_hidden_and_updates_are_rejected() -> None:
+    assert client.post("/users/usr_207/block", json={"blocked": True}).status_code == 201
+    response = client.get("/requests/req_1024/applications")
+    assert [item["id"] for item in response.json()["items"]] == ["app_56"]
+    selection = client.post(
+        "/applications/app_55/select",
+        json={"requestId": "req_1024", "expectedVersion": 3},
+    )
+    assert selection.status_code == 403
+    assert selection.json()["error"]["code"] == "BLOCKED_USER_INTERACTION"
+
+    use_current_user(HELPER)
+    application = client.post(
+        "/requests/req_1024/applications",
+        json={"message": "対応できます", "availableAt": "2026-08-19T17:00:00+09:00"},
+    )
+    assert application.status_code == 403
+    assert application.json()["error"]["code"] == "BLOCKED_USER_INTERACTION"
+
+
+def test_blocked_messages_are_hidden_and_sending_resumes_after_unblock() -> None:
+    match_id = select_default_application()
+    use_current_user(HELPER)
+    first_message = client.post(
+        f"/matches/{match_id}/messages", json={"body": "明日はよろしくお願いします"}
+    )
+    assert first_message.status_code == 201
+    assert client.post("/users/usr_101/block", json={"blocked": True}).status_code == 201
+
+    use_current_user(REQUESTER)
+    assert client.get(f"/matches/{match_id}/messages").json()["items"] == []
+    rejected = client.post(
+        f"/matches/{match_id}/messages", json={"body": "こちらこそよろしくお願いします"}
+    )
+    assert rejected.status_code == 403
+    assert rejected.json()["error"]["code"] == "BLOCKED_USER_INTERACTION"
+
+    use_current_user(HELPER)
+    assert client.post(
+        "/users/usr_101/block", json={"blocked": False}
+    ).status_code == 201
+    use_current_user(REQUESTER)
+    assert client.get(f"/matches/{match_id}/messages").json()["items"] == [
+        first_message.json()
+    ]
+    assert client.post(
+        f"/matches/{match_id}/messages", json={"body": "こちらこそよろしくお願いします"}
+    ).status_code == 201
 
 
 def test_protected_endpoint_rejects_missing_session() -> None:

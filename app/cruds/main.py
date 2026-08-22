@@ -74,6 +74,7 @@ ERROR_MESSAGES = {
     "REQUEST_NOT_FOUND": "依頼が見つかりません",
     "MATCH_NOT_FOUND": "マッチが見つかりません",
     "APPLICATION_NOT_FOUND": "応募が見つかりません",
+    "BLOCKED_USER_INTERACTION": "ブロック関係にあるユーザーとは操作できません",
     "REQUEST_STATE_CONFLICT": "依頼の状態が更新されているため処理できません",
     "VALIDATION_ERROR": "入力内容を確認してください",
     "INTERNAL_SERVER_ERROR": "サーバー内部でエラーが発生しました",
@@ -363,6 +364,19 @@ def ensure_match_participant(match: dict, user_id: str) -> str:
     raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
 
 
+def users_are_blocked(first_user_id: str, second_user_id: str) -> bool:
+    """Return whether either user has blocked the other."""
+    return (first_user_id, second_user_id) in blocks or (
+        second_user_id,
+        first_user_id,
+    ) in blocks
+
+
+def ensure_users_can_interact(first_user_id: str, second_user_id: str) -> None:
+    if users_are_blocked(first_user_id, second_user_id):
+        raise HTTPException(403, detail={"code": "BLOCKED_USER_INTERACTION"})
+
+
 @app.post("/_mock/reset", tags=["Mock control"])
 async def reset_mock():
     reset_store()
@@ -414,8 +428,14 @@ async def list_requests(
     category: str | None = None,
     areaCode: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    items = [item for item in requests_store.values() if item["status"] == "published"]
+    items = [
+        item
+        for item in requests_store.values()
+        if item["status"] == "published"
+        and not users_are_blocked(current_user.user_id, item["requesterId"])
+    ]
     if category:
         items = [item for item in items if item["category"] == category]
     if areaCode:
@@ -451,8 +471,14 @@ async def create_request(
 
 
 @app.get("/requests/{request_id}", tags=["Requests"])
-async def get_request(request_id: str):
-    return request_or_404(request_id)
+async def get_request(
+    request_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    item = request_or_404(request_id)
+    if users_are_blocked(current_user.user_id, item["requesterId"]):
+        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
+    return item
 
 
 @app.patch("/requests/{request_id}", tags=["Requests"])
@@ -510,6 +536,7 @@ async def list_applications(
             {**item, "helper": HELPERS[item["helperId"]]}
             for item in applications.values()
             if item["requestId"] == request_id
+            and not users_are_blocked(current_user.user_id, item["helperId"])
         ]
     }
 
@@ -525,6 +552,7 @@ async def create_application(
         raise HTTPException(409, detail={"code": "REQUEST_NOT_OPEN"})
     if request_item["requesterId"] == current_user.user_id:
         raise HTTPException(403, detail={"code": "SELF_APPLICATION_NOT_ALLOWED"})
+    ensure_users_can_interact(current_user.user_id, request_item["requesterId"])
     if any(
         item["requestId"] == request_id
         and item["helperId"] == current_user.user_id
@@ -575,6 +603,7 @@ async def select_application(
     request_item = request_or_404(body.requestId)
     if request_item["requesterId"] != current_user.user_id:
         raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+    ensure_users_can_interact(current_user.user_id, application["helperId"])
     if request_item["version"] != body.expectedVersion:
         raise HTTPException(
             409,
@@ -621,8 +650,20 @@ async def list_messages(
     match_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    ensure_match_participant(match_or_404(match_id), current_user.user_id)
-    return {"items": messages.get(match_id, []), "nextCursor": None}
+    match = match_or_404(match_id)
+    ensure_match_participant(match, current_user.user_id)
+    other_user_id = (
+        match["helperId"]
+        if current_user.user_id == match["requesterId"]
+        else match["requesterId"]
+    )
+    items = [
+        item
+        for item in messages.get(match_id, [])
+        if item["senderId"] != other_user_id
+        or not users_are_blocked(current_user.user_id, other_user_id)
+    ]
+    return {"items": items, "nextCursor": None}
 
 
 @app.post("/matches/{match_id}/messages", status_code=201, tags=["Messages"])
@@ -631,7 +672,14 @@ async def create_message(
     body: MessageInput,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    ensure_match_participant(match_or_404(match_id), current_user.user_id)
+    match = match_or_404(match_id)
+    ensure_match_participant(match, current_user.user_id)
+    other_user_id = (
+        match["helperId"]
+        if current_user.user_id == match["requesterId"]
+        else match["requesterId"]
+    )
+    ensure_users_can_interact(current_user.user_id, other_user_id)
     item = {
         "id": new_id("msg"),
         "matchId": match_id,
@@ -809,7 +857,11 @@ async def set_user_block(
     if user_id == current_user.user_id:
         raise HTTPException(422, detail={"code": "SELF_BLOCK_NOT_ALLOWED"})
     if body.blocked:
-        blocks.add(user_id)
+        blocks.add((current_user.user_id, user_id))
     else:
-        blocks.discard(user_id)
-    return {"userId": user_id, "blocked": user_id in blocks, "updatedAt": now_iso()}
+        blocks.discard((current_user.user_id, user_id))
+    return {
+        "userId": user_id,
+        "blocked": (current_user.user_id, user_id) in blocks,
+        "updatedAt": now_iso(),
+    }
