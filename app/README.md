@@ -100,6 +100,15 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
 
+### 依頼一覧・検索
+
+`GET /requests` は `category`、`scheduledFrom`、`scheduledTo`、
+`maxDistanceKm`、`requiredHelpers`、`verificationStatus` で公開中の依頼を検索する。
+`latitude` と `longitude` は必ず組で指定し、省略時は認証ユーザーの登録地域
+（`areaCode`）を検索起点として利用する。標準取得件数は20件、`limit` の上限は100件で、
+続きはレスポンスの `nextCursor` を `cursor` に指定して取得する。期限切れや募集終了した
+依頼は含まれず、レスポンスには番地および正確な緯度・経度を含めない。
+
 ## エラーレスポンスとトレースID
 
 400、401、403、404、409、422、500 のエラーは、次の共通形式で返す。

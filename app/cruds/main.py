@@ -1,6 +1,10 @@
 from copy import deepcopy
+import base64
+import binascii
 from datetime import datetime, timezone
+import json
 import logging
+import math
 import os
 from typing import Any
 from uuid import uuid4
@@ -220,7 +224,7 @@ INITIAL_REQUESTS = [
         "areaCode": "AREA-001",
         "areaLabel": "大学周辺・約1km",
         "distanceKm": 1.2,
-        "scheduledAt": "2026-08-19T17:00:00+09:00",
+        "scheduledAt": "2026-08-29T17:00:00+09:00",
         "estimatedMinutes": 30,
         "requiredHelpers": 1,
         "acceptedHelpers": 0,
@@ -228,6 +232,9 @@ INITIAL_REQUESTS = [
         "version": 3,
         "warnings": ["犬の性格とリードの状態を事前に確認してください"],
         "createdAt": "2026-08-18T10:00:00+09:00",
+        "latitude": 35.6812,
+        "longitude": 139.7671,
+        "streetAddress": "公開してはいけない番地",
     },
     {
         "id": "req_1025",
@@ -239,7 +246,7 @@ INITIAL_REQUESTS = [
         "areaCode": "AREA-001",
         "areaLabel": "大学北側・約2km",
         "distanceKm": 2.1,
-        "scheduledAt": "2026-08-20T09:00:00+09:00",
+        "scheduledAt": "2026-08-30T09:00:00+09:00",
         "estimatedMinutes": 45,
         "requiredHelpers": 2,
         "acceptedHelpers": 0,
@@ -247,6 +254,9 @@ INITIAL_REQUESTS = [
         "version": 1,
         "warnings": ["悪天候時は活動を中止してください"],
         "createdAt": "2026-08-18T11:00:00+09:00",
+        "latitude": 35.6900,
+        "longitude": 139.7700,
+        "streetAddress": "非公開の集合場所",
     },
 ]
 
@@ -267,6 +277,16 @@ HELPERS = {
         "skillTags": ["ペット支援"],
         "achievementCount": 3,
     },
+}
+
+AREA_CENTERS = {
+    "AREA-001": (35.6812, 139.7671),
+}
+
+PUBLIC_REQUEST_FIELDS = {
+    "id", "requesterId", "title", "description", "category", "riskLevel",
+    "areaCode", "areaLabel", "scheduledAt", "estimatedMinutes",
+    "requiredHelpers", "acceptedHelpers", "status", "warnings", "createdAt",
 }
 
 
@@ -291,6 +311,11 @@ def reset_store() -> None:
         "usr_208": {
             **HELPERS["usr_208"], "role": "helper", "status": "active",
             "emailVerified": True,
+        },
+        "usr_301": {
+            "id": "usr_301", "displayName": "鈴木 雪", "role": "requester",
+            "status": "active", "emailVerified": True,
+            "verificationStatus": "unverified", "areaCode": "AREA-001",
         },
     }
     requests_store = {item["id"]: deepcopy(item) for item in INITIAL_REQUESTS}
@@ -409,18 +434,149 @@ async def structure_request(
     }
 
 
+def parse_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def distance_km(
+    latitude: float, longitude: float, target_latitude: float, target_longitude: float,
+) -> float:
+    """Return the great-circle distance without exposing either coordinate."""
+
+    earth_radius_km = 6371.0
+    lat1, lat2 = math.radians(latitude), math.radians(target_latitude)
+    delta_lat = math.radians(target_latitude - latitude)
+    delta_lon = math.radians(target_longitude - longitude)
+    haversine = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lon / 2) ** 2
+    )
+    return earth_radius_km * 2 * math.atan2(math.sqrt(haversine), math.sqrt(1 - haversine))
+
+
+def encode_request_cursor(item: dict) -> str:
+    payload = json.dumps(
+        {"createdAt": item["createdAt"], "id": item["id"]},
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def decode_request_cursor(cursor: str) -> tuple[str, str]:
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(cursor + padding))
+        return payload["createdAt"], payload["id"]
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError, binascii.Error) as exc:
+        raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+
+
+def public_request(item: dict, requester_distance_km: float) -> dict:
+    response = {key: item[key] for key in PUBLIC_REQUEST_FIELDS if key in item}
+    response["distanceKm"] = round(requester_distance_km, 1)
+    response["requesterVerificationStatus"] = users_store.get(
+        item["requesterId"], {}
+    ).get("verificationStatus", "unverified")
+    return response
+
+
 @app.get("/requests", tags=["Requests"])
 async def list_requests(
     category: str | None = None,
     areaCode: str | None = None,
+    scheduledFrom: datetime | None = None,
+    scheduledTo: datetime | None = None,
+    maxDistanceKm: float | None = Query(default=None, gt=0, le=100),
+    requiredHelpers: int | None = Query(default=None, ge=1, le=5),
+    verificationStatus: str | None = Query(
+        default=None, pattern="^(unverified|pending|approved|rejected)$",
+    ),
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+    cursor: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    items = [item for item in requests_store.values() if item["status"] == "published"]
+    if (latitude is None) != (longitude is None):
+        raise HTTPException(422, detail={"code": "INCOMPLETE_LOCATION"})
+    if scheduledFrom and scheduledFrom.tzinfo is None:
+        scheduledFrom = scheduledFrom.replace(tzinfo=timezone.utc)
+    if scheduledTo and scheduledTo.tzinfo is None:
+        scheduledTo = scheduledTo.replace(tzinfo=timezone.utc)
+    if scheduledFrom and scheduledTo and scheduledFrom > scheduledTo:
+        raise HTTPException(422, detail={"code": "INVALID_DATE_RANGE"})
+
+    if latitude is None:
+        fallback_area = areaCode or users_store[current_user.user_id].get("areaCode")
+        if fallback_area not in AREA_CENTERS:
+            raise HTTPException(422, detail={"code": "LOCATION_REQUIRED"})
+        latitude, longitude = AREA_CENTERS[fallback_area]
+
+    now = datetime.now(timezone.utc)
+    items_with_distance = []
+    for item in requests_store.values():
+        if item["status"] != "published" or parse_datetime(item["scheduledAt"]) <= now:
+            continue
+        item_distance = distance_km(
+            latitude, longitude, item["latitude"], item["longitude"],
+        )
+        items_with_distance.append((item, item_distance))
+
     if category:
-        items = [item for item in items if item["category"] == category]
+        items_with_distance = [
+            pair for pair in items_with_distance if pair[0]["category"] == category
+        ]
     if areaCode:
-        items = [item for item in items if item["areaCode"] == areaCode]
-    return {"items": items[:limit], "nextCursor": None}
+        items_with_distance = [
+            pair for pair in items_with_distance if pair[0]["areaCode"] == areaCode
+        ]
+    if scheduledFrom:
+        items_with_distance = [
+            pair for pair in items_with_distance
+            if parse_datetime(pair[0]["scheduledAt"]) >= scheduledFrom
+        ]
+    if scheduledTo:
+        items_with_distance = [
+            pair for pair in items_with_distance
+            if parse_datetime(pair[0]["scheduledAt"]) <= scheduledTo
+        ]
+    if maxDistanceKm is not None:
+        items_with_distance = [
+            pair for pair in items_with_distance if pair[1] <= maxDistanceKm
+        ]
+    if requiredHelpers is not None:
+        items_with_distance = [
+            pair for pair in items_with_distance if pair[0]["requiredHelpers"] == requiredHelpers
+        ]
+    if verificationStatus:
+        items_with_distance = [
+            pair for pair in items_with_distance
+            if users_store.get(pair[0]["requesterId"], {}).get("verificationStatus")
+            == verificationStatus
+        ]
+
+    items_with_distance.sort(
+        key=lambda pair: (pair[0]["createdAt"], pair[0]["id"]), reverse=True,
+    )
+    if cursor:
+        cursor_key = decode_request_cursor(cursor)
+        items_with_distance = [
+            pair for pair in items_with_distance
+            if (pair[0]["createdAt"], pair[0]["id"]) < cursor_key
+        ]
+    page = items_with_distance[:limit]
+    next_cursor = (
+        encode_request_cursor(page[-1][0])
+        if len(items_with_distance) > limit
+        else None
+    )
+    return {
+        "items": [public_request(item, item_distance) for item, item_distance in page],
+        "nextCursor": next_cursor,
+    }
 
 
 @app.post("/requests", status_code=201, tags=["Requests"])
@@ -444,15 +600,19 @@ async def create_request(
         "version": 1,
         "warnings": [],
         "createdAt": now_iso(),
+        "latitude": AREA_CENTERS.get(body.areaCode, AREA_CENTERS["AREA-001"])[0],
+        "longitude": AREA_CENTERS.get(body.areaCode, AREA_CENTERS["AREA-001"])[1],
     }
     requests_store[request_id] = item
-    idempotency_store[cache_key] = item
-    return item
+    response = public_request(item, 0.0)
+    idempotency_store[cache_key] = response
+    return response
 
 
 @app.get("/requests/{request_id}", tags=["Requests"])
 async def get_request(request_id: str):
-    return request_or_404(request_id)
+    item = request_or_404(request_id)
+    return public_request(item, item.get("distanceKm", 0.0))
 
 
 @app.patch("/requests/{request_id}", tags=["Requests"])
