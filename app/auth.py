@@ -13,13 +13,21 @@ from fastapi.security import APIKeyCookie
 SUPERTOKENS_ENABLED = os.getenv("SUPERTOKENS_ENABLED", "true").lower() in {
     "1", "true", "yes", "on"
 }
+AUTH_MOCK_ENABLED = os.getenv("AUTH_MOCK_ENABLED", "false").lower() in {
+    "1", "true", "yes", "on"
+}
+AUTH_MOCK_USER_ID = os.getenv("AUTH_MOCK_USER_ID", "usr_101")
+AUTH_MOCK_USER_HEADER = "X-Mock-User-Id"
 
 if SUPERTOKENS_ENABLED:
     from supertokens_python import InputAppInfo, SupertokensConfig, get_all_cors_headers, init
     from supertokens_python.exceptions import SuperTokensError
     from supertokens_python.recipe import emailpassword, multifactorauth, session
     from supertokens_python.recipe.emailpassword import EmailPasswordOverrideConfig
-    from supertokens_python.recipe.emailpassword.interfaces import PasswordResetPostOkResult
+    from supertokens_python.recipe.emailpassword.interfaces import (
+        PasswordResetPostOkResult,
+        SignUpPostOkResult,
+    )
     from supertokens_python.recipe.session.asyncio import revoke_all_sessions_for_user
     from supertokens_python.recipe.session.framework.fastapi import verify_session
 
@@ -55,8 +63,25 @@ def _env_bool(name: str, default: bool) -> bool:
     return os.getenv(name, str(default)).lower() in {"1", "true", "yes", "on"}
 
 
+_user_creator: Callable[[str], None] = lambda _user_id: None
+
+
+def configure_user_creator(creator: Callable[[str], None]) -> None:
+    """Configure application-profile creation after a successful sign-up."""
+
+    global _user_creator
+    _user_creator = creator
+
+
 def _override_emailpassword_apis(original):
+    original_sign_up_post = original.sign_up_post
     original_password_reset_post = original.password_reset_post
+
+    async def sign_up_post(*args, **kwargs):
+        result = await original_sign_up_post(*args, **kwargs)
+        if isinstance(result, SignUpPostOkResult):
+            _user_creator(result.user.id)
+        return result
 
     async def password_reset_post(*args, **kwargs):
         result = await original_password_reset_post(*args, **kwargs)
@@ -66,6 +91,7 @@ def _override_emailpassword_apis(original):
             await revoke_all_sessions_for_user(result.user.id)
         return result
 
+    original.sign_up_post = sign_up_post
     original.password_reset_post = password_reset_post
     return original
 
@@ -108,9 +134,12 @@ initialise_supertokens()
 
 
 def cors_headers() -> list[str]:
+    headers = ["Content-Type", "Idempotency-Key"]
+    if AUTH_MOCK_ENABLED:
+        headers.append(AUTH_MOCK_USER_HEADER)
     if not SUPERTOKENS_ENABLED:
-        return ["Content-Type", "Idempotency-Key"]
-    return ["Content-Type", "Idempotency-Key", *get_all_cors_headers()]
+        return headers
+    return [*headers, *get_all_cors_headers()]
 
 
 # Supabase will replace this lookup. Keeping it injectable makes session tests
@@ -141,20 +170,11 @@ async def get_current_user(
         raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
 
     user_id = verified.get_user_id()
-    record = _user_lookup(user_id)
-    if record is None:
-        raise HTTPException(403, detail={"code": "USER_PROFILE_NOT_FOUND"})
-    if record.get("status") != "active":
-        raise HTTPException(403, detail={"code": "USER_SUSPENDED"})
-
     payload = verified.get_access_token_payload()
     mfa_claim = payload.get("st-mfa", {})
-    return CurrentUser(
-        user_id=user_id,
-        role=record["role"],
-        status=record["status"],
-        email_verified=record.get("emailVerified", False),
-        verification_status=record.get("verificationStatus", "unverified"),
+    return _current_user_from_record(
+        user_id,
+        _user_lookup(user_id),
         mfa_completed=bool(mfa_claim.get("v", False)),
     )
 

@@ -1,9 +1,13 @@
+from copy import deepcopy
+import base64
+import binascii
 from datetime import datetime, timezone
+import json
 import logging
 import math
 import os
-from typing import Any
-import uuid
+import re
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -15,7 +19,8 @@ from pydantic import ValidationError
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.auth import (
-    SUPERTOKENS_ENABLED, CurrentUser, configure_user_lookup, cors_headers, get_current_user,
+    SUPERTOKENS_ENABLED, CurrentUser, configure_user_creator, configure_user_lookup,
+    cors_headers, get_current_user,
 )
 from app.repositories.requests import RequestRepository, get_request_repository
 from app.repositories.applications import (
@@ -331,6 +336,16 @@ HELPERS = {
     },
 }
 
+AREA_CENTERS = {
+    "AREA-001": (35.6812, 139.7671),
+}
+
+PUBLIC_REQUEST_FIELDS = {
+    "id", "requesterId", "title", "description", "category", "riskLevel",
+    "areaCode", "areaLabel", "scheduledAt", "estimatedMinutes",
+    "requiredHelpers", "acceptedHelpers", "status", "warnings", "createdAt",
+}
+
 
 def reset_store() -> None:
     global applications, matches, messages, reviews, achievements
@@ -354,6 +369,11 @@ def reset_store() -> None:
         "usr_208": {
             **HELPERS["usr_208"], "role": "member", "status": "active",
             "emailVerified": True,
+        },
+        "usr_301": {
+            "id": "usr_301", "displayName": "鈴木 雪", "role": "requester",
+            "status": "active", "emailVerified": True,
+            "verificationStatus": "unverified", "areaCode": "AREA-001",
         },
     }
     applications = {
@@ -391,6 +411,23 @@ reset_store()
 configure_user_lookup(lambda user_id: users_store.get(user_id))
 
 
+def create_user_profile(user_id: str) -> None:
+    """Create the application-side profile linked to a SuperTokens user."""
+
+    users_store.setdefault(
+        user_id,
+        {
+            "id": user_id,
+            "displayName": "",
+            "role": "requester",
+            "status": "active",
+            "emailVerified": False,
+            "verificationStatus": "unverified",
+        },
+    )
+
+
+configure_user_creator(create_user_profile)
 def match_or_404(match_id: str) -> dict:
     return get_or_404(matches, match_id, "MATCH_NOT_FOUND")
 
@@ -502,6 +539,15 @@ async def structure_request(
     body: StructureInput,
     _current_user: CurrentUser = Depends(get_current_user),
 ):
+    masking = mask_request_text(body.text)
+    if masking["hasDetections"] and not body.maskingConfirmed:
+        masking_metrics["confirmationRequired"] += 1
+        return {
+            **masking,
+            "status": "masking_confirmation_required",
+            "requiresMaskingConfirmation": True,
+            "message": "マスキング箇所を確認し、必要なら元の入力を修正してください",
+        }
     if any(word in body.text for word in ["電気工事", "医療行為", "介護", "送迎"]):
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
     is_dog = "犬" in body.text or "散歩" in body.text
