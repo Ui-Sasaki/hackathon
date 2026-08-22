@@ -17,7 +17,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.auth import (
     SUPERTOKENS_ENABLED, CurrentUser, configure_user_lookup, cors_headers, get_current_user,
 )
-from app.db import actor_connection, admin_connection
+from app.repositories.requests import RequestRepository, get_request_repository
+from app.services.requests import cancel_owned_request, require_request, update_owned_request
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
@@ -239,6 +240,11 @@ class RequestIdMiddleware:
 app.add_middleware(RequestIdMiddleware)
 
 
+async def request_repository_dependency() -> RequestRepository:
+    """Resolve the configured repository without a test-time threadpool hop."""
+    return get_request_repository()
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -260,11 +266,6 @@ def get_or_404(store: dict, entity_id: str, error_code: str) -> dict:
 # 'tetote:seed:req_1024' / 'tetote:seed:req_1025'）で再現可能に生成した。
 SEED_REQUEST_1024 = "5fcfec7f-a8b0-58d4-931e-593d60355ee3"
 SEED_REQUEST_1025 = "39521aee-fc9b-5be6-9652-b3cf45d9107f"
-
-# areaLabel・distanceKm は実際の距離計算（#5・F-02）が入るまでの固定プレースホルダー。
-# 依頼ごとに異なる値を持たせても意味が無いため、新規作成時と同じ値に統一する。
-PLACEHOLDER_AREA_LABEL = "大学周辺・約1km"
-PLACEHOLDER_DISTANCE_KM = 1.0
 
 HELPERS = {
     "usr_207": {
@@ -407,10 +408,10 @@ async def require_mock_environment() -> None:
 async def reset_mock(
     _: None = Depends(require_mock_environment),
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     reset_store()
-    async with admin_connection() as conn:
-        await conn.execute("select app.mock_reset_requests()")
+    await repository.reset()
     return {"reset": True}
 
 
@@ -468,66 +469,10 @@ async def structure_request(
     }
 
 
-def _fmt_ts(value) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat().replace("+00:00", "Z")
-
-
-def _request_row_to_api(row) -> dict:
-    return {
-        "id": str(row["id"]),
-        "requesterId": row["requester_auth_subject"],
-        "title": row["title"],
-        # original_text は #20 が懸念する「AI構造化前の生入力」の露出ではなく、
-        # create_request 以来この API が返してきた description そのものである。
-        "description": row["original_text"],
-        "category": row["category_id"],
-        "riskLevel": row["risk_level"],
-        "areaCode": row["area_code"],
-        # 実距離計算は #5 / F-02 の対象。それまでは新規作成時と同じ固定値にする。
-        "areaLabel": PLACEHOLDER_AREA_LABEL,
-        "distanceKm": PLACEHOLDER_DISTANCE_KM,
-        "acceptedHelpers": row["accepted_helpers"],
-        "scheduledAt": _fmt_ts(row["scheduled_at"]),
-        "estimatedMinutes": row["estimated_minutes"],
-        "requiredHelpers": row["required_helpers"],
-        "status": row["status"],
-        "version": row["version"],
-        "warnings": [],
-        "createdAt": _fmt_ts(row["created_at"]),
-        "updatedAt": _fmt_ts(row["updated_at"]),
-    }
-    # approximate_latitude / approximate_longitude / structured_content は、
-    # 認証なしでも読める経路が無くなった今でも、公開レスポンスへ含めない（#20）。
-
-
-async def _fetch_request(conn, request_id: str):
-    return await conn.fetchrow(
-        """
-        select r.id, r.title, r.original_text, r.category_id, r.risk_level,
-               r.area_code, r.scheduled_at, r.estimated_minutes, r.required_helpers,
-               r.status, r.version, r.created_at, r.updated_at,
-               app.auth_subject_of(r.requester_id) as requester_auth_subject,
-               (select count(*) from matches m where m.request_id = r.id) as accepted_helpers
-          from requests r
-         where r.id = $1
-        """,
-        request_id,
-    )
-
-
-async def request_or_404(conn, request_id: str) -> dict:
-    try:
-        parsed_id = uuid.UUID(request_id)
-    except ValueError:
-        # id が uuid の形をしていない時点で存在しないと分かる。素通しすると
-        # asyncpg が DB 側の型エラーを 500 として投げてしまう。
-        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
-    row = await _fetch_request(conn, parsed_id)
-    if row is None:
-        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
-    return _request_row_to_api(row)
+async def request_or_404(
+    repository: RequestRepository, current_user: CurrentUser, request_id: str,
+) -> dict:
+    return await require_request(repository, current_user, request_id)
 
 
 @app.get("/requests", tags=["Requests"])
@@ -542,6 +487,7 @@ async def list_requests(
     ),
     limit: int = Query(default=20, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     try:
         location = LocationResolveInput(
@@ -553,26 +499,9 @@ async def list_requests(
     except ValidationError:
         raise HTTPException(422, detail={"code": "VALIDATION_ERROR"}) from None
     origin_area_code, source = resolve_location(location, current_user, areaCode)
-    async with actor_connection(current_user) as conn:
-        rows = await conn.fetch(
-            """
-            select r.id, r.title, r.original_text, r.category_id, r.risk_level,
-                   r.area_code, r.scheduled_at, r.estimated_minutes, r.required_helpers,
-                   r.status, r.version, r.created_at, r.updated_at,
-                   app.auth_subject_of(r.requester_id) as requester_auth_subject,
-                   (select count(*) from matches m where m.request_id = r.id) as accepted_helpers
-              from requests r
-             where r.status = 'published'
-               and ($1::text is null or r.category_id = $1)
-               and ($2::text is null or r.area_code = $2)
-             order by r.created_at desc, r.id desc
-             limit $3
-            """,
-            category,
-            areaCode,
-            limit,
-        )
-    items = [_request_row_to_api(row) for row in rows]
+    items = await repository.list(
+        current_user, category=category, area_code=areaCode, limit=limit,
+    )
     items = [
         item for item in items
         if not is_blocked_pair(current_user.user_id, item["requesterId"])
@@ -597,34 +526,18 @@ async def create_request(
     body: RequestInput,
     idempotency_key: str = Header(alias="Idempotency-Key"),
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     cache_key = ("create_request", current_user.user_id, idempotency_key)
     if cache_key in idempotency_store:
         return idempotency_store[cache_key]
-    area_code, _source = resolve_location(body.location, current_user, body.areaCode)
-    async with actor_connection(current_user) as conn:
-        row = await conn.fetchrow(
-            """
-            insert into requests (
-                requester_id, title, original_text, category_id, risk_level,
-                area_code, scheduled_at, estimated_minutes, required_helpers
-            ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            returning id, title, original_text, category_id, risk_level,
-                      area_code, scheduled_at, estimated_minutes, required_helpers,
-                      status, version, created_at, updated_at
-            """,
-            await conn.fetchval("select app.current_actor()"),
-            body.title,
-            body.description,
-            body.category,
-            body.riskLevel,
-            area_code,
-            datetime.fromisoformat(body.scheduledAt),
-            body.estimatedMinutes,
-            body.requiredHelpers,
-        )
-        item = _request_row_to_api({**dict(row), "requester_auth_subject": current_user.user_id,
-                                     "accepted_helpers": 0})
+    area_code, _source = resolve_location(None, current_user, body.areaCode)
+    item = await repository.create(current_user, {
+        "title": body.title, "description": body.description, "category": body.category,
+        "riskLevel": body.riskLevel, "areaCode": area_code,
+        "scheduledAt": body.scheduledAt, "estimatedMinutes": body.estimatedMinutes,
+        "requiredHelpers": body.requiredHelpers,
+    })
     idempotency_store[cache_key] = item
     return item
 
@@ -637,9 +550,9 @@ async def create_request(
 async def get_request(
     request_id: str,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
-    async with actor_connection(current_user) as conn:
-        item = await request_or_404(conn, request_id)
+    item = await request_or_404(repository, current_user, request_id)
     if is_blocked_pair(current_user.user_id, item["requesterId"]):
         raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
     return item
@@ -650,55 +563,21 @@ async def update_request(
     request_id: str,
     body: RequestUpdateInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
-    async with actor_connection(current_user) as conn:
-        item = await request_or_404(conn, request_id)
-        if item["requesterId"] != current_user.user_id:
-            raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-        if item["status"] not in {"draft", "pending_review", "published"}:
-            raise HTTPException(409, detail={"code": "REQUEST_NOT_EDITABLE"})
-        if item["version"] != body.expectedVersion:
-            raise HTTPException(
-                409, detail={"code": "REQUEST_STATE_CONFLICT", "currentVersion": item["version"]}
-            )
-        changes = body.model_dump(exclude={"expectedVersion"}, exclude_none=True)
-        if "requiredHelpers" in changes and changes["requiredHelpers"] < item["acceptedHelpers"]:
-            raise HTTPException(409, detail={"code": "HELPER_COUNT_CONFLICT"})
-        if not changes:
-            return item
-        # version は関数側の WHERE でも検査する。request_or_404 の読み取りと
-        # この呼び出しの間に他の更新が割り込んでいたら、0件更新で楽観ロックが働く。
-        updated = await conn.fetchval(
-            "select app.update_request($1, $2, $3, $4, $5, $6, $7)",
-            uuid.UUID(request_id),
-            item["version"],
-            changes.get("title"),
-            changes.get("description"),
-            datetime.fromisoformat(changes["scheduledAt"]) if "scheduledAt" in changes else None,
-            changes.get("estimatedMinutes"),
-            changes.get("requiredHelpers"),
-        )
-        if updated is None:
-            raise HTTPException(
-                409, detail={"code": "REQUEST_STATE_CONFLICT", "currentVersion": item["version"]}
-            )
-        return await request_or_404(conn, request_id)
+    changes = body.model_dump(exclude={"expectedVersion"}, exclude_none=True)
+    return await update_owned_request(
+        repository, current_user, request_id, body.expectedVersion, changes,
+    )
 
 
 @app.delete("/requests/{request_id}", status_code=204, tags=["Requests"])
 async def cancel_request(
     request_id: str,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
-    async with actor_connection(current_user) as conn:
-        item = await request_or_404(conn, request_id)
-        if item["requesterId"] != current_user.user_id:
-            raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-        if item["status"] in {"completed", "cancelled"}:
-            raise HTTPException(409, detail={"code": "INVALID_REQUEST_TRANSITION"})
-        await conn.fetchval(
-            "select app.set_request_status($1, 'cancelled')", uuid.UUID(request_id)
-        )
+    await cancel_owned_request(repository, current_user, request_id)
     for application in applications.values():
         if application["requestId"] == request_id and application["status"] == "applied":
             application["status"] = "cancelled"
@@ -709,9 +588,9 @@ async def cancel_request(
 async def list_applications(
     request_id: str,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
-    async with actor_connection(current_user) as conn:
-        request_item = await request_or_404(conn, request_id)
+    request_item = await request_or_404(repository, current_user, request_id)
     if request_item["requesterId"] != current_user.user_id:
         raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
     return {
@@ -729,9 +608,9 @@ async def create_application(
     request_id: str,
     body: ApplicationInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
-    async with actor_connection(current_user) as conn:
-        request_item = await request_or_404(conn, request_id)
+    request_item = await request_or_404(repository, current_user, request_id)
     if is_blocked_pair(current_user.user_id, request_item["requesterId"]):
         raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
     if request_item["status"] != "published":
@@ -779,50 +658,34 @@ async def select_application(
     application_id: str,
     body: SelectionInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     application = applications.get(application_id)
     if not application:
         raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
     if application["requestId"] != body.requestId:
         raise HTTPException(409, detail={"code": "APPLICATION_REQUEST_MISMATCH"})
-    async with actor_connection(current_user) as conn:
-        request_item = await request_or_404(conn, body.requestId)
-        if request_item["requesterId"] != current_user.user_id:
-            raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-        if request_item["version"] != body.expectedVersion:
-            raise HTTPException(
-                409,
-                detail={
-                    "code": "REQUEST_STATE_CONFLICT",
-                    "currentVersion": request_item["version"],
-                },
-            )
-        if application["status"] != "applied":
-            raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
-        if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
-            raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
-        # matches への insert が accepted_helpers の増分そのものなので、この値自体は
-        # どこにも永続化しない。#7 が実装する排他ロック（トランザクション境界・
-        # 同時実行制御）はここでは行わない。既存の振る舞いを壊さないための
-        # 最小限の書き込みに留める。
-        capacity_reached = (
-            request_item["acceptedHelpers"] + 1 >= request_item["requiredHelpers"]
-        )
-        new_status = "matched" if capacity_reached else "matching"
-        updated = await conn.fetchval(
-            "select app.set_request_status($1, $2::request_status, $3)",
-            uuid.UUID(request_item["id"]),
-            new_status,
-            request_item["version"],
-        )
-        if updated is None:
-            raise HTTPException(
-                409,
-                detail={
-                    "code": "REQUEST_STATE_CONFLICT",
-                    "currentVersion": request_item["version"],
-                },
-            )
+    request_item = await request_or_404(repository, current_user, body.requestId)
+    if request_item["requesterId"] != current_user.user_id:
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+    if request_item["version"] != body.expectedVersion:
+        raise HTTPException(409, detail={
+            "code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"],
+        })
+    if application["status"] != "applied":
+        raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
+    if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
+        raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
+    capacity_reached = request_item["acceptedHelpers"] + 1 >= request_item["requiredHelpers"]
+    new_status = "matched" if capacity_reached else "matching"
+    updated = await repository.set_status(
+        current_user, request_item["id"], new_status,
+        expected_version=request_item["version"],
+    )
+    if not updated:
+        raise HTTPException(409, detail={
+            "code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"],
+        })
     application["status"] = "selected"
     if capacity_reached:
         for other in applications.values():
@@ -900,6 +763,7 @@ async def complete_match(
     match_id: str,
     body: CompletionInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     match = match_or_404(match_id)
     actor_role = ensure_match_participant(match, current_user.user_id)
@@ -915,17 +779,9 @@ async def complete_match(
     else:
         match["status"] = "completion_pending"
         new_request_status = "completion_pending"
-    async with actor_connection(current_user) as conn:
-        # The match participant check above is the authorization boundary.
-        # A helper cannot directly read the request after it leaves the
-        # published state under RLS, but must still be able to confirm
-        # completion. The server-owned match supplies the request ID to the
-        # constrained transition function.
-        await conn.fetchval(
-            "select app.set_request_status($1, $2::request_status, null, false)",
-            uuid.UUID(match["requestId"]),
-            new_request_status,
-        )
+    await repository.set_status(
+        current_user, match["requestId"], new_request_status, bump_version=False,
+    )
     return match
 
 
@@ -934,18 +790,17 @@ async def dispute_match(
     match_id: str,
     body: DisputeInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     match = match_or_404(match_id)
     ensure_match_participant(match, current_user.user_id)
     if match["status"] in {"completed", "disputed"}:
         raise HTTPException(409, detail={"code": "MATCH_NOT_DISPUTABLE"})
     match.update({"status": "disputed", "disputeReason": body.reason, "disputedAt": now_iso()})
-    async with actor_connection(current_user) as conn:
-        await request_or_404(conn, match["requestId"])
-        await conn.fetchval(
-            "select app.set_request_status($1, 'disputed', null, false)",
-            uuid.UUID(match["requestId"]),
-        )
+    await request_or_404(repository, current_user, match["requestId"])
+    await repository.set_status(
+        current_user, match["requestId"], "disputed", bump_version=False,
+    )
     return match
 
 
@@ -980,13 +835,13 @@ async def create_review(
 async def generate_achievement(
     body: AchievementInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     match = match_or_404(body.matchId)
     ensure_match_participant(match, current_user.user_id)
     if match["status"] != "completed":
         raise HTTPException(409, detail={"code": "MATCH_NOT_COMPLETED"})
-    async with actor_connection(current_user) as conn:
-        request_item = await request_or_404(conn, match["requestId"])
+    request_item = await request_or_404(repository, current_user, match["requestId"])
     item = {
         "id": new_id("ach"),
         "userId": match["helperId"],
@@ -1051,6 +906,7 @@ async def create_verification(
 async def create_report(
     body: ReportInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     item = {
         "id": new_id("report"),
@@ -1074,10 +930,7 @@ async def create_report(
         except ValueError:
             target_id = None
         if target_id is not None:
-            async with actor_connection(current_user) as conn:
-                await conn.fetchval(
-                    "select app.set_request_status($1, 'suspended')", target_id
-                )
+            await repository.set_status(current_user, str(target_id), "suspended")
             record_audit_event(
                 actor_id=current_user.user_id,
                 event_type="request_auto_suspended",
