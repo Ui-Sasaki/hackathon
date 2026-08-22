@@ -294,6 +294,13 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:8]}"
 
 
+def parse_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def get_or_404(store: dict, entity_id: str, error_code: str) -> dict:
     item = store.get(entity_id)
     if item is None:
@@ -531,7 +538,6 @@ def reset_store() -> None:
 
 reset_store()
 configure_user_lookup(lambda user_id: users_store.get(user_id))
-
 
 def create_user_profile(user_id: str) -> None:
     """Create the application-side profile linked to a SuperTokens user."""
@@ -935,14 +941,22 @@ async def create_application(
     body: ApplicationInput,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    async with actor_connection(current_user) as conn:
-        request_item = await request_or_404(conn, request_id)
-    if is_blocked_pair(current_user.user_id, request_item["requesterId"]):
-        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
+    request_item = request_or_404(request_id)
+    if current_user.status != "active":
+        raise HTTPException(403, detail={"code": "USER_SUSPENDED"})
+    if current_user.role != "helper":
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
     if request_item["status"] != "published":
         raise HTTPException(409, detail={"code": "REQUEST_NOT_OPEN"})
+    if parse_datetime(request_item["scheduledAt"]) <= datetime.now(timezone.utc):
+        raise HTTPException(409, detail={"code": "REQUEST_EXPIRED"})
     if request_item["requesterId"] == current_user.user_id:
         raise HTTPException(403, detail={"code": "SELF_APPLICATION_NOT_ALLOWED"})
+    if (
+        request_item.get("verificationRequired", False)
+        and current_user.verification_status != "approved"
+    ):
+        raise HTTPException(403, detail={"code": "VERIFICATION_REQUIRED"})
     if any(
         item["requestId"] == request_id
         and item["helperId"] == current_user.user_id
@@ -967,6 +981,8 @@ async def withdraw_application(
     application_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
+    if current_user.status != "active":
+        raise HTTPException(403, detail={"code": "USER_SUSPENDED"})
     application = applications.get(application_id)
     if not application:
         raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
