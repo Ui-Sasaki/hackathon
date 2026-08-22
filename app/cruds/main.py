@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import logging
+import math
 import os
 from typing import Any
 import uuid
@@ -10,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.auth import (
@@ -22,7 +24,8 @@ from app.routers import system_router
 from app.schemas import (
     AchievementInput, AchievementVisibilityInput, ApplicationInput,
     BlockInput, CompletionInput, DisputeInput, MessageInput, ProfileUpdateInput,
-    ReportInput, RequestInput, RequestUpdateInput, ReviewInput, SelectionInput,
+    LocationResolveInput, ReportInput, RequestInput, RequestUpdateInput,
+    ReviewInput, SelectionInput,
     StructureInput, VerificationInput,
 )
 
@@ -76,6 +79,7 @@ ERROR_MESSAGES = {
     "APPLICATION_NOT_FOUND": "応募が見つかりません",
     "REQUEST_STATE_CONFLICT": "依頼の状態が更新されているため処理できません",
     "VALIDATION_ERROR": "入力内容を確認してください",
+    "REGION_SELECTION_REQUIRED": "地域を選択してください",
     "INTERNAL_SERVER_ERROR": "サーバー内部でエラーが発生しました",
 }
 
@@ -89,6 +93,47 @@ STATUS_ERROR_CODES = {
     500: "INTERNAL_SERVER_ERROR",
 }
 logger = logging.getLogger(__name__)
+
+REGIONS = {
+    "AREA-001": {"label": "大学周辺", "latitude": 43.062, "longitude": 141.354},
+    "AREA-002": {"label": "大学北側", "latitude": 43.082, "longitude": 141.350},
+    "AREA-003": {"label": "駅周辺", "latitude": 43.068, "longitude": 141.351},
+}
+
+
+def distance_km(latitude: float, longitude: float, region: dict[str, Any]) -> float:
+    radius_km = 6371.0
+    lat1, lat2 = math.radians(latitude), math.radians(region["latitude"])
+    lat_delta = math.radians(region["latitude"] - latitude)
+    lon_delta = math.radians(region["longitude"] - longitude)
+    a = (
+        math.sin(lat_delta / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(lon_delta / 2) ** 2
+    )
+    return radius_km * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def nearest_region(latitude: float, longitude: float) -> str:
+    return min(
+        REGIONS,
+        key=lambda code: distance_km(latitude, longitude, REGIONS[code]),
+    )
+
+
+def resolve_location(
+    location: LocationResolveInput | None,
+    current_user: CurrentUser,
+    selected_area_code: str | None = None,
+) -> tuple[str, str]:
+    if location and location.latitude is not None and location.longitude is not None:
+        return nearest_region(location.latitude, location.longitude), "current_location"
+    area_code = selected_area_code or users_store.get(current_user.user_id, {}).get(
+        "areaCode"
+    )
+    if not area_code or area_code not in REGIONS:
+        raise HTTPException(422, detail={"code": "REGION_SELECTION_REQUIRED"})
+    source = "selected_region" if selected_area_code else "registered_region"
+    return area_code, source
 
 
 def request_id_for(request: Request) -> str:
@@ -388,6 +433,20 @@ async def update_profile(
     return profile
 
 
+@app.post("/locations/resolve", tags=["Locations"])
+async def resolve_browser_location(
+    body: LocationResolveInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    area_code, source = resolve_location(body, current_user)
+    return {
+        "areaCode": area_code,
+        "areaLabel": REGIONS[area_code]["label"],
+        "source": source,
+        "fallbackUsed": source == "registered_region",
+    }
+
+
 @app.post("/requests/structure", tags=["Requests"])
 async def structure_request(
     body: StructureInput,
@@ -475,9 +534,25 @@ async def request_or_404(conn, request_id: str) -> dict:
 async def list_requests(
     category: str | None = None,
     areaCode: str | None = None,
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+    consentGranted: bool = False,
+    locationFailure: str | None = Query(
+        default=None, pattern="^(denied|timeout|unsupported|unavailable)$"
+    ),
     limit: int = Query(default=20, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
 ):
+    try:
+        location = LocationResolveInput(
+            consentGranted=consentGranted,
+            latitude=latitude,
+            longitude=longitude,
+            failureReason=locationFailure,
+        )
+    except ValidationError:
+        raise HTTPException(422, detail={"code": "VALIDATION_ERROR"}) from None
+    origin_area_code, source = resolve_location(location, current_user, areaCode)
     async with actor_connection(current_user) as conn:
         rows = await conn.fetch(
             """
@@ -502,7 +577,19 @@ async def list_requests(
         item for item in items
         if not is_blocked_pair(current_user.user_id, item["requesterId"])
     ]
-    return {"items": items, "nextCursor": None}
+    if latitude is not None and longitude is not None:
+        items.sort(
+            key=lambda item: distance_km(
+                latitude, longitude, REGIONS.get(item["areaCode"], REGIONS["AREA-001"])
+            )
+        )
+    else:
+        items.sort(key=lambda item: item["areaCode"] != origin_area_code)
+    return {
+        "items": items,
+        "nextCursor": None,
+        "origin": {"areaCode": origin_area_code, "source": source},
+    }
 
 
 @app.post("/requests", status_code=201, tags=["Requests"])
@@ -514,6 +601,7 @@ async def create_request(
     cache_key = ("create_request", current_user.user_id, idempotency_key)
     if cache_key in idempotency_store:
         return idempotency_store[cache_key]
+    area_code, _source = resolve_location(body.location, current_user, body.areaCode)
     async with actor_connection(current_user) as conn:
         row = await conn.fetchrow(
             """
@@ -530,7 +618,7 @@ async def create_request(
             body.description,
             body.category,
             body.riskLevel,
-            body.areaCode,
+            area_code,
             datetime.fromisoformat(body.scheduledAt),
             body.estimatedMinutes,
             body.requiredHelpers,

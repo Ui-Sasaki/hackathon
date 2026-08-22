@@ -6,6 +6,7 @@ from .main import (
     BlockInput,
     CompletionInput,
     DisputeInput,
+    LocationResolveInput,
     MessageInput,
     ProfileUpdateInput,
     ReportInput,

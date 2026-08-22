@@ -68,6 +68,7 @@ python -m uvicorn main:app --reload --port 8000
 | POST | `/auth/user/password/reset/token` | パスワード再設定メール送信 |
 | POST | `/auth/user/password/reset` | パスワード再設定・既存セッション失効 |
 | GET / PATCH | `/profile` | プロフィール取得・更新 |
+| POST | `/locations/resolve` | 現在地の概算地域化・登録地域フォールバック |
 | POST | `/requests/structure` | 依頼文の構造化 |
 | GET / POST | `/requests` | 依頼一覧・作成 |
 | GET / PATCH / DELETE | `/requests/{id}` | 依頼取得・更新・取消 |
@@ -85,6 +86,19 @@ python -m uvicorn main:app --reload --port 8000
 | POST | `/users/{id}/block` | ブロック・解除 |
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
+
+### 位置情報の利用と保存
+
+位置情報は依頼作成時の概算地域への変換と依頼一覧の距離順表示にだけ利用する。
+画面側は利用目的を表示し、ユーザーが現在地利用を選択してブラウザ権限を許可した後に
+のみ取得する。APIへ座標を送る場合は `consentGranted: true` が必須である。
+
+`POST /locations/resolve` は座標を検証して地域コードへ変換する。拒否、タイムアウト、
+ブラウザ非対応、取得失敗の場合は `failureReason` に `denied`、`timeout`、
+`unsupported`、`unavailable` のいずれかを指定し、認証ユーザーの登録地域を使う。
+登録地域もない場合は `REGION_SELECTION_REQUIRED` を返すため、画面側で地域選択へ
+案内する。正確な座標は処理中だけ使用し、DB、公開レスポンス、ログには保存・出力
+しない。常時追跡、バックグラウンド取得、行動履歴の保存は行わない。
 
 ### 通報・ブロック
 

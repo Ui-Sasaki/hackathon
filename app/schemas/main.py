@@ -1,13 +1,39 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+LocationFailure = Literal["denied", "timeout", "unsupported", "unavailable"]
+
+
+class LocationResolveInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    consentGranted: bool = False
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    failureReason: LocationFailure | None = None
+
+    @model_validator(mode="after")
+    def validate_location_result(self) -> "LocationResolveInput":
+        has_coordinates = self.latitude is not None or self.longitude is not None
+        if has_coordinates and (
+            self.latitude is None or self.longitude is None or not self.consentGranted
+        ):
+            raise ValueError("coordinates require consent and must be provided together")
+        if self.consentGranted and not has_coordinates and self.failureReason is None:
+            raise ValueError("consent requires coordinates or a failure reason")
+        if has_coordinates and self.failureReason is not None:
+            raise ValueError("failureReason cannot be combined with coordinates")
+        return self
 
 
 class StructureInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=5, max_length=3000)
-    areaCode: str
+    areaCode: str | None = Field(default=None, min_length=1, max_length=30)
+    location: LocationResolveInput | None = None
 
 
 class RequestInput(BaseModel):

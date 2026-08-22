@@ -12,6 +12,7 @@ os.environ.setdefault(
 )
 
 import httpx
+import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
@@ -98,6 +99,64 @@ def test_list_requests() -> None:
     response = client.get("/requests", params={"areaCode": "AREA-001"})
     assert response.status_code == 200
     assert len(response.json()["items"]) == 2
+
+
+def test_location_is_resolved_only_after_explicit_consent() -> None:
+    response = client.post(
+        "/locations/resolve",
+        json={"consentGranted": True, "latitude": 43.082, "longitude": 141.350},
+    )
+    assert response.status_code == 200
+    assert response.json()["areaCode"] == "AREA-002"
+    assert response.json()["source"] == "current_location"
+    assert "latitude" not in response.text
+    assert "longitude" not in response.text
+
+
+@pytest.mark.parametrize("reason", ["denied", "timeout", "unsupported", "unavailable"])
+def test_location_failure_falls_back_to_registered_region(reason: str) -> None:
+    response = client.post("/locations/resolve", json={"failureReason": reason})
+    assert response.status_code == 200
+    assert response.json()["areaCode"] == "AREA-001"
+    assert response.json()["fallbackUsed"] is True
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"consentGranted": False, "latitude": 43.0, "longitude": 141.0},
+        {"consentGranted": True, "latitude": 91, "longitude": 141.0},
+        {"consentGranted": True, "latitude": 43.0},
+    ],
+)
+def test_location_rejects_invalid_coordinates(payload: dict) -> None:
+    response = client.post("/locations/resolve", json=payload)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "43.0" not in response.text
+
+
+def test_location_requires_region_selection_without_fallback() -> None:
+    crud_module.users_store["usr_101"].pop("areaCode")
+    response = client.post("/locations/resolve", json={"failureReason": "denied"})
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "REGION_SELECTION_REQUIRED"
+
+
+def test_request_list_reports_current_location_origin() -> None:
+    response = client.get(
+        "/requests",
+        params={
+            "consentGranted": "true",
+            "latitude": 43.082,
+            "longitude": 141.350,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["origin"] == {
+        "areaCode": "AREA-002",
+        "source": "current_location",
+    }
 
 
 def test_structure_request() -> None:
