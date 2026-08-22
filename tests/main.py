@@ -88,6 +88,9 @@ async def requester_user() -> CurrentUser:
 def setup_function() -> None:
     app.dependency_overrides[get_current_user] = requester_user
     client.post("/_mock/reset")
+    crud_module.configure_structure_llm_client(crud_module.default_structure_llm_client)
+    for metric in crud_module.masking_metrics:
+        crud_module.masking_metrics[metric] = 0
 
 
 def test_health() -> None:
@@ -182,6 +185,110 @@ def test_structure_request() -> None:
     )
     assert response.status_code == 200
     assert response.json()["category"] == "pet_support"
+
+
+def test_masking_preview_detects_japanese_and_full_width_pii_formats() -> None:
+    original_values = [
+        "hanako@example.jp",
+        "０９０－１２３４－５６７８",
+        "〒１６０－００２３",
+        "東京都新宿区西新宿２丁目８－１",
+        "学生証番号：ＡＢＣ１２３４５",
+        "氏名は山田 花子",
+    ]
+    response = client.post(
+        "/requests/masking-preview",
+        json={
+            "text": "、".join(original_values) + "。荷物の整理をお願いします",
+            "areaCode": "AREA-001",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hasDetections"] is True
+    assert {item["type"] for item in body["detections"]} == {
+        "email",
+        "phone",
+        "postal_code",
+        "address",
+        "certificate_number",
+        "name",
+    }
+    assert "[メールアドレス]" in body["maskedText"]
+    assert "[電話番号]" in body["maskedText"]
+    assert "[郵便番号]" in body["maskedText"]
+    assert "[詳細住所]" in body["maskedText"]
+    assert "[証明書番号]" in body["maskedText"]
+    assert "[氏名]" in body["maskedText"]
+    for value in original_values:
+        assert value not in response.text
+
+
+def test_structure_requires_confirmation_and_only_sends_masked_text_to_llm() -> None:
+    calls = []
+
+    async def capture(masked_text: str, area_code: str) -> dict:
+        calls.append((masked_text, area_code))
+        return await crud_module.default_structure_llm_client(masked_text, area_code)
+
+    crud_module.configure_structure_llm_client(capture)
+    payload = {
+        "text": "連絡先090-1234-5678へ電話して、犬の散歩をお願いします",
+        "areaCode": "AREA-001",
+    }
+    preview = client.post("/requests/structure", json=payload)
+    confirmed = client.post(
+        "/requests/structure", json={**payload, "maskingConfirmed": True}
+    )
+
+    assert preview.status_code == 200
+    assert preview.json()["status"] == "masking_confirmation_required"
+    assert calls == [("連絡先[電話番号]へ電話して、犬の散歩をお願いします", "AREA-001")]
+    assert confirmed.status_code == 200
+    assert "090-1234-5678" not in confirmed.text
+    assert confirmed.json()["description"] == "連絡先[電話番号]へ電話して、犬の散歩をお願いします"
+    assert confirmed.json()["masking"]["confirmed"] is True
+
+
+def test_user_can_correct_false_detection_before_structure_submission() -> None:
+    detected = client.post(
+        "/requests/structure",
+        json={"text": "整理番号は090-1234-5678です", "areaCode": "AREA-001"},
+    )
+    corrected = client.post(
+        "/requests/structure",
+        json={"text": "整理番号を確認して片付けます", "areaCode": "AREA-001"},
+    )
+
+    assert detected.json()["requiresMaskingConfirmation"] is True
+    assert corrected.status_code == 200
+    assert corrected.json()["requiresConfirmation"] is True
+    assert corrected.json()["masking"]["detections"] == []
+
+
+def test_masking_service_failure_does_not_log_or_return_unmasked_input(caplog) -> None:
+    private_values = "secret@example.jp 090-9876-5432"
+
+    async def unavailable(_masked_text: str, _area_code: str) -> dict:
+        raise RuntimeError("provider-key-secret")
+
+    crud_module.configure_structure_llm_client(unavailable)
+    with caplog.at_level(logging.WARNING, logger="app.cruds.main"):
+        response = client.post(
+            "/requests/structure",
+            json={
+                "text": f"連絡先は{private_values}、荷物を整理してください",
+                "areaCode": "AREA-001",
+                "maskingConfirmed": True,
+            },
+        )
+
+    assert response.status_code == 503
+    assert private_values not in response.text
+    assert private_values not in caplog.text
+    assert "provider-key-secret" not in response.text
+    assert "provider-key-secret" not in caplog.text
 
 
 def test_select_application_with_version_check() -> None:

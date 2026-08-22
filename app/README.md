@@ -90,6 +90,7 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/auth/user/password/reset` | パスワード再設定・既存セッション失効 |
 | GET / PATCH | `/profile` | プロフィール取得・更新 |
 | POST | `/requests/structure` | 依頼文の構造化 |
+| POST | `/requests/masking-preview` | LLM送信前の個人情報マスキング確認 |
 | GET / POST | `/requests` | 依頼一覧・作成 |
 | GET / PATCH / DELETE | `/requests/{id}` | 依頼取得・更新・取消 |
 | POST | `/requests/{id}/applications` | 依頼への応募 |
@@ -107,22 +108,21 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
 
-### 依頼一覧・検索
+### LLM入力の個人情報マスキング
 
-`GET /requests` は `category`、`scheduledFrom`、`scheduledTo`、
-`maxDistanceKm`、`requiredHelpers`、`verificationStatus` で公開中の依頼を検索する。
-`latitude` と `longitude` は必ず組で指定し、省略時は認証ユーザーの登録地域
-（`areaCode`）を検索起点として利用する。標準取得件数は20件、`limit` の上限は100件で、
-続きはレスポンスの `nextCursor` を `cursor` に指定して取得する。期限切れや募集終了した
-依頼は含まれず、レスポンスには番地および正確な緯度・経度を含めない。
+依頼文はLLMへ渡す前に、メールアドレス、電話番号、郵便番号、詳細住所、証明書番号、
+「氏名」「名前」と明記された日本語氏名を種別付きプレースホルダーへ置換する。
+半角・全角の数字、記号、代表的な日本語住所表記に対応する。検出した元の値は
+ログ、例外、監視カウンター、マスキング結果へ複製しない。
 
-### 通報・ブロック
+`POST /requests/masking-preview`でマスキング後の本文、種別、件数を確認できる。
+個人情報が検出された状態で構造化すると、LLMを呼ばず確認要求を返す。ユーザーは
+誤検出なら元の入力を修正し、妥当なら`maskingConfirmed: true`で再送する。構造化
+クライアントへ渡るのは常にマスキング後の本文だけである。
 
-`POST /reports` の通報者は認証済みセッションから決定し、危険作業・詐欺の依頼通報は
-高緊急度として対象依頼を自動的に一時停止する。`POST /users/{id}/block` は
-`blocked: true` でブロック、`false` で解除する。ブロック関係にある利用者の依頼、応募、
-相手が送信したメッセージは双方から非表示になる。通報、依頼の自動停止、ブロック、解除は
-監査イベントとして記録する。
+この固定ルールは代表的な形式を検出する補助機能であり、完全な匿名化を保証しない。
+固有名詞、崩した表記、文脈から推測できる情報は検出できない場合があるため、送信前に
+ユーザー自身がマスキング結果を確認する必要がある。
 
 ## エラーレスポンスとトレースID
 
