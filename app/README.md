@@ -16,6 +16,7 @@ python -m uvicorn main:app --reload --port 8000
 - API: `http://localhost:8000`
 - Swagger UI: `http://localhost:8000/docs`
 - OpenAPI: `http://localhost:8000/openapi.json`
+- 固定OpenAPI: `docs/openapi.json`
 - ヘルスチェック: `http://localhost:8000/health`
 
 起動前にSuperTokens Coreを用意し、必要に応じて次の環境変数を設定する。
@@ -94,6 +95,13 @@ python -m uvicorn main:app --reload --port 8000
 | POST | `/users/{id}/block` | ブロック・解除 |
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
+認証、モック利用者、ページング、実装状況を含むフロント向け手順は
+[`docs/api-development.md`](../docs/api-development.md)を参照する。固定OpenAPIは
+手編集せず、リポジトリルートで次を実行してFastAPIアプリから再生成する。
+
+```bash
+.venv/bin/python scripts/export_openapi.py
+```
 
 ### 位置情報の利用と保存
 

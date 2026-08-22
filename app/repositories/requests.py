@@ -39,6 +39,8 @@ def _row_to_record(row: Any) -> RequestRecord:
         "estimatedMinutes": row["estimated_minutes"],
         "requiredHelpers": row["required_helpers"],
         "status": row["status"],
+        "expiresAt": _iso(row["expires_at"]),
+        "verificationRequired": row["verification_required"],
         "version": row["version"],
         "warnings": [],
         "createdAt": _iso(row["created_at"]),
@@ -107,6 +109,7 @@ class MemoryRequestRepository:
             "acceptedHelpers": 0, "scheduledAt": scheduled_at,
             "estimatedMinutes": minutes, "requiredHelpers": helpers, "status": "published",
             "version": version, "warnings": [], "createdAt": created_at, "updatedAt": created_at,
+            "expiresAt": None, "verificationRequired": False,
         }
 
     async def list(self, actor: CurrentUser, *, category: str | None,
@@ -132,6 +135,7 @@ class MemoryRequestRepository:
             **deepcopy(values), "areaLabel": "大学周辺・約1km", "distanceKm": 1.0,
             "acceptedHelpers": 0, "status": "draft", "version": 1,
             "warnings": [], "createdAt": now, "updatedAt": now,
+            "expiresAt": None, "verificationRequired": False,
         }
         self._items[item["id"]] = item
         return deepcopy(item)
@@ -175,7 +179,8 @@ class PostgresRequestRepository:
     _SELECT = """
         select r.id, r.title, r.original_text, r.category_id, r.risk_level,
                r.area_code, r.scheduled_at, r.estimated_minutes, r.required_helpers,
-               r.status, r.version, r.created_at, r.updated_at,
+               r.status, r.version, r.expires_at, r.verification_required,
+               r.created_at, r.updated_at,
                app.auth_subject_of(r.requester_id) as requester_auth_subject,
                (select count(*) from matches m where m.request_id = r.id) as accepted_helpers
           from requests r
@@ -212,7 +217,7 @@ class PostgresRequestRepository:
                    ) values (app.current_actor(), $1, $2, $3, $4, $5, $6, $7, $8)
                    returning id, title, original_text, category_id, risk_level, area_code,
                      scheduled_at, estimated_minutes, required_helpers, status, version,
-                     created_at, updated_at""",
+                     expires_at, verification_required, created_at, updated_at""",
                 values["title"], values["description"], values["category"], values["riskLevel"],
                 values["areaCode"], datetime.fromisoformat(values["scheduledAt"]),
                 values["estimatedMinutes"], values["requiredHelpers"],
