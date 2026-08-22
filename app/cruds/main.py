@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import random
+import re
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
@@ -95,6 +96,34 @@ STATUS_ERROR_CODES = {
     500: "INTERNAL_SERVER_ERROR",
 }
 logger = logging.getLogger(__name__)
+
+MASKING_RULE_VERSION = "pii-mask-v1"
+masking_metrics = {"previewed": 0, "confirmationRequired": 0, "submitted": 0}
+PII_MASK_RULES = (
+    ("email", "[メールアドレス]", re.compile(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９._%+－-]+[@＠][A-Za-z0-9Ａ-Ｚａ-ｚ０-９.-]+[.．][A-Za-zＡ-Ｚａ-ｚ]{2,}")),
+    ("phone", "[電話番号]", re.compile(r"(?<![0-9０-９])[0０][0-9０-９]{1,4}[-ー－―]?[0-9０-９]{1,4}[-ー－―]?[0-9０-９]{3,4}(?![0-9０-９])")),
+    ("postal_code", "[郵便番号]", re.compile(r"〒?\s*[0-9０-９]{3}[-ー－―][0-9０-９]{4}")),
+    ("certificate_number", "[証明書番号]", re.compile(r"(?:免許証|学生証|証明書)(?:番号|No[.．]?)?\s*[:：]?\s*[A-Za-zＡ-Ｚａ-ｚ0-9０-９-]{5,}")),
+    ("address", "[詳細住所]", re.compile(r"(?:東京都|北海道|(?:京都|大阪)府|.{2,3}県).{1,20}(?:市|区|町|村).{1,30}(?:[0-9０-９]+(?:[-ー－―丁目番地号][0-9０-９]*)+|丁目)")),
+    ("name", "[氏名]", re.compile(r"(?:氏名|名前)\s*(?:は|[:：])?\s*[一-龥々]{2,8}(?:\s|　)?[一-龥々]{1,8}")),
+)
+
+
+def mask_request_text(text: str) -> dict[str, Any]:
+    masked_text = text
+    detections = []
+    for pii_type, placeholder, pattern in PII_MASK_RULES:
+        masked_text, count = pattern.subn(placeholder, masked_text)
+        if count:
+            detections.append(
+                {"type": pii_type, "placeholder": placeholder, "count": count}
+            )
+    return {
+        "maskedText": masked_text,
+        "detections": detections,
+        "hasDetections": bool(detections),
+        "ruleVersion": MASKING_RULE_VERSION,
+    }
 
 MAX_LLM_RETRIES = 2
 RETRYABLE_LLM_FAILURES = {"timeout", "connection", "rate_limit", "server", "invalid_response"}
@@ -516,21 +545,37 @@ async def structure_request(
     body: StructureInput,
     _current_user: CurrentUser = Depends(get_current_user),
 ):
-    prohibited_term = fixed_rule_prohibition(body.text)
+    masking = mask_request_text(body.text)
+    if masking["hasDetections"] and not body.maskingConfirmed:
+        masking_metrics["confirmationRequired"] += 1
+        return {
+            **masking,
+            "status": "masking_confirmation_required",
+            "requiresMaskingConfirmation": True,
+            "message": "マスキング箇所を確認し、必要なら元の入力を修正してください",
+        }
+    masked_body = body.model_copy(update={"text": masking["maskedText"]})
+    prohibited_term = fixed_rule_prohibition(masked_body.text)
     if prohibited_term:
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
     last_category = "server"
     for attempt in range(MAX_LLM_RETRIES + 1):
         try:
-            raw_result = await structure_generator(body)
+            raw_result = await structure_generator(masked_body)
             if isinstance(raw_result, str):
                 raw_result = json.loads(raw_result)
             result = StructuredRequestOutput.model_validate(raw_result)
+            masking_metrics["submitted"] += 1
             return {
                 **result.model_dump(),
                 "mode": "ai",
                 "attemptCount": attempt + 1,
                 "requiresConfirmation": True,
+                "masking": {
+                    "detections": masking["detections"],
+                    "ruleVersion": masking["ruleVersion"],
+                    "confirmed": body.maskingConfirmed,
+                },
             }
         except Exception as exc:
             category, retryable = classify_llm_failure(exc)
@@ -551,9 +596,9 @@ async def structure_request(
     return {
         "mode": "manual",
         "fallbackReason": last_category,
-        "originalInput": {"text": body.text, "areaCode": body.areaCode},
+        "originalInput": {"text": masked_body.text, "areaCode": body.areaCode},
         "manualForm": {
-            "description": body.text,
+            "description": masked_body.text,
             "areaCode": body.areaCode,
         },
         "requiresConfirmation": True,
