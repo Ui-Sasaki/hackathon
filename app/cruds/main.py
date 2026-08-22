@@ -1,5 +1,8 @@
 from copy import deepcopy
+import base64
+import binascii
 from datetime import datetime, timezone
+import json
 import logging
 import os
 from typing import Any
@@ -89,6 +92,14 @@ STATUS_ERROR_CODES = {
     500: "INTERNAL_SERVER_ERROR",
 }
 logger = logging.getLogger(__name__)
+
+RECOMMENDATION_WEIGHTS = {
+    "preferredCategory": 30,
+    "skillMatch": 25,
+    "distance": 20,
+    "availability": 15,
+    "pastAchievement": 10,
+}
 
 
 def request_id_for(request: Request) -> str:
@@ -207,6 +218,100 @@ def get_or_404(store: dict, entity_id: str, error_code: str) -> dict:
     if item is None:
         raise HTTPException(404, detail={"code": error_code})
     return item
+
+
+def encode_recommendation_cursor(score: float, request_id: str) -> str:
+    payload = json.dumps([score, request_id], separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def decode_recommendation_cursor(cursor: str) -> tuple[float, str]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        score, request_id = json.loads(base64.urlsafe_b64decode(padded).decode())
+        return float(score), str(request_id)
+    except (ValueError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
+        raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+
+
+def is_expired(request_item: dict[str, Any]) -> bool:
+    expires_at = request_item.get("expiresAt")
+    if not expires_at:
+        return False
+    try:
+        return datetime.fromisoformat(expires_at.replace("Z", "+00:00")) <= datetime.now(
+            timezone.utc
+        )
+    except (ValueError, TypeError):
+        return True
+
+
+def users_are_blocked(user_id: str, other_user_id: str) -> bool:
+    return (
+        other_user_id in blocks
+        or (user_id, other_user_id) in blocks
+        or (other_user_id, user_id) in blocks
+    )
+
+
+def recommendation_score(
+    request_item: dict[str, Any], profile: dict[str, Any]
+) -> tuple[float, list[str]]:
+    score = 0.0
+    reasons = []
+    preferred_categories = set(profile.get("preferredCategories", []))
+    cold_start = not (
+        preferred_categories
+        or profile.get("skillTags")
+        or profile.get("availableTimes")
+        or profile.get("categoryAchievements")
+    )
+    if cold_start and request_item.get("areaCode") == profile.get("areaCode"):
+        score += 10
+        reasons.append("登録地域に近い新着依頼")
+    if request_item["category"] in preferred_categories:
+        score += RECOMMENDATION_WEIGHTS["preferredCategory"]
+        reasons.append("希望カテゴリと一致")
+
+    required_skills = set(request_item.get("requiredSkills", []))
+    user_skills = set(profile.get("skillTags", []))
+    matched_skills = sorted(required_skills & user_skills)
+    if required_skills and matched_skills:
+        score += RECOMMENDATION_WEIGHTS["skillMatch"] * (
+            len(matched_skills) / len(required_skills)
+        )
+        reasons.append(f"スキル一致: {', '.join(matched_skills)}")
+
+    distance_km = float(request_item.get("distanceKm", 999))
+    max_distance_km = float(profile.get("maxDistanceKm", 10))
+    if distance_km <= max_distance_km:
+        distance_score = (
+            RECOMMENDATION_WEIGHTS["distance"]
+            if max_distance_km == 0 and distance_km == 0
+            else RECOMMENDATION_WEIGHTS["distance"]
+            * max(0.0, 1 - distance_km / max_distance_km)
+            if max_distance_km > 0
+            else 0
+        )
+        score += distance_score
+        reasons.append(f"活動範囲内（約{distance_km:g}km）")
+
+    available_times = profile.get("availableTimes", [])
+    if request_item["scheduledAt"] in available_times:
+        score += RECOMMENDATION_WEIGHTS["availability"]
+        reasons.append("対応可能日時と一致")
+
+    category_achievements = profile.get("categoryAchievements", {})
+    achievement_count = int(category_achievements.get(request_item["category"], 0))
+    if achievement_count:
+        score += RECOMMENDATION_WEIGHTS["pastAchievement"] * min(
+            achievement_count / 5, 1
+        )
+        reasons.append(f"同カテゴリの完了実績{achievement_count}件")
+
+    if not reasons:
+        reasons.append("募集中の新着依頼")
+    return round(score, 2), reasons
 
 
 INITIAL_REQUESTS = [
@@ -421,6 +526,80 @@ async def list_requests(
     if areaCode:
         items = [item for item in items if item["areaCode"] == areaCode]
     return {"items": items[:limit], "nextCursor": None}
+
+
+@app.get("/requests/recommendations", tags=["Requests"])
+async def list_request_recommendations(
+    cursor: str | None = None,
+    limit: int = Query(default=20, ge=1, le=50),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    profile = users_store[current_user.user_id]
+    ranked_items = []
+    for request_item in requests_store.values():
+        if request_item["requesterId"] == current_user.user_id:
+            continue
+        if request_item["status"] != "published" or is_expired(request_item):
+            continue
+        if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
+            continue
+        if users_are_blocked(current_user.user_id, request_item["requesterId"]):
+            continue
+        if (
+            request_item.get("verificationRequired")
+            and profile.get("verificationStatus") != "approved"
+        ):
+            continue
+        if any(
+            application["requestId"] == request_item["id"]
+            and application["helperId"] == current_user.user_id
+            and application["status"] not in {"withdrawn", "cancelled", "not_selected"}
+            for application in applications.values()
+        ):
+            continue
+
+        score, reasons = recommendation_score(request_item, profile)
+        ranked_items.append(
+            {
+                "id": request_item["id"],
+                "title": request_item["title"],
+                "category": request_item["category"],
+                "areaCode": request_item["areaCode"],
+                "areaLabel": request_item["areaLabel"],
+                "distanceKm": request_item["distanceKm"],
+                "scheduledAt": request_item["scheduledAt"],
+                "estimatedMinutes": request_item["estimatedMinutes"],
+                "requiredHelpers": request_item["requiredHelpers"],
+                "requiredSkills": request_item.get("requiredSkills", []),
+                "verificationRequired": request_item.get("verificationRequired", False),
+                "recommendationScore": score,
+                "recommendationReasons": reasons,
+            }
+        )
+
+    ranked_items.sort(key=lambda item: (-item["recommendationScore"], item["id"]))
+    start = 0
+    if cursor:
+        cursor_key = decode_recommendation_cursor(cursor)
+        for index, item in enumerate(ranked_items):
+            if (item["recommendationScore"], item["id"]) == cursor_key:
+                start = index + 1
+                break
+        else:
+            raise HTTPException(422, detail={"code": "INVALID_CURSOR"})
+    page = ranked_items[start : start + limit]
+    next_cursor = None
+    if start + limit < len(ranked_items) and page:
+        last_item = page[-1]
+        next_cursor = encode_recommendation_cursor(
+            last_item["recommendationScore"], last_item["id"]
+        )
+    return {
+        "items": page,
+        "nextCursor": next_cursor,
+        "scoringWeights": RECOMMENDATION_WEIGHTS,
+        "applicationPolicy": "応募時に認可と最新の募集状態を再検証します",
+    }
 
 
 @app.post("/requests", status_code=201, tags=["Requests"])

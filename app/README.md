@@ -84,6 +84,7 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | GET / PATCH | `/profile` | プロフィール取得・更新 |
 | POST | `/requests/structure` | 依頼文の構造化 |
 | GET / POST | `/requests` | 依頼一覧・作成 |
+| GET | `/requests/recommendations` | 応募可能な依頼の推薦一覧 |
 | GET / PATCH / DELETE | `/requests/{id}` | 依頼取得・更新・取消 |
 | POST | `/requests/{id}/applications` | 依頼への応募 |
 | GET | `/requests/{id}/applications` | 応募者一覧 |
@@ -99,6 +100,20 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/users/{id}/block` | ブロック・解除 |
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
+
+### 依頼レコメンド
+
+推薦順位には、希望カテゴリ30点、必要スキル25点、概算距離20点、対応可能日時
+15点、同カテゴリの完了実績10点を使用する。プロフィールや実績履歴がない場合は、
+登録地域と概算距離を使って募集中の依頼を提示する。各結果には得点と推薦理由を
+含め、標準20件・最大50件のカーソルページングで返す。
+
+自分の依頼、募集終了・停止・期限切れ・定員到達済みの依頼、ブロック関係、
+本人確認条件を満たさない依頼、応募中の依頼は推薦前に除外する。推薦処理と
+レスポンスには依頼本文、依頼者ID、正確な緯度経度を含めない。推薦順位は現在の
+プロフィールと保存済み実績による補助情報であり、適性や応募可否を保証しない。
+応募時には通常の認可、本人確認、募集状態、重複応募などの業務ルールを改めて
+検証する。
 
 ## エラーレスポンスとトレースID
 

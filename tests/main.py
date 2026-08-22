@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+from copy import deepcopy
 
 os.environ["SUPERTOKENS_ENABLED"] = "false"
 
@@ -70,10 +71,56 @@ HELPER = CurrentUser(
     email_verified=True,
     verification_status="approved",
 )
+RECOMMENDER = CurrentUser(
+    user_id="usr_209",
+    role="helper",
+    status="active",
+    email_verified=True,
+    verification_status="approved",
+)
 
 
 async def requester_user() -> CurrentUser:
     return REQUESTER
+
+
+async def recommender_user() -> CurrentUser:
+    return RECOMMENDER
+
+
+def configure_recommender(*, verified: bool = True, with_history: bool = True) -> None:
+    app.dependency_overrides[get_current_user] = recommender_user
+    crud_module.users_store["usr_209"] = {
+        "id": "usr_209",
+        "displayName": "推薦利用者",
+        "role": "helper",
+        "status": "active",
+        "emailVerified": True,
+        "verificationStatus": "approved" if verified else "unverified",
+        "areaCode": "AREA-001",
+        "skillTags": ["犬"] if with_history else [],
+        "preferredCategories": ["pet_support"] if with_history else [],
+        "availableTimes": ["2026-08-25T10:00:00+09:00"] if with_history else [],
+        "maxDistanceKm": 10,
+        "categoryAchievements": {"pet_support": 5} if with_history else {},
+    }
+
+
+def add_recommendation_request(request_id: str, **overrides) -> dict:
+    item = deepcopy(crud_module.INITIAL_REQUESTS[1])
+    item.update(
+        {
+            "id": request_id,
+            "requesterId": f"owner_{request_id}",
+            "scheduledAt": "2026-08-25T10:00:00+09:00",
+            "createdAt": "2026-08-22T10:00:00+09:00",
+            "status": "published",
+            "acceptedHelpers": 0,
+        }
+    )
+    item.update(overrides)
+    crud_module.requests_store[request_id] = item
+    return item
 
 
 def setup_function() -> None:
@@ -91,6 +138,112 @@ def test_list_requests() -> None:
     response = client.get("/requests", params={"areaCode": "AREA-001"})
     assert response.status_code == 200
     assert len(response.json()["items"]) == 2
+
+
+def test_recommendations_rank_matches_and_explain_score_without_private_data() -> None:
+    configure_recommender()
+    add_recommendation_request(
+        "req_best",
+        category="pet_support",
+        requiredSkills=["犬"],
+        distanceKm=1.0,
+        description="東京都新宿区1-2-3の山田さんを支援",
+        approximateLatitude=35.123456,
+        approximateLongitude=139.123456,
+    )
+    add_recommendation_request(
+        "req_lower",
+        category="cleaning",
+        requiredSkills=["掃除"],
+        distanceKm=8.0,
+    )
+
+    response = client.get("/requests/recommendations")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"][0]["id"] == "req_best"
+    assert body["items"][0]["recommendationScore"] > body["items"][1]["recommendationScore"]
+    assert "希望カテゴリと一致" in body["items"][0]["recommendationReasons"]
+    assert "スキル一致: 犬" in body["items"][0]["recommendationReasons"]
+    assert body["scoringWeights"] == crud_module.RECOMMENDATION_WEIGHTS
+    assert "再検証" in body["applicationPolicy"]
+    serialized = str(body)
+    for private_field in (
+        "description",
+        "requesterId",
+        "approximateLatitude",
+        "approximateLongitude",
+        "35.123456",
+        "139.123456",
+    ):
+        assert private_field not in serialized
+
+
+def test_recommendations_exclude_ineligible_requests() -> None:
+    configure_recommender(verified=False)
+    own = add_recommendation_request("req_own", requesterId="usr_209")
+    closed = add_recommendation_request("req_closed", status="matched")
+    expired = add_recommendation_request(
+        "req_expired", expiresAt="2026-08-21T00:00:00Z"
+    )
+    blocked = add_recommendation_request("req_blocked", requesterId="usr_blocked")
+    verification = add_recommendation_request(
+        "req_verified_only", verificationRequired=True
+    )
+    full = add_recommendation_request("req_full", requiredHelpers=1, acceptedHelpers=1)
+    crud_module.blocks.add("usr_blocked")
+
+    response = client.get("/requests/recommendations")
+
+    assert response.status_code == 200
+    returned_ids = {item["id"] for item in response.json()["items"]}
+    excluded = {item["id"] for item in (own, closed, expired, blocked, verification, full)}
+    assert returned_ids.isdisjoint(excluded)
+
+
+def test_recommendations_use_cold_start_fallback_and_cursor_paging() -> None:
+    configure_recommender(with_history=False)
+    add_recommendation_request("req_cold_1", areaCode="AREA-001", distanceKm=1.0)
+    add_recommendation_request("req_cold_2", areaCode="AREA-002", distanceKm=2.0)
+
+    first = client.get("/requests/recommendations", params={"limit": 1})
+    second = client.get(
+        "/requests/recommendations",
+        params={"limit": 1, "cursor": first.json()["nextCursor"]},
+    )
+
+    assert first.status_code == 200
+    assert first.json()["nextCursor"] is not None
+    assert first.json()["items"][0]["id"] != second.json()["items"][0]["id"]
+    assert first.json()["items"][0]["recommendationReasons"]
+    assert client.get("/requests/recommendations", params={"limit": 51}).status_code == 422
+    assert client.get(
+        "/requests/recommendations", params={"cursor": "not-a-cursor"}
+    ).status_code == 422
+
+
+def test_recommendations_require_authentication() -> None:
+    async def unauthenticated() -> CurrentUser:
+        raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
+
+    app.dependency_overrides[get_current_user] = unauthenticated
+    response = client.get("/requests/recommendations")
+    assert response.status_code == 401
+
+
+def test_recommendations_handle_zero_maximum_distance() -> None:
+    configure_recommender()
+    crud_module.users_store["usr_209"]["maxDistanceKm"] = 0
+    add_recommendation_request("req_same_place", distanceKm=0)
+
+    response = client.get("/requests/recommendations")
+
+    assert response.status_code == 200
+    same_place = next(
+        item for item in response.json()["items"] if item["id"] == "req_same_place"
+    )
+    assert "活動範囲内（約0km）" in same_place["recommendationReasons"]
 
 
 def test_structure_request() -> None:
