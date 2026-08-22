@@ -98,6 +98,34 @@ STATUS_ERROR_CODES = {
 }
 logger = logging.getLogger(__name__)
 
+MASKING_RULE_VERSION = "pii-mask-v1"
+masking_metrics = {"previewed": 0, "confirmationRequired": 0, "submitted": 0}
+PII_MASK_RULES = (
+    ("email", "[メールアドレス]", re.compile(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９._%+－-]+[@＠][A-Za-z0-9Ａ-Ｚａ-ｚ０-９.-]+[.．][A-Za-zＡ-Ｚａ-ｚ]{2,}")),
+    ("phone", "[電話番号]", re.compile(r"(?<![0-9０-９])[0０][0-9０-９]{1,4}[-ー－―]?[0-9０-９]{1,4}[-ー－―]?[0-9０-９]{3,4}(?![0-9０-９])")),
+    ("postal_code", "[郵便番号]", re.compile(r"〒?\s*[0-9０-９]{3}[-ー－―][0-9０-９]{4}")),
+    ("certificate_number", "[証明書番号]", re.compile(r"(?:免許証|学生証|証明書)(?:番号|No[.．]?)?\s*[:：]?\s*[A-Za-zＡ-Ｚａ-ｚ0-9０-９-]{5,}")),
+    ("address", "[詳細住所]", re.compile(r"(?:東京都|北海道|(?:京都|大阪)府|.{2,3}県).{1,20}(?:市|区|町|村).{1,30}(?:[0-9０-９]+(?:[-ー－―丁目番地号][0-9０-９]*)+|丁目)")),
+    ("name", "[氏名]", re.compile(r"(?:氏名|名前)\s*(?:は|[:：])?\s*[一-龥々]{2,8}(?:\s|　)?[一-龥々]{1,8}")),
+)
+
+
+def mask_request_text(text: str) -> dict[str, Any]:
+    masked_text = text
+    detections = []
+    for pii_type, placeholder, pattern in PII_MASK_RULES:
+        masked_text, count = pattern.subn(placeholder, masked_text)
+        if count:
+            detections.append(
+                {"type": pii_type, "placeholder": placeholder, "count": count}
+            )
+    return {
+        "maskedText": masked_text,
+        "detections": detections,
+        "hasDetections": bool(detections),
+        "ruleVersion": MASKING_RULE_VERSION,
+    }
+
 CLAUDE_API_URL = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com/v1/messages")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 CLAUDE_PROMPT_VERSION = "request-structure-v1"
@@ -578,7 +606,9 @@ async def structure_request(
     if any(word in body.text for word in ["電気工事", "医療行為", "介護", "送迎"]):
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
     try:
-        raw_draft = await claude_structure_client.structure(body.text, body.areaCode)
+        raw_draft = await claude_structure_client.structure(
+            masking["maskedText"], body.areaCode
+        )
         draft = StructuredRequestDraft.model_validate(raw_draft)
     except httpx.TimeoutException:
         logger.warning("Claude request structure timed out")
@@ -603,6 +633,7 @@ async def structure_request(
         "processedAt": processed_at,
         "schemaVersion": "structured-request-v1",
     }
+    masking_metrics["submitted"] += 1
     return {
         **draft.model_dump(),
         "status": "draft",
