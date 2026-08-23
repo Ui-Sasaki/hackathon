@@ -291,7 +291,7 @@ class MemoryRequestRepository:
         item.update(deepcopy(changes))
         item["version"] += 1
         item["updatedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        return deepcopy(item)
+        return _public_record(item)
 
     async def cancel(
         self, actor: CurrentUser, request_id: str, expected_version: int
