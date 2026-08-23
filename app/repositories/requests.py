@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from copy import deepcopy
 from datetime import datetime, timezone
+from dataclasses import dataclass
+import json
+import re
 from typing import Any, Protocol
 import uuid
 
@@ -13,6 +18,54 @@ from app.settings import settings
 
 
 RequestRecord = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RequestCursor:
+    created_at: datetime
+    request_id: str
+
+
+class InvalidCursor(ValueError):
+    """The cursor is malformed or no longer points at a request."""
+
+
+_CURSOR_TOKEN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _parse_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise InvalidCursor("cursor timestamp must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def encode_cursor(item: RequestRecord) -> str:
+    payload = {
+        "createdAt": _parse_timestamp(str(item["createdAt"])).isoformat(),
+        "id": str(item["id"]),
+    }
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_cursor(token: str) -> RequestCursor:
+    if not token or not _CURSOR_TOKEN.fullmatch(token):
+        raise InvalidCursor("invalid cursor token")
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        payload = json.loads(
+            base64.b64decode(padded, altchars=b"-_", validate=True).decode("utf-8")
+        )
+        if not isinstance(payload, dict) or set(payload) != {"createdAt", "id"}:
+            raise InvalidCursor("invalid cursor fields")
+        if not isinstance(payload["createdAt"], str) or not isinstance(payload["id"], str):
+            raise InvalidCursor("invalid cursor values")
+        return RequestCursor(_parse_timestamp(payload["createdAt"]), payload["id"])
+    except InvalidCursor:
+        raise
+    except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError) as exc:
+        raise InvalidCursor("invalid cursor token") from exc
 
 
 def _iso(value: Any) -> str | None:
@@ -48,7 +101,8 @@ def _row_to_record(row: Any) -> RequestRecord:
 
 class RequestRepository(Protocol):
     async def list(
-        self, actor: CurrentUser, *, category: str | None, area_code: str | None, limit: int
+        self, actor: CurrentUser, *, category: str | None, area_code: str | None,
+        limit: int, cursor: RequestCursor | None = None,
     ) -> list[RequestRecord]: ...
 
     async def get(self, actor: CurrentUser, request_id: str) -> RequestRecord | None: ...
@@ -110,14 +164,27 @@ class MemoryRequestRepository:
         }
 
     async def list(self, actor: CurrentUser, *, category: str | None,
-                   area_code: str | None, limit: int) -> list[RequestRecord]:
+                   area_code: str | None, limit: int,
+                   cursor: RequestCursor | None = None) -> list[RequestRecord]:
         del actor
         items = [item for item in self._items.values() if item["status"] == "published"]
         if category is not None:
             items = [item for item in items if item["category"] == category]
         if area_code is not None:
             items = [item for item in items if item["areaCode"] == area_code]
-        items.sort(key=lambda item: (item["createdAt"], item["id"]), reverse=True)
+        items.sort(
+            key=lambda item: (_parse_timestamp(item["createdAt"]), item["id"]),
+            reverse=True,
+        )
+        if cursor is not None:
+            marker = self._items.get(cursor.request_id)
+            if marker is None or _parse_timestamp(marker["createdAt"]) != cursor.created_at:
+                raise InvalidCursor("cursor request does not exist")
+            items = [
+                item for item in items
+                if (_parse_timestamp(item["createdAt"]), item["id"])
+                < (cursor.created_at, cursor.request_id)
+            ]
         return deepcopy(items[:limit])
 
     async def get(self, actor: CurrentUser, request_id: str) -> RequestRecord | None:
@@ -182,15 +249,30 @@ class PostgresRequestRepository:
     """
 
     async def list(self, actor: CurrentUser, *, category: str | None,
-                   area_code: str | None, limit: int) -> list[RequestRecord]:
+                   area_code: str | None, limit: int,
+                   cursor: RequestCursor | None = None) -> list[RequestRecord]:
         async with actor_connection(actor) as conn:
+            cursor_id = None
+            if cursor is not None:
+                try:
+                    cursor_id = uuid.UUID(cursor.request_id)
+                except ValueError as exc:
+                    raise InvalidCursor("cursor id is not a UUID") from exc
+                marker = await conn.fetchrow(
+                    "select created_at from requests where id = $1", cursor_id
+                )
+                if marker is None or _parse_timestamp(_iso(marker["created_at"])) != cursor.created_at:
+                    raise InvalidCursor("cursor request does not exist")
             rows = await conn.fetch(
                 self._SELECT + """
                  where r.status = 'published'
                    and ($1::text is null or r.category_id = $1)
                    and ($2::text is null or r.area_code = $2)
-                 order by r.created_at desc, r.id desc limit $3
-                """, category, area_code, limit,
+                   and ($3::timestamptz is null
+                        or (r.created_at, r.id) < ($3::timestamptz, $4::uuid))
+                 order by r.created_at desc, r.id desc limit $5
+                """, category, area_code,
+                cursor.created_at if cursor else None, cursor_id, limit,
             )
         return [_row_to_record(row) for row in rows]
 

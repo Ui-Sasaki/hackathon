@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+import uuid
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
@@ -21,7 +22,9 @@ from app.auth import (
     SUPERTOKENS_ENABLED, CurrentUser, configure_user_creator, configure_user_lookup,
     cors_headers, get_current_user,
 )
-from app.repositories.requests import RequestRepository, get_request_repository
+from app.repositories.requests import (
+    InvalidCursor, RequestRepository, decode_cursor, encode_cursor, get_request_repository,
+)
 from app.services.requests import cancel_owned_request, require_request, update_owned_request
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
@@ -82,6 +85,7 @@ ERROR_MESSAGES = {
     "MATCH_NOT_FOUND": "マッチが見つかりません",
     "APPLICATION_NOT_FOUND": "応募が見つかりません",
     "REQUEST_STATE_CONFLICT": "依頼の状態が更新されているため処理できません",
+    "INVALID_CURSOR": "カーソルが無効です",
     "VALIDATION_ERROR": "入力内容を確認してください",
     "INTERNAL_SERVER_ERROR": "サーバー内部でエラーが発生しました",
 }
@@ -360,7 +364,7 @@ def reset_store() -> None:
             "emailVerified": True,
         },
         "usr_301": {
-            "id": "usr_301", "displayName": "鈴木 雪", "role": "requester",
+            "id": "usr_301", "displayName": "鈴木 雪", "role": "member",
             "status": "active", "emailVerified": True,
             "verificationStatus": "unverified", "areaCode": "AREA-001",
         },
@@ -408,7 +412,7 @@ def create_user_profile(user_id: str) -> None:
         {
             "id": user_id,
             "displayName": "",
-            "role": "requester",
+            "role": "member",
             "status": "active",
             "emailVerified": False,
             "verificationStatus": "unverified",
@@ -571,14 +575,43 @@ async def list_requests(
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
 ):
-    items = await repository.list(
-        current_user, category=category, area_code=areaCode, limit=limit,
-    )
+    if (latitude is None) != (longitude is None):
+        raise HTTPException(422, detail={"code": "INVALID_LOCATION_QUERY"})
+    try:
+        request_cursor = decode_cursor(cursor) if cursor is not None else None
+    except InvalidCursor as exc:
+        raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+    try:
+        items = await repository.list(
+            current_user,
+            category=category,
+            area_code=areaCode,
+            limit=limit + 1,
+            cursor=request_cursor,
+        )
+    except InvalidCursor as exc:
+        raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+
+    def scheduled_at(item: dict[str, Any]) -> datetime:
+        return datetime.fromisoformat(item["scheduledAt"].replace("Z", "+00:00"))
+
     items = [
         item for item in items
         if not is_blocked_pair(current_user.user_id, item["requesterId"])
+        and (scheduledFrom is None or scheduled_at(item) >= scheduledFrom)
+        and (scheduledTo is None or scheduled_at(item) <= scheduledTo)
+        and (requiredHelpers is None or item["requiredHelpers"] == requiredHelpers)
+        and (
+            verificationStatus is None
+            or users_store.get(item["requesterId"], {}).get("verificationStatus")
+            == verificationStatus
+        )
+        and (maxDistanceKm is None or item["distanceKm"] <= maxDistanceKm)
     ]
-    return {"items": items, "nextCursor": None}
+    has_more = len(items) > limit
+    page = items[:limit]
+    next_cursor = encode_cursor(page[-1]) if has_more and page else None
+    return {"items": page, "nextCursor": next_cursor}
 
 
 @app.post("/requests", status_code=201, tags=["Requests"])
