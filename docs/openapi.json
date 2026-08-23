@@ -330,6 +330,32 @@
         "title": "ApplicationWithHelperResponse",
         "type": "object"
       },
+      "AppliedMasking": {
+        "properties": {
+          "confirmed": {
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "detections": {
+            "items": {
+              "$ref": "#/components/schemas/MaskingDetection"
+            },
+            "title": "Detections",
+            "type": "array"
+          },
+          "ruleVersion": {
+            "title": "Ruleversion",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detections",
+          "ruleVersion",
+          "confirmed"
+        ],
+        "title": "AppliedMasking",
+        "type": "object"
+      },
       "BlockInput": {
         "properties": {
           "blocked": {
@@ -631,6 +657,78 @@
           "fallbackUsed"
         ],
         "title": "LocationResolveResponse",
+        "type": "object"
+      },
+      "MaskingConfirmationResponse": {
+        "properties": {
+          "detections": {
+            "items": {
+              "$ref": "#/components/schemas/MaskingDetection"
+            },
+            "title": "Detections",
+            "type": "array"
+          },
+          "hasDetections": {
+            "title": "Hasdetections",
+            "type": "boolean"
+          },
+          "maskedText": {
+            "title": "Maskedtext",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "requiresMaskingConfirmation": {
+            "const": true,
+            "title": "Requiresmaskingconfirmation",
+            "type": "boolean"
+          },
+          "ruleVersion": {
+            "title": "Ruleversion",
+            "type": "string"
+          },
+          "status": {
+            "const": "masking_confirmation_required",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "maskedText",
+          "detections",
+          "hasDetections",
+          "ruleVersion",
+          "status",
+          "requiresMaskingConfirmation",
+          "message"
+        ],
+        "title": "MaskingConfirmationResponse",
+        "type": "object"
+      },
+      "MaskingDetection": {
+        "properties": {
+          "count": {
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "placeholder": {
+            "title": "Placeholder",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "placeholder",
+          "count"
+        ],
+        "title": "MaskingDetection",
         "type": "object"
       },
       "MatchResponse": {
@@ -1552,6 +1650,11 @@
               }
             ]
           },
+          "maskingConfirmed": {
+            "default": false,
+            "title": "Maskingconfirmed",
+            "type": "boolean"
+          },
           "text": {
             "description": "個人情報を含めない依頼文",
             "maxLength": 3000,
@@ -1584,6 +1687,9 @@
             "title": "Estimatedminutes",
             "type": "integer"
           },
+          "masking": {
+            "$ref": "#/components/schemas/AppliedMasking"
+          },
           "missingFields": {
             "items": {
               "type": "string"
@@ -1596,6 +1702,11 @@
             "minimum": 1.0,
             "title": "Requiredhelpers",
             "type": "integer"
+          },
+          "requiresConfirmation": {
+            "default": true,
+            "title": "Requiresconfirmation",
+            "type": "boolean"
           },
           "riskLevel": {
             "enum": [
@@ -1635,7 +1746,8 @@
           "requiredHelpers",
           "riskLevel",
           "missingFields",
-          "warnings"
+          "warnings",
+          "masking"
         ],
         "title": "StructuredRequestResponse",
         "type": "object"
@@ -3972,9 +4084,53 @@
         ]
       }
     },
+    "/requests/masking-preview": {
+      "post": {
+        "operationId": "preview_request_masking_requests_masking_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StructureInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "LLM送信前のマスキング結果を確認",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
     "/requests/structure": {
       "post": {
-        "description": "自由記述を依頼候補へ構造化する開発用AIモック。結果は自動公開されず、confirmed=trueで別途作成する。禁止作業は422。",
+        "description": "自由記述を依頼候補へ構造化する開発用AIモック。個人情報をマスクし、検出時は確認を求める。結果は自動公開されない。",
         "operationId": "structure_request_requests_structure_post",
         "requestBody": {
           "content": {
@@ -3991,7 +4147,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StructuredRequestResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/StructuredRequestResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MaskingConfirmationResponse"
+                    }
+                  ],
+                  "title": "Response Structure Request Requests Structure Post"
                 }
               }
             },
