@@ -581,6 +581,18 @@ async def list_requests(
         request_cursor = decode_cursor(cursor) if cursor is not None else None
     except InvalidCursor as exc:
         raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+    blocked_requester_ids = sorted(
+        {
+            second_user_id
+            for first_user_id, second_user_id in blocks
+            if first_user_id == current_user.user_id
+        }
+        | {
+            first_user_id
+            for first_user_id, second_user_id in blocks
+            if second_user_id == current_user.user_id
+        }
+    )
     try:
         items = await repository.list(
             current_user,
@@ -588,26 +600,15 @@ async def list_requests(
             area_code=areaCode,
             limit=limit + 1,
             cursor=request_cursor,
+            scheduled_from=scheduledFrom,
+            scheduled_to=scheduledTo,
+            required_helpers=requiredHelpers,
+            max_distance_km=maxDistanceKm,
+            verification_status=verificationStatus,
+            blocked_requester_ids=blocked_requester_ids,
         )
     except InvalidCursor as exc:
         raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
-
-    def scheduled_at(item: dict[str, Any]) -> datetime:
-        return datetime.fromisoformat(item["scheduledAt"].replace("Z", "+00:00"))
-
-    items = [
-        item for item in items
-        if not is_blocked_pair(current_user.user_id, item["requesterId"])
-        and (scheduledFrom is None or scheduled_at(item) >= scheduledFrom)
-        and (scheduledTo is None or scheduled_at(item) <= scheduledTo)
-        and (requiredHelpers is None or item["requiredHelpers"] == requiredHelpers)
-        and (
-            verificationStatus is None
-            or users_store.get(item["requesterId"], {}).get("verificationStatus")
-            == verificationStatus
-        )
-        and (maxDistanceKm is None or item["distanceKm"] <= maxDistanceKm)
-    ]
     has_more = len(items) > limit
     page = items[:limit]
     next_cursor = encode_cursor(page[-1]) if has_more and page else None

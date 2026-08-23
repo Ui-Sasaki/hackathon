@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 import json
 import re
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 import uuid
 
 from app.auth import CurrentUser
@@ -76,6 +76,58 @@ def _iso(value: Any) -> str | None:
     return value.isoformat().replace("+00:00", "Z")
 
 
+def _normalise_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _scheduled_datetime(item: RequestRecord) -> datetime | None:
+    value = item.get("scheduledAt")
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _normalise_datetime(value)
+    return _parse_timestamp(str(value))
+
+
+def _matches_list_filters(
+    item: RequestRecord,
+    *,
+    scheduled_from: datetime | None,
+    scheduled_to: datetime | None,
+    required_helpers: int | None,
+    max_distance_km: float | None,
+    verification_status: str | None,
+    blocked_requester_ids: Sequence[str],
+) -> bool:
+    scheduled_at = _scheduled_datetime(item)
+    if scheduled_from is not None and (
+        scheduled_at is None or scheduled_at < _normalise_datetime(scheduled_from)
+    ):
+        return False
+    if scheduled_to is not None and (
+        scheduled_at is None or scheduled_at > _normalise_datetime(scheduled_to)
+    ):
+        return False
+    if required_helpers is not None and item["requiredHelpers"] != required_helpers:
+        return False
+    if max_distance_km is not None and item["distanceKm"] > max_distance_km:
+        return False
+    if (
+        verification_status is not None
+        and item.get("_requesterVerificationStatus") != verification_status
+    ):
+        return False
+    return item["requesterId"] not in blocked_requester_ids
+
+
+def _public_record(item: RequestRecord) -> RequestRecord:
+    result = deepcopy(item)
+    result.pop("_requesterVerificationStatus", None)
+    return result
+
+
 def _row_to_record(row: Any) -> RequestRecord:
     return {
         "id": str(row["id"]),
@@ -103,6 +155,10 @@ class RequestRepository(Protocol):
     async def list(
         self, actor: CurrentUser, *, category: str | None, area_code: str | None,
         limit: int, cursor: RequestCursor | None = None,
+        scheduled_from: datetime | None = None, scheduled_to: datetime | None = None,
+        required_helpers: int | None = None, max_distance_km: float | None = None,
+        verification_status: str | None = None,
+        blocked_requester_ids: Sequence[str] | None = None,
     ) -> list[RequestRecord]: ...
 
     async def get(self, actor: CurrentUser, request_id: str) -> RequestRecord | None: ...
@@ -161,17 +217,39 @@ class MemoryRequestRepository:
             "acceptedHelpers": 0, "scheduledAt": scheduled_at,
             "estimatedMinutes": minutes, "requiredHelpers": helpers, "status": "published",
             "version": version, "warnings": [], "createdAt": created_at, "updatedAt": created_at,
+            "_requesterVerificationStatus": {
+                "usr_101": "approved", "usr_301": "unverified",
+            }.get(requester_id, "unverified"),
         }
 
     async def list(self, actor: CurrentUser, *, category: str | None,
                    area_code: str | None, limit: int,
-                   cursor: RequestCursor | None = None) -> list[RequestRecord]:
+                   cursor: RequestCursor | None = None,
+                   scheduled_from: datetime | None = None,
+                   scheduled_to: datetime | None = None,
+                   required_helpers: int | None = None,
+                   max_distance_km: float | None = None,
+                   verification_status: str | None = None,
+                   blocked_requester_ids: Sequence[str] | None = None) -> list[RequestRecord]:
         del actor
+        blocked_requester_ids = blocked_requester_ids or ()
         items = [item for item in self._items.values() if item["status"] == "published"]
         if category is not None:
             items = [item for item in items if item["category"] == category]
         if area_code is not None:
             items = [item for item in items if item["areaCode"] == area_code]
+        items = [
+            item for item in items
+            if _matches_list_filters(
+                item,
+                scheduled_from=scheduled_from,
+                scheduled_to=scheduled_to,
+                required_helpers=required_helpers,
+                max_distance_km=max_distance_km,
+                verification_status=verification_status,
+                blocked_requester_ids=blocked_requester_ids,
+            )
+        ]
         items.sort(
             key=lambda item: (_parse_timestamp(item["createdAt"]), item["id"]),
             reverse=True,
@@ -185,12 +263,12 @@ class MemoryRequestRepository:
                 if (_parse_timestamp(item["createdAt"]), item["id"])
                 < (cursor.created_at, cursor.request_id)
             ]
-        return deepcopy(items[:limit])
+        return [_public_record(item) for item in items[:limit]]
 
     async def get(self, actor: CurrentUser, request_id: str) -> RequestRecord | None:
         del actor
         item = self._items.get(request_id)
-        return deepcopy(item) if item else None
+        return _public_record(item) if item else None
 
     async def create(self, actor: CurrentUser, values: dict[str, Any]) -> RequestRecord:
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -199,9 +277,10 @@ class MemoryRequestRepository:
             **deepcopy(values), "areaLabel": "大学周辺・約1km", "distanceKm": 1.0,
             "acceptedHelpers": 0, "status": "draft", "version": 1,
             "warnings": [], "createdAt": now, "updatedAt": now,
+            "_requesterVerificationStatus": actor.verification_status,
         }
         self._items[item["id"]] = item
-        return deepcopy(item)
+        return _public_record(item)
 
     async def update(self, actor: CurrentUser, request_id: str, expected_version: int,
                      changes: dict[str, Any]) -> RequestRecord | None:
@@ -244,14 +323,22 @@ class PostgresRequestRepository:
                r.area_code, r.scheduled_at, r.estimated_minutes, r.required_helpers,
                r.status, r.version, r.created_at, r.updated_at,
                app.auth_subject_of(r.requester_id) as requester_auth_subject,
+               app.verification_status_of(r.requester_id) as requester_verification_status,
                (select count(*) from matches m where m.request_id = r.id) as accepted_helpers
           from requests r
     """
 
     async def list(self, actor: CurrentUser, *, category: str | None,
                    area_code: str | None, limit: int,
-                   cursor: RequestCursor | None = None) -> list[RequestRecord]:
+                   cursor: RequestCursor | None = None,
+                   scheduled_from: datetime | None = None,
+                   scheduled_to: datetime | None = None,
+                   required_helpers: int | None = None,
+                   max_distance_km: float | None = None,
+                   verification_status: str | None = None,
+                   blocked_requester_ids: Sequence[str] | None = None) -> list[RequestRecord]:
         async with actor_connection(actor) as conn:
+            blocked_requester_ids = list(blocked_requester_ids or ())
             cursor_id = None
             if cursor is not None:
                 try:
@@ -268,11 +355,23 @@ class PostgresRequestRepository:
                  where r.status = 'published'
                    and ($1::text is null or r.category_id = $1)
                    and ($2::text is null or r.area_code = $2)
-                   and ($3::timestamptz is null
-                        or (r.created_at, r.id) < ($3::timestamptz, $4::uuid))
-                 order by r.created_at desc, r.id desc limit $5
+                   and ($3::timestamptz is null or r.scheduled_at >= $3::timestamptz)
+                   and ($4::timestamptz is null or r.scheduled_at <= $4::timestamptz)
+                   and ($5::integer is null or r.required_helpers = $5::integer)
+                   and ($6::double precision is null or 1.0 <= $6::double precision)
+                   and ($7::verification_status is null
+                        or app.verification_status_of(r.requester_id) = $7::verification_status)
+                   and not app.is_blocked_pair(r.requester_id, app.current_actor())
+                   and not (app.auth_subject_of(r.requester_id) = any($8::text[]))
+                   and ($9::timestamptz is null
+                        or (r.created_at, r.id) < ($9::timestamptz, $10::uuid))
+                 order by r.created_at desc, r.id desc limit $11
                 """, category, area_code,
-                cursor.created_at if cursor else None, cursor_id, limit,
+                 _normalise_datetime(scheduled_from) if scheduled_from else None,
+                 _normalise_datetime(scheduled_to) if scheduled_to else None,
+                 required_helpers, max_distance_km, verification_status,
+                 blocked_requester_ids,
+                 cursor.created_at if cursor else None, cursor_id, limit,
             )
         return [_row_to_record(row) for row in rows]
 

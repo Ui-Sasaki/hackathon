@@ -119,6 +119,9 @@ def add_search_request(request_id: str, **changes) -> None:
             **changes,
         }
     )
+    item["_requesterVerificationStatus"] = crud_module.users_store.get(
+        item["requesterId"], {}
+    ).get("verificationStatus", item.get("_requesterVerificationStatus", "unverified"))
     repository._items[request_id] = item
 
 
@@ -175,6 +178,51 @@ def test_request_search_cursor_paging_has_default_page_size_20() -> None:
     second_ids = {item["id"] for item in second.json()["items"]}
     assert len(second_ids) == 3
     assert first_ids.isdisjoint(second_ids)
+
+
+def test_request_search_applies_distance_filter_before_cursor_paging() -> None:
+    for index in range(1, 22):
+        add_search_request(f"far_{index:02d}", distanceKm=99)
+
+    response = client.get("/requests", params={"maxDistanceKm": 2})
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [
+        crud_module.SEED_REQUEST_1025, crud_module.SEED_REQUEST_1024,
+    ]
+    assert response.json()["nextCursor"] is None
+
+
+def test_request_search_cursor_pages_filtered_result_set_without_skips() -> None:
+    for index in range(1, 22):
+        add_search_request(f"far_{index:02d}", distanceKm=99)
+    for index in range(1, 6):
+        add_search_request(
+            f"near_{index:02d}",
+            createdAt=f"2026-08-19T00:00:{index:02d}+00:00",
+            distanceKm=1,
+        )
+
+    expected_ids = [
+        *(f"near_{index:02d}" for index in range(5, 0, -1)),
+        crud_module.SEED_REQUEST_1025, crud_module.SEED_REQUEST_1024,
+    ]
+    collected_ids = []
+    cursor = None
+    while True:
+        params = {"maxDistanceKm": 2, "limit": 2}
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = client.get("/requests", params=params)
+        assert response.status_code == 200
+        body = response.json()
+        collected_ids.extend(item["id"] for item in body["items"])
+        cursor = body["nextCursor"]
+        if cursor is None:
+            break
+
+    assert collected_ids == expected_ids
+    assert len(collected_ids) == len(set(collected_ids))
 
 
 def test_request_search_validates_limit_cursor_and_location_pair() -> None:
