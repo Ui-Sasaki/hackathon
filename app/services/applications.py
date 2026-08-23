@@ -6,7 +6,8 @@ from fastapi import HTTPException
 
 from app.auth import CurrentUser
 from app.repositories.applications import (
-    ApplicationRecord, ApplicationRepository, DuplicateApplicationError,
+    ApplicationEligibilityError, ApplicationRecord, ApplicationRepository,
+    DuplicateApplicationError,
 )
 from app.repositories.requests import RequestRecord
 
@@ -36,6 +37,9 @@ async def create_application(
         return await repository.create(actor, request_item["id"], values)
     except DuplicateApplicationError as exc:
         raise HTTPException(409, detail={"code": "DUPLICATE_APPLICATION"}) from exc
+    except ApplicationEligibilityError as exc:
+        # State, deadline, verification, or block status changed after the API check.
+        raise HTTPException(409, detail={"code": "REQUEST_STATE_CONFLICT"}) from exc
 
 
 async def withdraw_application(

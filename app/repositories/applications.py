@@ -21,6 +21,10 @@ class DuplicateApplicationError(Exception):
     """The actor already has an application for the request."""
 
 
+class ApplicationEligibilityError(Exception):
+    """The database rejected an application after the API eligibility check."""
+
+
 def _iso(value: Any) -> str | None:
     if value is None or isinstance(value, str):
         return value
@@ -64,6 +68,8 @@ class ApplicationRepository(Protocol):
     ) -> ApplicationRecord: ...
 
     async def withdraw(self, actor: CurrentUser, application_id: str) -> bool: ...
+
+    async def cancel_for_request(self, actor: CurrentUser, request_id: str) -> None: ...
 
     async def reset(self) -> None: ...
 
@@ -136,6 +142,14 @@ class MemoryApplicationRepository:
         item["updatedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         return True
 
+    async def cancel_for_request(self, actor: CurrentUser, request_id: str) -> None:
+        del actor
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        for item in self._items.values():
+            if item["requestId"] == request_id and item["status"] == "applied":
+                item["status"] = "cancelled"
+                item["updatedAt"] = now
+
     async def reset(self) -> None:
         self.reset_sync()
 
@@ -166,7 +180,7 @@ class PostgresApplicationRepository:
                           (helper_profile.data ->> 'achievement_count')::integer as achievement_count
                      from applications a
                      cross join lateral (
-                         select app.application_helper_profile(a.helper_id) as data
+                         select app.application_helper_profile(a.id) as data
                      ) helper_profile
                     where a.request_id = $1
                     order by a.created_at, a.id""",
@@ -201,6 +215,8 @@ class PostgresApplicationRepository:
                 )
         except asyncpg.UniqueViolationError as exc:
             raise DuplicateApplicationError from exc
+        except asyncpg.InsufficientPrivilegeError as exc:
+            raise ApplicationEligibilityError from exc
         return _row_to_record({**dict(row), "helper_auth_subject": actor.user_id})
 
     async def withdraw(self, actor: CurrentUser, application_id: str) -> bool:
@@ -211,6 +227,11 @@ class PostgresApplicationRepository:
         async with actor_connection(actor) as conn:
             updated = await conn.fetchval("select app.withdraw_application($1)", parsed_id)
         return updated is not None
+
+    async def cancel_for_request(self, actor: CurrentUser, request_id: str) -> None:
+        # PostgresRequestRepository.cancel performs both updates atomically in
+        # app.set_request_status. This method keeps the shared endpoint contract.
+        del actor, request_id
 
     async def reset(self) -> None:
         # Applications are removed by app.mock_reset_requests() through the request FK.

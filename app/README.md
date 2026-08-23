@@ -1,6 +1,6 @@
 # テトテFastAPI 開発ガイド
 
-地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼（`requests`）の保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。応募・マッチング・チャット等その他の業務データ、AI、本人確認は現在インメモリで模擬している。
+地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼、応募、マッチ、チャットは開発・テストではメモリ、本番ではSupabase PostgreSQLへ保存する。レビュー、AI、本人確認は現在インメモリで模擬している。
 
 ## セットアップと起動
 
@@ -52,10 +52,10 @@ python -m uvicorn main:app --reload --port 8000
 ├── app/
 │   ├── main.py          # ASGIアプリの公開
 │   ├── db.py            # Postgres接続・actor scoped transaction（#4）
-│   ├── repositories/    # requestsの保存インターフェースとMemory/Postgres実装
-│   ├── services/        # 保存方式に依存しない依頼の認可・状態遷移
+│   ├── repositories/    # 業務データのMemory/Postgres境界
+│   ├── services/        # 保存方式に依存しない依頼・応募の認可と状態遷移
 │   ├── settings.py      # Repository切り替えを含む実行設定
-│   ├── cruds/main.py    # エンドポイント（他業務データはインメモリ）
+│   ├── cruds/main.py    # エンドポイント
 │   ├── routers/main.py  # システム系ルーター
 │   └── schemas/main.py  # Pydantic入力スキーマ
 ├── supabase/
