@@ -40,7 +40,7 @@ export default function CharacterScreen() {
   const handleNext = () => {
     if (selectedCharacter === null) return;
 
-    router.push("/");
+    router.push("/help");
   };
 
   return (
