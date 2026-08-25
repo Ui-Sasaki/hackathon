@@ -1,8 +1,6 @@
 # テトテFastAPI 開発ガイド
 
-地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使い、依頼（`requests`）はPostgres（Supabase）へ永続化されている（#4）。応募・マッチング・チャット等その他の業務データ、AI、本人確認は現在インメモリで模擬している。
-
-依頼周りのエンドポイントを動かすには `DATABASE_URL` が要る。`.env.example` を `.env` にコピーし、値を埋めること。`supabase/tests/run.sh` でローカルのPostgresを用意できる。
+地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼（`requests`）の保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。応募・マッチング・チャット等その他の業務データ、AI、本人確認は現在インメモリで模擬している。
 
 ## セットアップと起動
 
@@ -18,6 +16,7 @@ python -m uvicorn main:app --reload --port 8000
 - API: `http://localhost:8000`
 - Swagger UI: `http://localhost:8000/docs`
 - OpenAPI: `http://localhost:8000/openapi.json`
+- 固定OpenAPI: `docs/openapi.json`
 - ヘルスチェック: `http://localhost:8000/health`
 
 起動前にSuperTokens Coreを用意し、必要に応じて次の環境変数を設定する。
@@ -33,6 +32,13 @@ python -m uvicorn main:app --reload --port 8000
 | `AUTH_MOCK_ENABLED` | `false` | 開発用の認証モックを有効化 |
 | `AUTH_MOCK_USER_ID` | `usr_101` | 認証モックの既定ユーザーID |
 | `MOCK_RESET_ENABLED` | `false` | `POST /_mock/reset` を利用可能にする。開発・テスト環境でのみ有効にする |
+| `APP_ENV` | `development` | `production` の場合はPostgresを強制し、Memory指定を拒否する |
+| `REQUEST_REPOSITORY` | `memory` | 非本番での依頼保存先。`memory` または `postgres` |
+| `DATABASE_URL` | 未設定 | Postgres選択時は必須。Supabaseの接続文字列 |
+
+本番は `APP_ENV=production` と `DATABASE_URL` を必ず設定する。本番では
+`REQUEST_REPOSITORY` の省略時もPostgresが選ばれ、接続情報がなければアプリのimport時に
+失敗する。Memory Repositoryへ暗黙にフォールバックしない。
 
 登録、ログイン、ログアウト、パスワード再設定はSuperTokensの`/auth/*` APIを
 利用する。Cookie認証ではHttpOnly/Secure/SameSite Cookieと`anti-csrf`ヘッダーが
@@ -67,7 +73,10 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 ├── app/
 │   ├── main.py          # ASGIアプリの公開
 │   ├── db.py            # Postgres接続・actor scoped transaction（#4）
-│   ├── cruds/main.py    # エンドポイントとCRUD（requestsはPostgres、他はインメモリ）
+│   ├── repositories/    # requestsの保存インターフェースとMemory/Postgres実装
+│   ├── services/        # 保存方式に依存しない依頼の認可・状態遷移
+│   ├── settings.py      # Repository切り替えを含む実行設定
+│   ├── cruds/main.py    # エンドポイント（他業務データはインメモリ）
 │   ├── routers/main.py  # システム系ルーター
 │   └── schemas/main.py  # Pydantic入力スキーマ
 ├── supabase/
@@ -89,6 +98,7 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/auth/user/password/reset/token` | パスワード再設定メール送信 |
 | POST | `/auth/user/password/reset` | パスワード再設定・既存セッション失効 |
 | GET / PATCH | `/profile` | プロフィール取得・更新 |
+| POST | `/locations/resolve` | 現在地の概算地域化・登録地域フォールバック |
 | POST | `/requests/structure` | 依頼文の構造化 |
 | POST | `/requests/masking-preview` | LLM送信前の個人情報マスキング確認 |
 | GET / POST | `/requests` | 依頼一覧・作成 |
@@ -107,6 +117,26 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/users/{id}/block` | ブロック・解除 |
 
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
+認証、モック利用者、ページング、実装状況を含むフロント向け手順は
+[`docs/api-development.md`](../docs/api-development.md)を参照する。固定OpenAPIは
+手編集せず、リポジトリルートで次を実行してFastAPIアプリから再生成する。
+
+```bash
+.venv/bin/python scripts/export_openapi.py
+```
+
+### 位置情報の利用と保存
+
+位置情報は依頼作成時の概算地域への変換と依頼一覧の距離順表示にだけ利用する。
+画面側は利用目的を表示し、ユーザーが現在地利用を選択してブラウザ権限を許可した後に
+のみ取得する。APIへ座標を送る場合は `consentGranted: true` が必須である。
+
+`POST /locations/resolve` は座標を検証して地域コードへ変換する。拒否、タイムアウト、
+ブラウザ非対応、取得失敗の場合は `failureReason` に `denied`、`timeout`、
+`unsupported`、`unavailable` のいずれかを指定し、認証ユーザーの登録地域を使う。
+登録地域もない場合は `REGION_SELECTION_REQUIRED` を返すため、画面側で地域選択へ
+案内する。正確な座標は処理中だけ使用し、DB、公開レスポンス、ログには保存・出力
+しない。常時追跡、バックグラウンド取得、行動履歴の保存は行わない。
 
 ### LLM入力の個人情報マスキング
 
@@ -145,12 +175,25 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 
 ## 開発とテスト
 
-`requests` 関連のテストは実際の Postgres に接続する（`DATABASE_URL`、既定はローカルの
-WSL 上の Postgres）。先に一度用意しておく。
+通常の単体テスト・APIテストはMemory Repositoryを使い、Postgresや外部Supabaseへ接続しない。
 
 ```bash
-./supabase/tests/run.sh   # スキーマ適用・制約・RLS の検証。DB を作り直す
-python -m pytest -q
+.venv/bin/python -m pytest -q
+```
+
+Postgres固有の制約、RLS、トランザクション境界はDB結合テストとして分離している。
+外部Supabaseではなく、破棄可能なローカルPostgresに対して次を実行する。このスクリプトは
+対象DBを作り直すため、共有DBや本番の接続先を指定しないこと。
+
+```bash
+./supabase/tests/run.sh
+
+# APIをPostgres Repositoryで手動確認する場合
+APP_ENV=development \
+REQUEST_REPOSITORY=postgres \
+DATABASE_URL='postgresql://tetote_app@127.0.0.1:55432/tetote?sslmode=disable' \
+MOCK_RESET_ENABLED=true \
+.venv/bin/python -m uvicorn main:app --port 8000
 ```
 
 モックデータを初期状態へ戻す `POST /_mock/reset` は、**全利用者のデータを消す破壊的操作**なので
@@ -159,7 +202,7 @@ python -m pytest -q
 1. `MOCK_RESET_ENABLED=true` で起動する（開発・テスト環境のみ）
 2. 認証済みセッションで呼び出す
 
-この操作はインメモリのストアと Postgres の `requests` を両方リセットする。
+この操作はインメモリの業務ストアと、現在選択されている依頼Repositoryをリセットする。
 
 ```bash
 MOCK_RESET_ENABLED=true python -m uvicorn main:app --reload --port 8000

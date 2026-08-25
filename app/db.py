@@ -27,17 +27,17 @@ is measured to matter.
 
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import asyncpg
 
 from app.auth import CurrentUser
+from app.settings import settings
 
 
 def _database_url() -> str:
-    url = os.getenv("DATABASE_URL")
+    url = settings.database_url
     if not url:
         raise RuntimeError(
             "DATABASE_URL is not set. Point it at a Postgres instance that has "

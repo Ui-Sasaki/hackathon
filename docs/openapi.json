@@ -1,0 +1,5089 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "たすけの輪 API",
+    "description": "地域の依頼と支援者をつなぐAPI契約。業務APIはSuperTokensのHttpOnly Cookieセッションが必須で、ユーザーID・ロール・送信日時はサーバーが決定する。`/auth/*` はSuperTokensが提供する。依頼はRepositoryに保存されるが、応募以降、AI、本人確認は現在開発用インメモリ実装である。`/_mock/reset` は明示的に有効化した非本番環境だけで利用できる。",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Root",
+        "operationId": "root__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_mock/reset": {
+      "post": {
+        "tags": [
+          "Development mock"
+        ],
+        "summary": "開発用モックデータを初期化",
+        "description": "非本番かつMOCK_RESET_ENABLED=trueの場合だけ、認証済み利用者が実行できる。全モックデータを初期状態へ戻す。",
+        "operationId": "reset_mock__mock_reset_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ]
+      }
+    },
+    "/profile": {
+      "get": {
+        "tags": [
+          "Profile"
+        ],
+        "summary": "自分のプロフィールを取得",
+        "description": "Cookieセッションの本人の公開可能なプロフィールだけを返す。",
+        "operationId": "get_profile_profile_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Profile"
+        ],
+        "summary": "自分のプロフィールを更新",
+        "description": "表示名または概算地域を更新する。ユーザーID、ロール、本人確認状態は入力できない。",
+        "operationId": "update_profile_profile_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileUpdateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ]
+      }
+    },
+    "/locations/resolve": {
+      "post": {
+        "tags": [
+          "Locations"
+        ],
+        "summary": "現在地を概算地域へ変換",
+        "description": "同意済み座標を概算地域へ変換する。座標は保存も返却もしない。取得失敗時は登録地域へフォールバックする。",
+        "operationId": "resolve_browser_location_locations_resolve_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocationResolveInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationResolveResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ]
+      }
+    },
+    "/requests/structure": {
+      "post": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "依頼文を構造化",
+        "description": "自由記述を依頼候補へ構造化する開発用AIモック。個人情報をマスクし、検出時は確認を求める。結果は自動公開されない。",
+        "operationId": "structure_request_requests_structure_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StructureInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/StructuredRequestResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MaskingConfirmationResponse"
+                    }
+                  ],
+                  "title": "Response Structure Request Requests Structure Post"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ]
+      }
+    },
+    "/requests/masking-preview": {
+      "post": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "LLM送信前のマスキング結果を確認",
+        "operationId": "preview_request_masking_requests_masking_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StructureInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ]
+      }
+    },
+    "/requests": {
+      "get": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "公開依頼を検索",
+        "description": "カテゴリ・概算地域で絞り込み、現在地または登録地域に近い順で返す。limit既定20、最大100。Repository内ではcreatedAt降順・ID降順。公開中のみを対象とし、ブロック関係の依頼は除外する。nextCursorは次ページがない場合nullで、現行実装は常にnull。",
+        "operationId": "list_requests_requests_get",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "name": "areaCode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Areacode"
+            }
+          },
+          {
+            "name": "latitude",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 90,
+                  "minimum": -90
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Latitude"
+            }
+          },
+          {
+            "name": "longitude",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 180,
+                  "minimum": -180
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Longitude"
+            }
+          },
+          {
+            "name": "consentGranted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Consentgranted"
+            }
+          },
+          {
+            "name": "locationFailure",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(denied|timeout|unsupported|unavailable)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Locationfailure"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "依頼を作成",
+        "description": "認証済み本人を依頼者としてdraftを作成する。Idempotency-Keyが同じ再送は同じ結果を返す。",
+        "operationId": "create_request_requests_post",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/requests/{request_id}": {
+      "get": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "依頼詳細を取得",
+        "description": "閲覧可能な依頼を返す。ブロック関係など非表示対象は存在を伏せて404。",
+        "operationId": "get_request_requests__request_id__get",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "自分の依頼を更新",
+        "description": "依頼者本人だけが更新可能。expectedVersion不一致や更新不能状態は409。",
+        "operationId": "update_request_requests__request_id__patch",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestUpdateInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "依頼の状態が更新されているため処理できません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "自分の依頼を取消",
+        "description": "依頼者本人が取消可能な状態の依頼をcancelledへ遷移させ、未処理応募もcancelledにする。レスポンス本文はない。",
+        "operationId": "cancel_request_requests__request_id__delete",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "依頼の状態が更新されているため処理できません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/requests/{request_id}/applications": {
+      "get": {
+        "tags": [
+          "Applications"
+        ],
+        "summary": "自分の依頼の応募者を一覧",
+        "description": "依頼者本人だけが閲覧でき、ブロック関係の応募者は除外する。",
+        "operationId": "list_applications_requests__request_id__applications_get",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplicationListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Applications"
+        ],
+        "summary": "公開依頼へ応募",
+        "description": "認証済み本人を支援者として応募する。自分の依頼、重複応募、公開中でない依頼には応募できない。",
+        "operationId": "create_application_requests__request_id__applications_post",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplicationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplicationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "依頼の状態が更新されているため処理できません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/applications/{application_id}/withdraw": {
+      "post": {
+        "tags": [
+          "Applications"
+        ],
+        "summary": "応募を取り下げ",
+        "description": "応募した本人だけがapplied状態をwithdrawnへ遷移できる。",
+        "operationId": "withdraw_application_applications__application_id__withdraw_post",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplicationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "依頼の状態が更新されているため処理できません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/applications/{application_id}/select": {
+      "post": {
+        "tags": [
+          "Applications"
+        ],
+        "summary": "応募者を選択してマッチ成立",
+        "description": "依頼者本人だけが応募者を選択できる。expectedVersionで定員超過と同時更新を防ぎ、不一致・定員到達・選択不能状態は409。定員到達時は依頼をmatched、未選択応募をnot_selectedへ遷移する。",
+        "operationId": "select_application_applications__application_id__select_post",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "依頼の状態が更新されているため処理できません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/matches/{match_id}": {
+      "get": {
+        "tags": [
+          "Matches"
+        ],
+        "summary": "マッチ詳細を取得",
+        "description": "依頼者と選択された支援者本人だけが取得できる。",
+        "operationId": "get_match_matches__match_id__get",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/matches/{match_id}/messages": {
+      "get": {
+        "tags": [
+          "Messages"
+        ],
+        "summary": "チャット履歴を取得",
+        "description": "成立したマッチの当事者だけが取得できる。送信日時の昇順。ブロックした相手のメッセージは除外する。nextCursorは次ページなしでnull（現行実装は常にnull）。",
+        "operationId": "list_messages_matches__match_id__messages_get",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Messages"
+        ],
+        "summary": "チャットメッセージを送信",
+        "description": "マッチ当事者だけが送信できる。senderIdとsentAtはセッションとサーバー時刻から決定する。",
+        "operationId": "create_message_matches__match_id__messages_post",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/matches/{match_id}/complete": {
+      "post": {
+        "tags": [
+          "Matches"
+        ],
+        "summary": "活動完了を確認",
+        "description": "依頼者と支援者本人だけが自分の役割で確認できる。片方のみはcompletion_pending、双方確認後はcompleted。disputedまたはcompletedへの操作は409。現行実装では同じ当事者の再確認は冪等に成功する。",
+        "operationId": "complete_match_matches__match_id__complete_post",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompletionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "依頼の状態が更新されているため処理できません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/matches/{match_id}/dispute": {
+      "post": {
+        "tags": [
+          "Matches"
+        ],
+        "summary": "マッチングキャンセルを申告",
+        "description": "当事者が理由を付けてマッチと依頼をdisputedへ遷移する。completedまたは既にdisputedの場合は409。",
+        "operationId": "dispute_match_matches__match_id__dispute_post",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisputeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "依頼の状態が更新されているため処理できません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/matches/{match_id}/reviews": {
+      "post": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "完了した相手をレビュー",
+        "description": "completedのマッチ当事者だけが相手へ1件投稿できる。未完了または重複投稿は409。",
+        "operationId": "create_review_matches__match_id__reviews_post",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "依頼の状態が更新されているため処理できません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/achievements/generate": {
+      "post": {
+        "tags": [
+          "Achievements"
+        ],
+        "summary": "AI実績プロフィールを生成",
+        "description": "completedのマッチ当事者だけが生成できる開発用AIモック。個人情報を含めず、公開には本人承認が必要。",
+        "operationId": "generate_achievement_achievements_generate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AchievementInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AchievementResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "依頼の状態が更新されているため処理できません",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ]
+      }
+    },
+    "/achievements/visibility": {
+      "patch": {
+        "tags": [
+          "Achievements"
+        ],
+        "summary": "AI実績の公開範囲を更新",
+        "description": "実績の対象本人だけが変更できる。public指定はapproved=trueによる本人承認が必須。",
+        "operationId": "update_achievement_visibility_achievements_visibility_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AchievementVisibilityInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AchievementResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "この操作を行う権限がありません",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "message": "この操作を行う権限がありません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "依頼の状態が更新されているため処理できません",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ]
+      }
+    },
+    "/verifications": {
+      "post": {
+        "tags": [
+          "Verification"
+        ],
+        "summary": "本人確認を申請",
+        "description": "大学メールまたは学生証で申請する開発用モック。学生証方式は非公開ストレージキーが必須だが、キーや画像はレスポンスに含めない。審査中の重複申請は409。",
+        "operationId": "create_verification_verifications_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerificationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "依頼の状態が更新されているため処理できません",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ]
+      }
+    },
+    "/reports": {
+      "post": {
+        "tags": [
+          "Safety"
+        ],
+        "summary": "違反・危険行為を通報",
+        "description": "通報者はセッションから決定する。詐欺または危険作業の依頼通報はhighとなり、対象依頼をsuspendedへ自動遷移する。",
+        "operationId": "create_report_reports_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ]
+      }
+    },
+    "/users/{user_id}/block": {
+      "post": {
+        "tags": [
+          "Safety"
+        ],
+        "summary": "利用者をブロックまたは解除",
+        "description": "blocked=trueでブロック、falseで解除する。セッション本人との関係として保存し、対象との依頼・応募・メッセージを非表示にする。自分自身は指定不可。",
+        "operationId": "set_user_block_users__user_id__block_post",
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証が必要です",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "message": "認証が必要です",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "対象が見つかりません",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "message": "対象が見つかりません",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "入力内容を確認してください",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "入力内容を確認してください",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバー内部でエラーが発生しました",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "message": "サーバー内部でエラーが発生しました",
+                    "details": {},
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AchievementFacts": {
+        "properties": {
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "minutes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Minutes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "category",
+          "minutes"
+        ],
+        "title": "AchievementFacts"
+      },
+      "AchievementInput": {
+        "properties": {
+          "matchId": {
+            "type": "string",
+            "title": "Matchid"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "members",
+              "public"
+            ],
+            "title": "Visibility",
+            "default": "members"
+          }
+        },
+        "type": "object",
+        "required": [
+          "matchId"
+        ],
+        "title": "AchievementInput"
+      },
+      "AchievementResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "userId": {
+            "type": "string",
+            "title": "Userid"
+          },
+          "matchId": {
+            "type": "string",
+            "title": "Matchid"
+          },
+          "generatedText": {
+            "type": "string",
+            "title": "Generatedtext"
+          },
+          "facts": {
+            "$ref": "#/components/schemas/AchievementFacts"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "members",
+              "public"
+            ],
+            "title": "Visibility"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "generated",
+              "approved"
+            ],
+            "title": "Status"
+          },
+          "modelName": {
+            "type": "string",
+            "title": "Modelname"
+          },
+          "promptVersion": {
+            "type": "string",
+            "title": "Promptversion"
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generatedat"
+          },
+          "approvedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approvedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "userId",
+          "matchId",
+          "generatedText",
+          "facts",
+          "visibility",
+          "status",
+          "modelName",
+          "promptVersion",
+          "generatedAt",
+          "approvedAt"
+        ],
+        "title": "AchievementResponse"
+      },
+      "AchievementVisibilityInput": {
+        "properties": {
+          "achievementId": {
+            "type": "string",
+            "title": "Achievementid"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "members",
+              "public"
+            ],
+            "title": "Visibility"
+          },
+          "approved": {
+            "type": "boolean",
+            "title": "Approved",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "achievementId",
+          "visibility"
+        ],
+        "title": "AchievementVisibilityInput"
+      },
+      "ApplicationInput": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Message"
+          },
+          "availableAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T.+(?:Z|[+-]\\d{2}:\\d{2})$",
+            "title": "Availableat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message",
+          "availableAt"
+        ],
+        "title": "ApplicationInput",
+        "examples": [
+          {
+            "availableAt": "2026-08-19T17:00:00+09:00",
+            "message": "犬の散歩経験があります"
+          }
+        ]
+      },
+      "ApplicationListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ApplicationWithHelperResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ApplicationListResponse"
+      },
+      "ApplicationResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "requestId": {
+            "type": "string",
+            "title": "Requestid"
+          },
+          "helperId": {
+            "type": "string",
+            "title": "Helperid"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "availableAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Availableat"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "selected",
+              "accepted",
+              "completed",
+              "not_selected",
+              "withdrawn",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Createdat"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "requestId",
+          "helperId",
+          "message",
+          "availableAt",
+          "status",
+          "createdAt"
+        ],
+        "title": "ApplicationResponse"
+      },
+      "ApplicationWithHelperResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "requestId": {
+            "type": "string",
+            "title": "Requestid"
+          },
+          "helperId": {
+            "type": "string",
+            "title": "Helperid"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "availableAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Availableat"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "selected",
+              "accepted",
+              "completed",
+              "not_selected",
+              "withdrawn",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Createdat"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          },
+          "helper": {
+            "$ref": "#/components/schemas/HelperSummary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "requestId",
+          "helperId",
+          "message",
+          "availableAt",
+          "status",
+          "createdAt",
+          "helper"
+        ],
+        "title": "ApplicationWithHelperResponse"
+      },
+      "BlockInput": {
+        "properties": {
+          "blocked": {
+            "type": "boolean",
+            "title": "Blocked",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "BlockInput"
+      },
+      "BlockResponse": {
+        "properties": {
+          "userId": {
+            "type": "string",
+            "title": "Userid"
+          },
+          "blocked": {
+            "type": "boolean",
+            "title": "Blocked"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updatedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "userId",
+          "blocked",
+          "updatedAt"
+        ],
+        "title": "BlockResponse"
+      },
+      "CompletionInput": {
+        "properties": {
+          "completed": {
+            "type": "boolean",
+            "const": true,
+            "title": "Completed"
+          },
+          "actorRole": {
+            "type": "string",
+            "enum": [
+              "requester",
+              "helper"
+            ],
+            "title": "Actorrole"
+          }
+        },
+        "type": "object",
+        "required": [
+          "completed",
+          "actorRole"
+        ],
+        "title": "CompletionInput"
+      },
+      "DisputeInput": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 10,
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "DisputeInput"
+      },
+      "ErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "クライアント判定用のUPPER_SNAKE_CASEコード"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "利用者向けの安全なメッセージ"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details",
+            "description": "安全に公開できる追加情報"
+          },
+          "requestId": {
+            "type": "string",
+            "title": "Requestid",
+            "description": "X-Request-IDと一致するトレースID"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "requestId"
+        ],
+        "title": "ErrorDetail"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HelperSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "displayName": {
+            "type": "string",
+            "title": "Displayname"
+          },
+          "verificationStatus": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "pending",
+              "approved",
+              "rejected",
+              "expired"
+            ],
+            "title": "Verificationstatus"
+          },
+          "universityVerified": {
+            "type": "boolean",
+            "title": "Universityverified"
+          },
+          "skillTags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skilltags"
+          },
+          "achievementCount": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Achievementcount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "displayName",
+          "verificationStatus",
+          "universityVerified",
+          "skillTags",
+          "achievementCount"
+        ],
+        "title": "HelperSummary"
+      },
+      "ListOrigin": {
+        "properties": {
+          "areaCode": {
+            "type": "string",
+            "title": "Areacode"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "current_location",
+              "selected_region",
+              "registered_region"
+            ],
+            "title": "Source"
+          }
+        },
+        "type": "object",
+        "required": [
+          "areaCode",
+          "source"
+        ],
+        "title": "ListOrigin"
+      },
+      "LocationResolveInput": {
+        "properties": {
+          "consentGranted": {
+            "type": "boolean",
+            "title": "Consentgranted",
+            "description": "現在地利用への明示的な同意",
+            "default": false
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 90.0,
+                "minimum": -90.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude",
+            "description": "同意時だけ送る緯度。保存・返却しない"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 180.0,
+                "minimum": -180.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitude",
+            "description": "同意時だけ送る経度。保存・返却しない"
+          },
+          "failureReason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "denied",
+                  "timeout",
+                  "unsupported",
+                  "unavailable"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failurereason",
+            "description": "位置取得失敗理由"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "LocationResolveInput",
+        "examples": [
+          {
+            "consentGranted": true,
+            "latitude": 43.082,
+            "longitude": 141.35
+          }
+        ]
+      },
+      "LocationResolveResponse": {
+        "properties": {
+          "areaCode": {
+            "type": "string",
+            "title": "Areacode",
+            "description": "概算地域コード"
+          },
+          "areaLabel": {
+            "type": "string",
+            "title": "Arealabel",
+            "description": "表示用の概算地域名"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "current_location",
+              "selected_region",
+              "registered_region"
+            ],
+            "title": "Source"
+          },
+          "fallbackUsed": {
+            "type": "boolean",
+            "title": "Fallbackused"
+          }
+        },
+        "type": "object",
+        "required": [
+          "areaCode",
+          "areaLabel",
+          "source",
+          "fallbackUsed"
+        ],
+        "title": "LocationResolveResponse"
+      },
+      "MaskingConfirmationResponse": {
+        "properties": {
+          "maskedText": {
+            "type": "string",
+            "title": "Maskedtext"
+          },
+          "detections": {
+            "items": {
+              "$ref": "#/components/schemas/MaskingDetection"
+            },
+            "type": "array",
+            "title": "Detections"
+          },
+          "hasDetections": {
+            "type": "boolean",
+            "title": "Hasdetections"
+          },
+          "ruleVersion": {
+            "type": "string",
+            "title": "Ruleversion"
+          },
+          "status": {
+            "type": "string",
+            "const": "masking_confirmation_required",
+            "title": "Status"
+          },
+          "requiresMaskingConfirmation": {
+            "type": "boolean",
+            "const": true,
+            "title": "Requiresmaskingconfirmation"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "maskedText",
+          "detections",
+          "hasDetections",
+          "ruleVersion",
+          "status",
+          "requiresMaskingConfirmation",
+          "message"
+        ],
+        "title": "MaskingConfirmationResponse"
+      },
+      "MaskingDetection": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "placeholder": {
+            "type": "string",
+            "title": "Placeholder"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "placeholder",
+          "count"
+        ],
+        "title": "MaskingDetection"
+      },
+      "MatchResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "requestId": {
+            "type": "string",
+            "title": "Requestid"
+          },
+          "requesterId": {
+            "type": "string",
+            "title": "Requesterid"
+          },
+          "helperId": {
+            "type": "string",
+            "title": "Helperid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "matched",
+              "in_progress",
+              "completion_pending",
+              "completed",
+              "disputed"
+            ],
+            "title": "Status"
+          },
+          "requesterConfirmed": {
+            "type": "boolean",
+            "title": "Requesterconfirmed"
+          },
+          "helperConfirmed": {
+            "type": "boolean",
+            "title": "Helperconfirmed"
+          },
+          "matchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Matchedat"
+          },
+          "completedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completedat"
+          },
+          "disputeReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disputereason"
+          },
+          "disputedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disputedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "requestId",
+          "requesterId",
+          "helperId",
+          "status",
+          "requesterConfirmed",
+          "helperConfirmed",
+          "matchedAt",
+          "completedAt"
+        ],
+        "title": "MatchResponse"
+      },
+      "MessageInput": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Body"
+          }
+        },
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "title": "MessageInput"
+      },
+      "MessageListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MessageResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor",
+            "description": "次ページなしの場合null。現行実装は常にnull"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "MessageListResponse"
+      },
+      "MessageResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "matchId": {
+            "type": "string",
+            "title": "Matchid"
+          },
+          "senderId": {
+            "type": "string",
+            "title": "Senderid"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "sentAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Sentat"
+          },
+          "readAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Readat"
+          },
+          "moderationStatus": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "flagged",
+              "hidden"
+            ],
+            "title": "Moderationstatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "matchId",
+          "senderId",
+          "body",
+          "sentAt",
+          "readAt",
+          "moderationStatus"
+        ],
+        "title": "MessageResponse"
+      },
+      "ProfileResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "displayName": {
+            "type": "string",
+            "maxLength": 50,
+            "title": "Displayname"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "member",
+              "admin",
+              "verifier"
+            ],
+            "title": "Role"
+          },
+          "emailVerified": {
+            "type": "boolean",
+            "title": "Emailverified"
+          },
+          "verificationStatus": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "pending",
+              "approved",
+              "rejected",
+              "expired"
+            ],
+            "title": "Verificationstatus"
+          },
+          "areaCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Areacode"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended"
+            ],
+            "title": "Status"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "displayName",
+          "role",
+          "emailVerified",
+          "verificationStatus",
+          "status"
+        ],
+        "title": "ProfileResponse"
+      },
+      "ProfileUpdateInput": {
+        "properties": {
+          "displayName": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Displayname"
+          },
+          "areaCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 30,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Areacode"
+          }
+        },
+        "type": "object",
+        "title": "ProfileUpdateInput"
+      },
+      "ReportInput": {
+        "properties": {
+          "targetType": {
+            "type": "string",
+            "enum": [
+              "user",
+              "request",
+              "match",
+              "message",
+              "review"
+            ],
+            "title": "Targettype"
+          },
+          "targetId": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Targetid"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "fraud",
+              "harassment",
+              "dangerous_work",
+              "false_information",
+              "no_show",
+              "personal_information_request",
+              "payment_request",
+              "other"
+            ],
+            "title": "Reason"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 10,
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "targetType",
+          "targetId",
+          "reason",
+          "description"
+        ],
+        "title": "ReportInput"
+      },
+      "ReportResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "reporterId": {
+            "type": "string",
+            "title": "Reporterid"
+          },
+          "targetType": {
+            "type": "string",
+            "enum": [
+              "user",
+              "request",
+              "match",
+              "message",
+              "review"
+            ],
+            "title": "Targettype"
+          },
+          "targetId": {
+            "type": "string",
+            "title": "Targetid"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "medium",
+              "high"
+            ],
+            "title": "Severity"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "resolved"
+            ],
+            "title": "Status"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Createdat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "reporterId",
+          "targetType",
+          "targetId",
+          "reason",
+          "description",
+          "severity",
+          "status",
+          "createdAt"
+        ],
+        "title": "ReportResponse"
+      },
+      "RequestInput": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Description"
+          },
+          "category": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Category"
+          },
+          "scheduledAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T.+(?:Z|[+-]\\d{2}:\\d{2})$",
+            "title": "Scheduledat",
+            "description": "ISO 8601、タイムゾーン付き"
+          },
+          "estimatedMinutes": {
+            "type": "integer",
+            "maximum": 240.0,
+            "minimum": 10.0,
+            "title": "Estimatedminutes"
+          },
+          "requiredHelpers": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Requiredhelpers",
+            "default": 1
+          },
+          "areaCode": {
+            "type": "string",
+            "maxLength": 30,
+            "minLength": 1,
+            "title": "Areacode",
+            "description": "概算地域コード"
+          },
+          "riskLevel": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium"
+            ],
+            "title": "Risklevel",
+            "default": "low"
+          },
+          "confirmed": {
+            "type": "boolean",
+            "const": true,
+            "title": "Confirmed",
+            "description": "利用者が内容を確認済み"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "description",
+          "category",
+          "scheduledAt",
+          "estimatedMinutes",
+          "areaCode",
+          "confirmed"
+        ],
+        "title": "RequestInput",
+        "examples": [
+          {
+            "areaCode": "AREA-001",
+            "category": "cleaning",
+            "confirmed": true,
+            "description": "庭の落ち葉を一緒に片付けてください",
+            "estimatedMinutes": 30,
+            "requiredHelpers": 1,
+            "riskLevel": "low",
+            "scheduledAt": "2026-08-22T10:00:00+09:00",
+            "title": "庭の片付け"
+          }
+        ]
+      },
+      "RequestListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RequestResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor",
+            "description": "次ページなしの場合null。現行実装は常にnull"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/ListOrigin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "nextCursor",
+          "origin"
+        ],
+        "title": "RequestListResponse"
+      },
+      "RequestResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "requesterId": {
+            "type": "string",
+            "title": "Requesterid"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "riskLevel": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "prohibited"
+            ],
+            "title": "Risklevel"
+          },
+          "areaCode": {
+            "type": "string",
+            "title": "Areacode"
+          },
+          "areaLabel": {
+            "type": "string",
+            "title": "Arealabel"
+          },
+          "distanceKm": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distancekm",
+            "description": "概算距離"
+          },
+          "acceptedHelpers": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Acceptedhelpers"
+          },
+          "scheduledAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduledat"
+          },
+          "estimatedMinutes": {
+            "type": "integer",
+            "maximum": 240.0,
+            "minimum": 10.0,
+            "title": "Estimatedminutes"
+          },
+          "requiredHelpers": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Requiredhelpers"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "pending_review",
+              "published",
+              "matching",
+              "matched",
+              "in_progress",
+              "completion_pending",
+              "completed",
+              "rejected",
+              "cancelled",
+              "expired",
+              "suspended",
+              "disputed"
+            ],
+            "title": "Status"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version",
+            "description": "楽観ロック値"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Createdat"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updatedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "requesterId",
+          "title",
+          "description",
+          "category",
+          "riskLevel",
+          "areaCode",
+          "areaLabel",
+          "acceptedHelpers",
+          "scheduledAt",
+          "estimatedMinutes",
+          "requiredHelpers",
+          "status",
+          "version",
+          "warnings",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "RequestResponse"
+      },
+      "RequestUpdateInput": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "scheduledAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T.+(?:Z|[+-]\\d{2}:\\d{2})$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduledat"
+          },
+          "estimatedMinutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 240.0,
+                "minimum": 10.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimatedminutes"
+          },
+          "requiredHelpers": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requiredhelpers"
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expectedversion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expectedVersion"
+        ],
+        "title": "RequestUpdateInput"
+      },
+      "ResetResponse": {
+        "properties": {
+          "reset": {
+            "type": "boolean",
+            "const": true,
+            "title": "Reset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reset"
+        ],
+        "title": "ResetResponse"
+      },
+      "ReviewInput": {
+        "properties": {
+          "onTime": {
+            "type": "boolean",
+            "title": "Ontime"
+          },
+          "polite": {
+            "type": "boolean",
+            "title": "Polite"
+          },
+          "safetyAware": {
+            "type": "boolean",
+            "title": "Safetyaware"
+          },
+          "communicative": {
+            "type": "boolean",
+            "title": "Communicative"
+          },
+          "comment": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Comment"
+          }
+        },
+        "type": "object",
+        "required": [
+          "onTime",
+          "polite",
+          "safetyAware",
+          "communicative",
+          "comment"
+        ],
+        "title": "ReviewInput"
+      },
+      "ReviewResponse": {
+        "properties": {
+          "onTime": {
+            "type": "boolean",
+            "title": "Ontime"
+          },
+          "polite": {
+            "type": "boolean",
+            "title": "Polite"
+          },
+          "safetyAware": {
+            "type": "boolean",
+            "title": "Safetyaware"
+          },
+          "communicative": {
+            "type": "boolean",
+            "title": "Communicative"
+          },
+          "comment": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Comment"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "matchId": {
+            "type": "string",
+            "title": "Matchid"
+          },
+          "reviewerId": {
+            "type": "string",
+            "title": "Reviewerid"
+          },
+          "revieweeId": {
+            "type": "string",
+            "title": "Revieweeid"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Createdat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "onTime",
+          "polite",
+          "safetyAware",
+          "communicative",
+          "comment",
+          "id",
+          "matchId",
+          "reviewerId",
+          "revieweeId",
+          "createdAt"
+        ],
+        "title": "ReviewResponse"
+      },
+      "SelectionInput": {
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "title": "Requestid"
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expectedversion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "requestId",
+          "expectedVersion"
+        ],
+        "title": "SelectionInput"
+      },
+      "StructureInput": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 3000,
+            "minLength": 5,
+            "title": "Text",
+            "description": "個人情報を含めない依頼文"
+          },
+          "areaCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 30,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Areacode"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LocationResolveInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maskingConfirmed": {
+            "type": "boolean",
+            "title": "Maskingconfirmed",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "StructureInput",
+        "examples": [
+          {
+            "areaCode": "AREA-001",
+            "text": "病気なので小型犬の散歩をお願いしたい"
+          }
+        ]
+      },
+      "StructuredRequestResponse": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 3000,
+            "title": "Description"
+          },
+          "category": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Category"
+          },
+          "scheduledAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduledat",
+            "description": "ISO 8601日時"
+          },
+          "estimatedMinutes": {
+            "type": "integer",
+            "maximum": 240.0,
+            "minimum": 10.0,
+            "title": "Estimatedminutes"
+          },
+          "requiredHelpers": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Requiredhelpers"
+          },
+          "riskLevel": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "prohibited"
+            ],
+            "title": "Risklevel"
+          },
+          "missingFields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missingfields"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "requiresConfirmation": {
+            "type": "boolean",
+            "title": "Requiresconfirmation",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "description",
+          "category",
+          "scheduledAt",
+          "estimatedMinutes",
+          "requiredHelpers",
+          "riskLevel",
+          "missingFields",
+          "warnings"
+        ],
+        "title": "StructuredRequestResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VerificationInput": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "university_email",
+              "student_card"
+            ],
+            "title": "Method"
+          },
+          "storageObjectKey": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storageobjectkey",
+            "description": "学生証方式のみ。非公開ストレージのキー"
+          }
+        },
+        "type": "object",
+        "required": [
+          "method"
+        ],
+        "title": "VerificationInput"
+      },
+      "VerificationResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "userId": {
+            "type": "string",
+            "title": "Userid"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "university_email",
+              "student_card"
+            ],
+            "title": "Method"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "pending",
+              "approved",
+              "rejected",
+              "expired"
+            ],
+            "title": "Status"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Createdat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "userId",
+          "method",
+          "status",
+          "createdAt"
+        ],
+        "title": "VerificationResponse"
+      }
+    },
+    "securitySchemes": {
+      "SuperTokensSession": {
+        "type": "apiKey",
+        "description": "SuperTokensが発行するHttpOnly Cookieセッション。更新系ではSDKが付与するanti-csrfヘッダーも必要です。ユーザーIDやロールはセッションから決定します。",
+        "in": "cookie",
+        "name": "sAccessToken"
+      }
+    }
+  }
+}
