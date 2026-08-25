@@ -126,6 +126,18 @@ select assert_rejected($x$
   insert into users (auth_subject, display_name) values ('st_a','別人')
 $x$, 'auth_subject の重複');
 
+-- 15. 応募が存在しない依頼を参照（application.request_id FK）
+select assert_rejected($x$
+  insert into applications (request_id, helper_id)
+  values ('99999999-9999-9999-9999-999999999999','22222222-2222-2222-2222-222222222222')
+$x$, '応募の request_id FK');
+
+-- 16. 応募状態に許可されていない値
+select assert_rejected($x$
+  update applications set status='unknown'
+   where id='44444444-4444-4444-4444-444444444444'
+$x$, '応募の不正な状態');
+
 -- 正常系: 上記の土台データが全て入っていること
 do $$
 declare n integer;

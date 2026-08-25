@@ -8,6 +8,7 @@ import math
 import os
 import re
 from typing import Any, Awaitable, Callable
+import uuid
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -26,6 +27,8 @@ from app.repositories.requests import RequestRepository, get_request_repository
 from app.repositories.applications import (
     ApplicationRepository, get_application_repository,
 )
+from app.repositories.matches import MatchSelectionError, postgres_match_repository
+from app.settings import settings
 from app.services.applications import (
     create_application as create_application_service,
     withdraw_application as withdraw_application_service,
@@ -53,8 +56,9 @@ app = FastAPI(
     description=(
         "地域の依頼と支援者をつなぐAPI契約。業務APIはSuperTokensのHttpOnly Cookie"
         "セッションが必須で、ユーザーID・ロール・送信日時はサーバーが決定する。"
-        "`/auth/*` はSuperTokensが提供する。依頼はRepositoryに保存されるが、応募以降、"
-        "AI、本人確認は現在開発用インメモリ実装である。`/_mock/reset` は明示的に有効化"
+        "`/auth/*` はSuperTokensが提供する。依頼、応募、マッチ、チャットは本番環境で"
+        "PostgreSQLへ保存する。レビュー、AI、本人確認は現在開発用インメモリ実装である。"
+        "`/_mock/reset` は明示的に有効化"
         "した非本番環境だけで利用できる。"
     ),
 )
@@ -613,6 +617,11 @@ async def structure_request(
     masking_metrics["submitted"] += 1
     return {
         **result,
+        "masking": {
+            "detections": masking["detections"],
+            "ruleVersion": masking["ruleVersion"],
+            "confirmed": body.maskingConfirmed,
+        },
         "requiresConfirmation": True,
     }
 
@@ -733,11 +742,12 @@ async def cancel_request(
     request_id: str,
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
+    application_repository: ApplicationRepository = Depends(
+        application_repository_dependency
+    ),
 ):
     await cancel_owned_request(repository, current_user, request_id)
-    for application in applications.values():
-        if application["requestId"] == request_id and application["status"] == "applied":
-            application["status"] = "cancelled"
+    await application_repository.cancel_for_request(current_user, request_id)
     return None
 
 
@@ -796,6 +806,20 @@ async def select_application(
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
 ):
+    if settings.request_repository == "postgres":
+        try:
+            return await postgres_match_repository.select_application(
+                current_user, application_id, body.requestId, body.expectedVersion,
+            )
+        except MatchSelectionError as exc:
+            status_code = (
+                404 if exc.code in {"APPLICATION_NOT_FOUND", "REQUEST_NOT_FOUND"}
+                else 403 if exc.code == "ROLE_FORBIDDEN" else 409
+            )
+            detail = {"code": exc.code}
+            if exc.current_version is not None:
+                detail["currentVersion"] = exc.current_version
+            raise HTTPException(status_code, detail=detail) from exc
     application = applications.get(application_id)
     if not application:
         raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
@@ -845,6 +869,11 @@ async def select_application(
 
 @app.get("/matches/{match_id}", response_model=MatchResponse, tags=["Matches"], summary="マッチ詳細を取得", description="依頼者と選択された支援者本人だけが取得できる。", responses=api_errors(401, 403, 404, 500))
 async def get_match(match_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    if settings.request_repository == "postgres":
+        match = await postgres_match_repository.get(current_user, match_id)
+        if not match:
+            raise HTTPException(404, detail={"code": "MATCH_NOT_FOUND"})
+        return match
     match = match_or_404(match_id)
     ensure_match_participant(match, current_user.user_id)
     return match
@@ -855,6 +884,13 @@ async def list_messages(
     match_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
+    if settings.request_repository == "postgres":
+        if not await postgres_match_repository.get(current_user, match_id):
+            raise HTTPException(404, detail={"code": "MATCH_NOT_FOUND"})
+        return {
+            "items": await postgres_match_repository.list_messages(current_user, match_id),
+            "nextCursor": None,
+        }
     match = match_or_404(match_id)
     ensure_match_participant(match, current_user.user_id)
     return {
@@ -875,6 +911,13 @@ async def create_message(
     body: MessageInput,
     current_user: CurrentUser = Depends(get_current_user),
 ):
+    if settings.request_repository == "postgres":
+        item = await postgres_match_repository.create_message(
+            current_user, match_id, body.body,
+        )
+        if item is None:
+            raise HTTPException(404, detail={"code": "MATCH_NOT_FOUND"})
+        return item
     ensure_match_participant(match_or_404(match_id), current_user.user_id)
     item = {
         "id": new_id("msg"),
@@ -901,6 +944,18 @@ async def complete_match(
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
 ):
+    if settings.request_repository == "postgres":
+        try:
+            return await postgres_match_repository.complete(
+                current_user, match_id, body.actorRole,
+            )
+        except MatchSelectionError as exc:
+            status_code = (
+                404 if exc.code == "MATCH_NOT_FOUND"
+                else 403 if exc.code in {"ROLE_FORBIDDEN", "ACTOR_ROLE_MISMATCH"}
+                else 409
+            )
+            raise HTTPException(status_code, detail={"code": exc.code}) from exc
     match = match_or_404(match_id)
     actor_role = ensure_match_participant(match, current_user.user_id)
     if body.actorRole != actor_role:
@@ -928,6 +983,14 @@ async def dispute_match(
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
 ):
+    if settings.request_repository == "postgres":
+        try:
+            return await postgres_match_repository.dispute(
+                current_user, match_id, body.reason,
+            )
+        except MatchSelectionError as exc:
+            status_code = 404 if exc.code == "MATCH_NOT_FOUND" else 403 if exc.code == "ROLE_FORBIDDEN" else 409
+            raise HTTPException(status_code, detail={"code": exc.code}) from exc
     match = match_or_404(match_id)
     ensure_match_participant(match, current_user.user_id)
     if match["status"] in {"completed", "disputed"}:

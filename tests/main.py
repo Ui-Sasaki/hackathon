@@ -366,7 +366,9 @@ def test_repository_implementations_share_request_contract() -> None:
 
 
 def test_repository_implementations_share_application_contract() -> None:
-    operations = {"list_for_request", "get", "create", "withdraw", "reset"}
+    operations = {
+        "list_for_request", "get", "create", "withdraw", "cancel_for_request", "reset",
+    }
     for implementation in (MemoryApplicationRepository, PostgresApplicationRepository):
         assert operations <= set(dir(implementation))
 
@@ -505,6 +507,46 @@ def test_application_validation_and_missing_application_errors() -> None:
     assert missing.json()["error"]["code"] == "APPLICATION_NOT_FOUND"
 
 
+def test_application_endpoints_enforce_authentication_and_ownership() -> None:
+    async def unauthenticated() -> CurrentUser:
+        raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
+
+    app.dependency_overrides[get_current_user] = unauthenticated
+    unauthorized = client.post(
+        f"/requests/{SEED_REQUEST_1024}/applications",
+        json={"message": "対応できます", "availableAt": "2099-08-22T09:00:00+09:00"},
+    )
+    assert unauthorized.status_code == 401
+
+    app.dependency_overrides[get_current_user] = requester_user
+    forbidden = client.post("/applications/app_55/withdraw")
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"]["code"] == "ROLE_FORBIDDEN"
+
+
+def test_request_cancellation_cancels_pending_application() -> None:
+    request_id = create_open_request_for_application()
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    created = client.post(
+        f"/requests/{request_id}/applications",
+        json={"message": "対応できます", "availableAt": "2099-08-22T09:00:00+09:00"},
+    )
+    assert created.status_code == 201
+
+    app.dependency_overrides[get_current_user] = requester_user
+    cancelled = client.delete(f"/requests/{request_id}")
+    assert cancelled.status_code == 204
+
+    app.dependency_overrides[get_current_user] = helper_user
+    withdrawal = client.post(f"/applications/{created.json()['id']}/withdraw")
+    assert withdrawal.status_code == 409
+    assert withdrawal.json()["error"]["code"] == "APPLICATION_NOT_WITHDRAWABLE"
+
+
 def test_protected_endpoint_rejects_missing_session() -> None:
     async def unauthenticated() -> CurrentUser:
         from fastapi import HTTPException
@@ -569,7 +611,7 @@ def test_auth_mock_returns_default_user_without_session(monkeypatch) -> None:
     user = asyncio.run(get_current_user(request))
 
     assert user.user_id == "usr_101"
-    assert user.role == "requester"
+    assert user.role == "member"
     assert user.mfa_completed is True
 
 
@@ -587,7 +629,7 @@ def test_auth_mock_can_select_existing_user_by_header(monkeypatch) -> None:
     user = asyncio.run(get_current_user(request))
 
     assert user.user_id == "usr_207"
-    assert user.role == "helper"
+    assert user.role == "member"
 
 
 def test_auth_mock_rejects_unknown_user(monkeypatch) -> None:

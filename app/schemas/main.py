@@ -77,6 +77,12 @@ class MaskingConfirmationResponse(ContractModel):
     message: str
 
 
+class AppliedMasking(ContractModel):
+    detections: list[MaskingDetection]
+    ruleVersion: str
+    confirmed: bool
+
+
 class StructuredRequestResponse(ContractModel):
     title: str = Field(max_length=100)
     description: str = Field(max_length=3000)
@@ -87,6 +93,7 @@ class StructuredRequestResponse(ContractModel):
     riskLevel: Literal["low", "medium", "high", "prohibited"]
     missingFields: list[str]
     warnings: list[str]
+    masking: AppliedMasking
     requiresConfirmation: bool = True
 
 

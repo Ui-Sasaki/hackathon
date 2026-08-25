@@ -48,7 +48,6 @@ psql_su -d "$PGDATABASE" -v ON_ERROR_STOP=1 -f "$HERE/baseline_constraints.sql" 
 
 echo "=== 4. RLS 検査用データを投入する ==="
 psql_su -d "$PGDATABASE" -q -v ON_ERROR_STOP=1 -f "$HERE/_rls_seed.sql"
-psql_su -d "$PGDATABASE" -q -v ON_ERROR_STOP=1 -f "$HERE/_application_seed.sql"
 
 echo "=== 5. RLS 検査（非特権ロール tetote_app）==="
 "$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
@@ -56,6 +55,7 @@ echo "=== 5. RLS 検査（非特権ロール tetote_app）==="
   | grep -E 'OK |FAIL|完了' | sed 's/^psql:[^ ]* //'
 
 echo "=== 6. 応募永続化検査（非特権ロール tetote_app）==="
+psql_su -d "$PGDATABASE" -q -v ON_ERROR_STOP=1 -f "$HERE/_application_seed.sql"
 "$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
   -v ON_ERROR_STOP=1 -f "$HERE/application_persistence.sql" 2>&1 \
   | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
