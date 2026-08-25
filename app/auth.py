@@ -6,7 +6,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Security
+from fastapi.security import APIKeyCookie
 
 
 SUPERTOKENS_ENABLED = os.getenv("SUPERTOKENS_ENABLED", "true").lower() in {
@@ -35,6 +36,15 @@ if SUPERTOKENS_ENABLED:
 # 依頼やマッチに対する文脈上のアクターなので、ここには含めない
 # （要件定義書 §5 では双方が依頼作成と応募を行える）。
 Role = Literal["member", "admin", "verifier"]
+session_cookie = APIKeyCookie(
+    name="sAccessToken",
+    scheme_name="SuperTokensSession",
+    description=(
+        "SuperTokensが発行するHttpOnly Cookieセッション。更新系ではSDKが付与する"
+        "anti-csrfヘッダーも必要です。ユーザーIDやロールはセッションから決定します。"
+    ),
+    auto_error=False,
+)
 
 
 @dataclass(frozen=True)
@@ -163,14 +173,15 @@ def _current_user_from_record(
     )
 
 
-async def get_current_user(request: Request) -> CurrentUser:
+async def get_current_user(
+    request: Request,
+    _session_cookie: str | None = Security(session_cookie),
+) -> CurrentUser:
     if AUTH_MOCK_ENABLED:
         user_id = request.headers.get(AUTH_MOCK_USER_HEADER, AUTH_MOCK_USER_ID)
         return _current_user_from_record(
             user_id,
             _user_lookup(user_id),
-            # The mock represents a completed authentication flow. Application
-            # role, status and verification checks are still enforced.
             mfa_completed=True,
         )
 

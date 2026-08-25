@@ -5,8 +5,8 @@ from __future__ import annotations
 import base64
 import binascii
 from copy import deepcopy
-from datetime import datetime, timezone
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import re
 from typing import Any, Protocol, Sequence
@@ -67,7 +67,6 @@ def decode_cursor(token: str) -> RequestCursor:
     except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError) as exc:
         raise InvalidCursor("invalid cursor token") from exc
 
-
 def _iso(value: Any) -> str | None:
     if value is None:
         return None
@@ -127,7 +126,6 @@ def _public_record(item: RequestRecord) -> RequestRecord:
     result.pop("_requesterVerificationStatus", None)
     return result
 
-
 def _row_to_record(row: Any) -> RequestRecord:
     return {
         "id": str(row["id"]),
@@ -144,6 +142,9 @@ def _row_to_record(row: Any) -> RequestRecord:
         "estimatedMinutes": row["estimated_minutes"],
         "requiredHelpers": row["required_helpers"],
         "status": row["status"],
+        "expiresAt": _iso(row["expires_at"]),
+        "verificationRequired": row["verification_required"],
+        "_requesterVerificationStatus": row["requester_verification_status"],
         "version": row["version"],
         "warnings": [],
         "createdAt": _iso(row["created_at"]),
@@ -217,6 +218,7 @@ class MemoryRequestRepository:
             "acceptedHelpers": 0, "scheduledAt": scheduled_at,
             "estimatedMinutes": minutes, "requiredHelpers": helpers, "status": "published",
             "version": version, "warnings": [], "createdAt": created_at, "updatedAt": created_at,
+            "expiresAt": None, "verificationRequired": False,
             "_requesterVerificationStatus": {
                 "usr_101": "approved", "usr_301": "unverified",
             }.get(requester_id, "unverified"),
@@ -277,6 +279,7 @@ class MemoryRequestRepository:
             **deepcopy(values), "areaLabel": "大学周辺・約1km", "distanceKm": 1.0,
             "acceptedHelpers": 0, "status": "draft", "version": 1,
             "warnings": [], "createdAt": now, "updatedAt": now,
+            "expiresAt": None, "verificationRequired": False,
             "_requesterVerificationStatus": actor.verification_status,
         }
         self._items[item["id"]] = item
@@ -321,7 +324,8 @@ class PostgresRequestRepository:
     _SELECT = """
         select r.id, r.title, r.original_text, r.category_id, r.risk_level,
                r.area_code, r.scheduled_at, r.estimated_minutes, r.required_helpers,
-               r.status, r.version, r.created_at, r.updated_at,
+               r.status, r.version, r.expires_at, r.verification_required,
+               r.created_at, r.updated_at,
                app.auth_subject_of(r.requester_id) as requester_auth_subject,
                app.verification_status_of(r.requester_id) as requester_verification_status,
                (select count(*) from matches m where m.request_id = r.id) as accepted_helpers
@@ -373,7 +377,7 @@ class PostgresRequestRepository:
                  blocked_requester_ids,
                  cursor.created_at if cursor else None, cursor_id, limit,
             )
-        return [_row_to_record(row) for row in rows]
+        return [_public_record(_row_to_record(row)) for row in rows]
 
     async def get(self, actor: CurrentUser, request_id: str) -> RequestRecord | None:
         try:
@@ -382,7 +386,7 @@ class PostgresRequestRepository:
             return None
         async with actor_connection(actor) as conn:
             row = await conn.fetchrow(self._SELECT + " where r.id = $1", parsed_id)
-        return _row_to_record(row) if row else None
+        return _public_record(_row_to_record(row)) if row else None
 
     async def create(self, actor: CurrentUser, values: dict[str, Any]) -> RequestRecord:
         async with actor_connection(actor) as conn:
@@ -393,13 +397,17 @@ class PostgresRequestRepository:
                    ) values (app.current_actor(), $1, $2, $3, $4, $5, $6, $7, $8)
                    returning id, title, original_text, category_id, risk_level, area_code,
                      scheduled_at, estimated_minutes, required_helpers, status, version,
-                     created_at, updated_at""",
+                     expires_at, verification_required, created_at, updated_at""",
                 values["title"], values["description"], values["category"], values["riskLevel"],
                 values["areaCode"], datetime.fromisoformat(values["scheduledAt"]),
                 values["estimatedMinutes"], values["requiredHelpers"],
             )
-        return _row_to_record({**dict(row), "requester_auth_subject": actor.user_id,
-                               "accepted_helpers": 0})
+        return _public_record(_row_to_record({
+            **dict(row),
+            "requester_auth_subject": actor.user_id,
+            "requester_verification_status": actor.verification_status,
+            "accepted_helpers": 0,
+        }))
 
     async def update(self, actor: CurrentUser, request_id: str, expected_version: int,
                      changes: dict[str, Any]) -> RequestRecord | None:
@@ -413,7 +421,7 @@ class PostgresRequestRepository:
             if updated is None:
                 return None
             row = await conn.fetchrow(self._SELECT + " where r.id = $1", uuid.UUID(request_id))
-        return _row_to_record(row)
+        return _public_record(_row_to_record(row))
 
     async def cancel(
         self, actor: CurrentUser, request_id: str, expected_version: int

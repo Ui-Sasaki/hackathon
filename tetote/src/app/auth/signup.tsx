@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Modal,
 } from "react-native";
 import { useState } from "react";
 import { useRouter } from "expo-router";
@@ -24,6 +25,9 @@ export default function SignupScreen() {
     useState(false);
 
   const [error, setError] = useState("");
+
+  const [showSuccess, setShowSuccess] =
+    useState(false);
 
   const handleSignup = () => {
     setError("");
@@ -45,7 +49,12 @@ export default function SignupScreen() {
       return;
     }
 
-    router.replace("/onboarding/intro");
+    setShowSuccess(true);
+
+    setTimeout(() => {
+      setShowSuccess(false);
+      router.replace("/onboarding/intro");
+    }, 2000);
   };
 
   return (
@@ -62,7 +71,7 @@ export default function SignupScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <Pressable
-          onPress={() => router.back()}
+          onPress={() => router.replace("/auth")}
           style={styles.backButton}
         >
           <Ionicons
@@ -114,7 +123,9 @@ export default function SignupScreen() {
 
               <Pressable
                 onPress={() =>
-                  setShowPassword((current) => !current)
+                  setShowPassword(
+                    (current) => !current
+                  )
                 }
               >
                 <Ionicons
@@ -180,6 +191,33 @@ export default function SignupScreen() {
           </Pressable>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={showSuccess}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.successModal}>
+            <View style={styles.checkCircle}>
+              <Ionicons
+                name="checkmark"
+                size={38}
+                color="#FFFFFF"
+              />
+            </View>
+
+            <Text style={styles.successTitle}>
+              サインアップ完了しました！
+            </Text>
+
+            <Text style={styles.successSubtitle}>
+              tetoteへようこそ
+            </Text>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -304,5 +342,58 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.75,
     transform: [{ scale: 0.98 }],
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.25)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 28,
+  },
+
+  successModal: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: "#FFF5E9",
+    borderRadius: 28,
+    paddingHorizontal: 24,
+    paddingVertical: 38,
+    alignItems: "center",
+
+    shadowColor: "#000000",
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    shadowOffset: {
+      width: 0,
+      height: 8,
+    },
+
+    elevation: 8,
+  },
+
+  checkCircle: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: "#245C2D",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 20,
+  },
+
+  successTitle: {
+    color: "#245C2D",
+    fontSize: 20,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+
+  successSubtitle: {
+    color: "#777777",
+    fontSize: 14,
+    fontWeight: "600",
+    marginTop: 9,
+    textAlign: "center",
   },
 });

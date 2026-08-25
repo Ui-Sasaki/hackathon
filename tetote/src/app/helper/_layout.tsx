@@ -1,18 +1,11 @@
 import { Tabs } from "expo-router";
-import {
-  View,
-  Text,
-  StyleSheet,
-} from "react-native";
+import { View, Text, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useMode } from "../../context/ModeContext";
-import HelpIcon from "../../../assets/home/helpicon.svg";
 
 type TabIconProps = {
   focused: boolean;
   icon?: keyof typeof Ionicons.glyphMap;
   label: string;
-  special?: boolean;
   profile?: boolean;
 };
 
@@ -20,65 +13,39 @@ function TabIcon({
   focused,
   icon,
   label,
-  special = false,
   profile = false,
 }: TabIconProps) {
-  if (special) {
-    return (
-      <View style={styles.tabItem}>
-        <View style={styles.iconContainer}>
-          <HelpIcon
-            width={50}
-            height={50}
-          />
-        </View>
-
-        <Text style={styles.tabLabel}>
-          {label}
-        </Text>
-      </View>
-    );
-  }
-
-  if (profile) {
-    return (
-      <View style={styles.tabItem}>
+  return (
+    <View style={styles.tabItem}>
+      {profile ? (
         <View
           style={[
             styles.profileCircle,
-            focused &&
-              styles.profileCircleFocused,
+            focused && styles.profileCircleFocused,
           ]}
-        />
-
-        <Text style={styles.tabLabel}>
-          {label}
-        </Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.tabItem}>
-      <View style={styles.iconContainer}>
-        {icon && (
+        >
           <Ionicons
-            name={icon}
-            size={28}
-            color={
-              focused
-                ? "#F2A329"
-                : "#FFF5E9"
-            }
+            name="person"
+            size={24}
+            color={focused ? "#F2A329" : "#FFF5E9"}
           />
-        )}
-      </View>
+        </View>
+      ) : (
+        <View style={styles.iconContainer}>
+          {icon && (
+            <Ionicons
+              name={icon}
+              size={28}
+              color={focused ? "#F2A329" : "#FFF5E9"}
+            />
+          )}
+        </View>
+      )}
 
       <Text
         style={[
           styles.tabLabel,
-          focused &&
-            styles.tabLabelFocused,
+          focused && styles.tabLabelFocused,
         ]}
       >
         {label}
@@ -87,9 +54,7 @@ function TabIcon({
   );
 }
 
-export default function TabLayout() {
-  const { mode } = useMode();
-
+export default function HelperLayout() {
   return (
     <Tabs
       screenOptions={{
@@ -105,34 +70,29 @@ export default function TabLayout() {
           width: "100%",
           maxWidth: 520,
           alignSelf: "center",
-          overflow: "visible",
         },
       }}
     >
+      {/* 求人 */}
       <Tabs.Screen
         name="index"
         options={{
           title: "求人",
-
           tabBarIcon: ({ focused }) => (
             <TabIcon
               focused={focused}
-              icon={
-                focused
-                  ? "briefcase"
-                  : "briefcase-outline"
-              }
+              icon={focused ? "briefcase" : "briefcase-outline"}
               label="求人"
             />
           ),
         }}
       />
 
+      {/* トーク */}
       <Tabs.Screen
         name="chats"
         options={{
           title: "トーク",
-
           tabBarIcon: ({ focused }) => (
             <TabIcon
               focused={focused}
@@ -147,50 +107,26 @@ export default function TabLayout() {
         }}
       />
 
-      <Tabs.Screen
-        name="request"
-        options={{
-          href:
-            mode === "requester"
-              ? undefined
-              : null,
-
-          title: "お願いする",
-
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              focused={focused}
-              label="お願いする"
-              special
-            />
-          ),
-        }}
-      />
-
+      {/* キャラクター */}
       <Tabs.Screen
         name="character"
         options={{
           title: "キャラクター",
-
           tabBarIcon: ({ focused }) => (
             <TabIcon
               focused={focused}
-              icon={
-                focused
-                  ? "happy"
-                  : "happy-outline"
-              }
+              icon={focused ? "happy" : "happy-outline"}
               label="キャラクター"
             />
           ),
         }}
       />
 
+      {/* プロフィール */}
       <Tabs.Screen
         name="profile"
         options={{
           title: "プロフィール",
-
           tabBarIcon: ({ focused }) => (
             <TabIcon
               focused={focused}
@@ -202,7 +138,22 @@ export default function TabLayout() {
       />
 
       <Tabs.Screen
+  name="settings"
+  options={{
+    href: null,
+  }}
+/>
+
+      {/* HIDDEN SCREENS */}
+      <Tabs.Screen
         name="saved"
+        options={{
+          href: null,
+        }}
+      />
+
+      <Tabs.Screen
+        name="request"
         options={{
           href: null,
         }}
@@ -242,6 +193,8 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 22,
     backgroundColor: "#35410F",
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   profileCircleFocused: {

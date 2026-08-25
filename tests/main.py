@@ -21,6 +21,10 @@ from app.main import app
 from app.repositories.requests import (
     MemoryRequestRepository, PostgresRequestRepository, encode_cursor, get_request_repository,
 )
+from app.repositories.applications import (
+    MemoryApplicationRepository, PostgresApplicationRepository,
+    get_application_repository,
+)
 from app.settings import load_settings
 
 
@@ -125,7 +129,65 @@ def add_search_request(request_id: str, **changes) -> None:
     repository._items[request_id] = item
 
 
-def test_request_search_filters_and_excludes_closed_or_expired_requests() -> None:
+def test_location_is_resolved_only_after_explicit_consent() -> None:
+    response = client.post(
+        "/locations/resolve",
+        json={"consentGranted": True, "latitude": 43.082, "longitude": 141.350},
+    )
+    assert response.status_code == 200
+    assert response.json()["areaCode"] == "AREA-002"
+    assert response.json()["source"] == "current_location"
+    assert "latitude" not in response.text
+    assert "longitude" not in response.text
+
+
+@pytest.mark.parametrize("reason", ["denied", "timeout", "unsupported", "unavailable"])
+def test_location_failure_falls_back_to_registered_region(reason: str) -> None:
+    response = client.post("/locations/resolve", json={"failureReason": reason})
+    assert response.status_code == 200
+    assert response.json()["areaCode"] == "AREA-001"
+    assert response.json()["fallbackUsed"] is True
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"consentGranted": False, "latitude": 43.0, "longitude": 141.0},
+        {"consentGranted": True, "latitude": 91, "longitude": 141.0},
+        {"consentGranted": True, "latitude": 43.0},
+    ],
+)
+def test_location_rejects_invalid_coordinates(payload: dict) -> None:
+    response = client.post("/locations/resolve", json=payload)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert "43.0" not in response.text
+
+
+def test_location_requires_region_selection_without_fallback() -> None:
+    crud_module.users_store["usr_101"].pop("areaCode")
+    response = client.post("/locations/resolve", json={"failureReason": "denied"})
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "REGION_SELECTION_REQUIRED"
+
+
+def test_request_list_reports_current_location_origin() -> None:
+    response = client.get(
+        "/requests",
+        params={
+            "consentGranted": "true",
+            "latitude": 43.082,
+            "longitude": 141.350,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["origin"] == {
+        "areaCode": "AREA-002",
+        "source": "current_location",
+    }
+
+
+def test_request_search_filters_requests() -> None:
     add_search_request(
         "req_01", category="cleaning", requiredHelpers=2,
         scheduledAt="2026-09-01T10:00:00+09:00", requesterId="usr_101",
@@ -158,7 +220,7 @@ def test_request_search_uses_profile_area_and_never_returns_precise_location() -
         assert "streetAddress" not in item
         assert item["distanceKm"] <= 2
 
-    detail = client.get("/requests/req_1024").json()
+    detail = client.get(f"/requests/{SEED_REQUEST_1024}").json()
     assert "latitude" not in detail
     assert "longitude" not in detail
     assert "streetAddress" not in detail
@@ -441,6 +503,12 @@ def test_repository_implementations_share_request_contract() -> None:
         assert operations <= set(dir(implementation))
 
 
+def test_repository_implementations_share_application_contract() -> None:
+    operations = {"list_for_request", "get", "create", "withdraw", "reset"}
+    for implementation in (MemoryApplicationRepository, PostgresApplicationRepository):
+        assert operations <= set(dir(implementation))
+
+
 def test_production_settings_never_fall_back_to_memory(monkeypatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -476,6 +544,119 @@ def test_duplicate_application_is_rejected() -> None:
     )
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "DUPLICATE_APPLICATION"
+
+
+def create_open_request_for_application() -> str:
+    response = client.post(
+        "/requests",
+        headers={"Idempotency-Key": f"application-{os.urandom(4).hex()}"},
+        json={
+            "title": "応募テスト依頼",
+            "description": "応募永続化を確認する依頼です",
+            "category": "other",
+            "scheduledAt": "2099-08-22T10:00:00+09:00",
+            "estimatedMinutes": 30,
+            "requiredHelpers": 1,
+            "areaCode": "AREA-001",
+            "riskLevel": "low",
+            "confirmed": True,
+        },
+    )
+    assert response.status_code == 201
+    request_id = response.json()["id"]
+    asyncio.run(get_request_repository().set_status(REQUESTER, request_id, "published"))
+    return request_id
+
+
+def test_application_is_created_from_authenticated_helper_and_can_be_withdrawn() -> None:
+    request_id = create_open_request_for_application()
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    created = client.post(
+        f"/requests/{request_id}/applications",
+        json={"message": "対応できます", "availableAt": "2099-08-22T09:00:00+09:00"},
+    )
+    assert created.status_code == 201
+    assert created.json()["helperId"] == HELPER.user_id
+    application_id = created.json()["id"]
+
+    withdrawn = client.post(f"/applications/{application_id}/withdraw")
+    assert withdrawn.status_code == 200
+    assert withdrawn.json()["status"] == "withdrawn"
+    repeated = client.post(f"/applications/{application_id}/withdraw")
+    assert repeated.status_code == 409
+    assert repeated.json()["error"]["code"] == "APPLICATION_NOT_WITHDRAWABLE"
+
+
+def test_self_application_is_forbidden() -> None:
+    response = client.post(
+        f"/requests/{SEED_REQUEST_1024}/applications",
+        json={"message": "自分で対応", "availableAt": "2099-08-22T09:00:00+09:00"},
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "SELF_APPLICATION_NOT_ALLOWED"
+
+
+def test_application_to_closed_or_expired_request_is_rejected() -> None:
+    request_id = create_open_request_for_application()
+    request_repository = get_request_repository()
+    assert isinstance(request_repository, MemoryRequestRepository)
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    asyncio.run(request_repository.set_status(REQUESTER, request_id, "cancelled"))
+    closed = client.post(
+        f"/requests/{request_id}/applications",
+        json={"message": "対応できます", "availableAt": "2099-08-22T09:00:00+09:00"},
+    )
+    assert closed.status_code == 409
+    assert closed.json()["error"]["code"] == "REQUEST_NOT_OPEN"
+
+    asyncio.run(request_repository.set_status(REQUESTER, request_id, "published"))
+    request_repository._items[request_id]["expiresAt"] = "2000-01-01T00:00:00Z"
+    expired = client.post(
+        f"/requests/{request_id}/applications",
+        json={"message": "対応できます", "availableAt": "2099-08-22T09:00:00+09:00"},
+    )
+    assert expired.status_code == 409
+    assert expired.json()["error"]["code"] == "REQUEST_EXPIRED"
+
+
+def test_verification_required_request_rejects_unverified_helper() -> None:
+    request_id = create_open_request_for_application()
+    request_repository = get_request_repository()
+    assert isinstance(request_repository, MemoryRequestRepository)
+    request_repository._items[request_id]["verificationRequired"] = True
+
+    async def unverified_user() -> CurrentUser:
+        return CurrentUser(
+            user_id="usr_208", role="member", status="active",
+            email_verified=True, verification_status="unverified",
+        )
+
+    app.dependency_overrides[get_current_user] = unverified_user
+    response = client.post(
+        f"/requests/{request_id}/applications",
+        json={"message": "対応できます", "availableAt": "2099-08-22T09:00:00+09:00"},
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "VERIFICATION_REQUIRED"
+
+
+def test_application_validation_and_missing_application_errors() -> None:
+    invalid = client.post(
+        f"/requests/{SEED_REQUEST_1024}/applications",
+        json={"message": "", "availableAt": "not-a-date"},
+    )
+    assert invalid.status_code == 422
+    missing = client.post("/applications/missing/withdraw")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "APPLICATION_NOT_FOUND"
 
 
 def test_protected_endpoint_rejects_missing_session() -> None:
