@@ -68,7 +68,7 @@ export default function LoginScreen() {
         </Text>
 
         <Text style={styles.subtitle}>
-          おかえりなさい 
+          おかえりなさい
         </Text>
 
         <View style={styles.form}>

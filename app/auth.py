@@ -152,10 +152,39 @@ def configure_user_lookup(lookup: Callable[[str], dict[str, Any] | None]) -> Non
     _user_lookup = lookup
 
 
+def _current_user_from_record(
+    user_id: str,
+    record: dict[str, Any] | None,
+    *,
+    mfa_completed: bool = False,
+) -> CurrentUser:
+    if record is None:
+        raise HTTPException(403, detail={"code": "USER_PROFILE_NOT_FOUND"})
+    if record.get("status") != "active":
+        raise HTTPException(403, detail={"code": "USER_SUSPENDED"})
+
+    return CurrentUser(
+        user_id=user_id,
+        role=record["role"],
+        status=record["status"],
+        email_verified=record.get("emailVerified", False),
+        verification_status=record.get("verificationStatus", "unverified"),
+        mfa_completed=mfa_completed,
+    )
+
+
 async def get_current_user(
     request: Request,
     _session_cookie: str | None = Security(session_cookie),
 ) -> CurrentUser:
+    if AUTH_MOCK_ENABLED:
+        user_id = request.headers.get(AUTH_MOCK_USER_HEADER, AUTH_MOCK_USER_ID)
+        return _current_user_from_record(
+            user_id,
+            _user_lookup(user_id),
+            mfa_completed=True,
+        )
+
     if not SUPERTOKENS_ENABLED:
         raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
     try:

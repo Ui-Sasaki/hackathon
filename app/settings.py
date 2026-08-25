@@ -24,6 +24,10 @@ def load_settings() -> Settings:
     configured_backend = os.getenv("REQUEST_REPOSITORY")
     backend = configured_backend.lower() if configured_backend else "memory"
 
+    if environment == "test":
+        if configured_backend and backend != "memory":
+            raise RuntimeError("REQUEST_REPOSITORY must be memory in test")
+        backend = "memory"
     if environment == "production":
         if configured_backend and backend != "postgres":
             raise RuntimeError("REQUEST_REPOSITORY must be postgres in production")

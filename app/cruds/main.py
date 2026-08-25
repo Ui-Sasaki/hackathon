@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+import uuid
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
@@ -22,7 +23,9 @@ from app.auth import (
     SUPERTOKENS_ENABLED, CurrentUser, configure_user_creator, configure_user_lookup,
     cors_headers, get_current_user,
 )
-from app.repositories.requests import RequestRepository, get_request_repository
+from app.repositories.requests import (
+    InvalidCursor, RequestRepository, decode_cursor, encode_cursor, get_request_repository,
+)
 from app.repositories.applications import (
     ApplicationRepository, get_application_repository,
 )
@@ -101,6 +104,7 @@ ERROR_MESSAGES = {
     "MATCH_NOT_FOUND": "マッチが見つかりません",
     "APPLICATION_NOT_FOUND": "応募が見つかりません",
     "REQUEST_STATE_CONFLICT": "依頼の状態が更新されているため処理できません",
+    "INVALID_CURSOR": "カーソルが無効です",
     "VALIDATION_ERROR": "入力内容を確認してください",
     "REGION_SELECTION_REQUIRED": "地域を選択してください",
     "INTERNAL_SERVER_ERROR": "サーバー内部でエラーが発生しました",
@@ -349,7 +353,6 @@ async def application_repository_dependency() -> ApplicationRepository:
     """Resolve the application repository without a test-time threadpool hop."""
     return get_application_repository()
 
-
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -426,7 +429,7 @@ def reset_store() -> None:
             "emailVerified": True,
         },
         "usr_301": {
-            "id": "usr_301", "displayName": "鈴木 雪", "role": "requester",
+            "id": "usr_301", "displayName": "鈴木 雪", "role": "member",
             "status": "active", "emailVerified": True,
             "verificationStatus": "unverified", "areaCode": "AREA-001",
         },
@@ -474,7 +477,7 @@ def create_user_profile(user_id: str) -> None:
         {
             "id": user_id,
             "displayName": "",
-            "role": "requester",
+            "role": "member",
             "status": "active",
             "emailVerified": False,
             "verificationStatus": "unverified",
@@ -613,6 +616,11 @@ async def structure_request(
     masking_metrics["submitted"] += 1
     return {
         **result,
+        "masking": {
+            "detections": masking["detections"],
+            "ruleVersion": masking["ruleVersion"],
+            "confirmed": body.maskingConfirmed,
+        },
         "requiresConfirmation": True,
     }
 
@@ -632,16 +640,24 @@ async def request_or_404(
     return await require_request(repository, current_user, request_id)
 
 
-@app.get("/requests", response_model=RequestListResponse, tags=["Requests"], summary="公開依頼を検索", description="カテゴリ・概算地域で絞り込み、現在地または登録地域に近い順で返す。limit既定20、最大100。Repository内ではcreatedAt降順・ID降順。公開中のみを対象とし、ブロック関係の依頼は除外する。nextCursorは次ページがない場合nullで、現行実装は常にnull。", responses=api_errors(401, 422, 500))
+@app.get("/requests", response_model=RequestListResponse, tags=["Requests"], summary="公開依頼を検索", description="カテゴリ・日時・必要人数・概算距離・本人確認状態で絞り込み、カーソルページングで返す。現在地または登録地域による並び替え元もoriginで返す。", responses=api_errors(401, 422, 500))
 async def list_requests(
     category: str | None = None,
     areaCode: str | None = None,
+    scheduledFrom: datetime | None = None,
+    scheduledTo: datetime | None = None,
+    requiredHelpers: int | None = Query(default=None, ge=1, le=5),
+    maxDistanceKm: float | None = Query(default=None, ge=0),
+    verificationStatus: str | None = Query(
+        default=None, pattern="^(unverified|pending|approved|rejected|expired)$"
+    ),
     latitude: float | None = Query(default=None, ge=-90, le=90),
     longitude: float | None = Query(default=None, ge=-180, le=180),
     consentGranted: bool = False,
     locationFailure: str | None = Query(
         default=None, pattern="^(denied|timeout|unsupported|unavailable)$"
     ),
+    cursor: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
@@ -656,24 +672,53 @@ async def list_requests(
     except ValidationError:
         raise HTTPException(422, detail={"code": "VALIDATION_ERROR"}) from None
     origin_area_code, source = resolve_location(location, current_user, areaCode)
-    items = await repository.list(
-        current_user, category=category, area_code=areaCode, limit=limit,
+    try:
+        request_cursor = decode_cursor(cursor) if cursor is not None else None
+    except InvalidCursor as exc:
+        raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+    blocked_requester_ids = sorted(
+        {
+            second_user_id
+            for first_user_id, second_user_id in blocks
+            if first_user_id == current_user.user_id
+        }
+        | {
+            first_user_id
+            for first_user_id, second_user_id in blocks
+            if second_user_id == current_user.user_id
+        }
     )
-    items = [
-        item for item in items
-        if not is_blocked_pair(current_user.user_id, item["requesterId"])
-    ]
+    try:
+        items = await repository.list(
+            current_user,
+            category=category,
+            area_code=areaCode,
+            limit=limit + 1,
+            cursor=request_cursor,
+            scheduled_from=scheduledFrom,
+            scheduled_to=scheduledTo,
+            required_helpers=requiredHelpers,
+            max_distance_km=maxDistanceKm,
+            verification_status=verificationStatus,
+            blocked_requester_ids=blocked_requester_ids,
+        )
+    except InvalidCursor as exc:
+        raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+    has_more = len(items) > limit
+    page = items[:limit]
+    cursor_item = page[-1] if page else None
     if latitude is not None and longitude is not None:
-        items.sort(
+        page.sort(
             key=lambda item: distance_km(
                 latitude, longitude, REGIONS.get(item["areaCode"], REGIONS["AREA-001"])
             )
         )
     else:
-        items.sort(key=lambda item: item["areaCode"] != origin_area_code)
+        page.sort(key=lambda item: item["areaCode"] != origin_area_code)
+    next_cursor = encode_cursor(cursor_item) if has_more and cursor_item else None
     return {
-        "items": items,
-        "nextCursor": None,
+        "items": page,
+        "nextCursor": next_cursor,
         "origin": {"areaCode": origin_area_code, "source": source},
     }
 
