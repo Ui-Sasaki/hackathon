@@ -12,9 +12,11 @@ import {
 import { useState } from "react";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { useAuth } from "../../auth/AuthContext";
 
 export default function SignupScreen() {
   const router = useRouter();
+  const { signUp } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -28,8 +30,10 @@ export default function SignupScreen() {
 
   const [showSuccess, setShowSuccess] =
     useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSignup = () => {
+  const handleSignup = async () => {
+    if (isSubmitting) return;
     setError("");
 
     if (!email || !password || !confirmPassword) {
@@ -49,12 +53,23 @@ export default function SignupScreen() {
       return;
     }
 
-    setShowSuccess(true);
-
-    setTimeout(() => {
-      setShowSuccess(false);
-      router.replace("/onboarding/intro");
-    }, 2000);
+    setIsSubmitting(true);
+    try {
+      const result = await signUp(email.trim(), password);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      setShowSuccess(true);
+      setTimeout(() => {
+        setShowSuccess(false);
+        router.replace("/onboarding/intro");
+      }, 800);
+    } catch {
+      setError("通信に失敗しました。接続を確認してもう一度お試しください");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -164,13 +179,15 @@ export default function SignupScreen() {
 
           <Pressable
             onPress={handleSignup}
+            disabled={isSubmitting}
             style={({ pressed }) => [
               styles.signupButton,
+              isSubmitting && styles.disabled,
               pressed && styles.pressed,
             ]}
           >
             <Text style={styles.signupButtonText}>
-              新規登録
+              {isSubmitting ? "登録中…" : "新規登録"}
             </Text>
           </Pressable>
         </View>
@@ -342,6 +359,10 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.75,
     transform: [{ scale: 0.98 }],
+  },
+
+  disabled: {
+    opacity: 0.55,
   },
 
   modalOverlay: {
