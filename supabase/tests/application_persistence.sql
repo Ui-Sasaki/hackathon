@@ -1,19 +1,22 @@
 -- #20 応募永続化の制約・RLS・状態遷移検査。tetote_app で実行する。
 begin;
 
-select set_config('app.actor_id',
-    (select id::text from users where auth_subject = 'st_application_helper'), true);
+select set_config(
+    'app.actor_id', 'aaaaaaaa-1000-0000-0000-000000000001', true
+);
 
 -- 公開・期限内の依頼には本人名義で応募できる。
 insert into applications (request_id, helper_id, message, available_at)
-select r.id, app.current_actor(), '対応できます', now() + interval '1 hour'
-  from requests r where r.title = '応募永続化テスト';
+values (
+    'aaaaaaaa-2000-0000-0000-000000000001', app.current_actor(),
+    '対応できます', now() + interval '1 hour'
+);
 
 do $$
 begin
     begin
         insert into applications (request_id, helper_id)
-        select r.id, app.current_actor() from requests r where r.title = '応募永続化テスト';
+        values ('aaaaaaaa-2000-0000-0000-000000000001', app.current_actor());
         raise exception 'FAIL 重複応募が成功した';
     exception when unique_violation then
         raise notice 'OK   重複応募を一意制約で拒否';
@@ -48,7 +51,7 @@ do $$
 begin
     begin
         insert into applications (request_id, helper_id)
-        select r.id, app.current_actor() from requests r where r.title = '期限切れ応募テスト';
+        values ('aaaaaaaa-2000-0000-0000-000000000002', app.current_actor());
         raise exception 'FAIL 期限切れ応募が成功した';
     exception when insufficient_privilege then
         raise notice 'OK   期限切れ応募をRLSで拒否';
@@ -56,7 +59,7 @@ begin
 
     begin
         insert into applications (request_id, helper_id)
-        select r.id, app.current_actor() from requests r where r.title = '本人確認必須応募テスト';
+        values ('aaaaaaaa-2000-0000-0000-000000000003', app.current_actor());
         raise exception 'FAIL 未確認ユーザーの応募が成功した';
     exception when insufficient_privilege then
         raise notice 'OK   本人確認必須応募をRLSで拒否';

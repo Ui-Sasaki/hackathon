@@ -29,6 +29,12 @@ from app.repositories.requests import (
 from app.repositories.applications import (
     ApplicationRepository, get_application_repository,
 )
+from app.repositories.matches import (
+    MatchRepository,
+    MatchRepositoryError,
+    configure_match_block_checker,
+    get_match_repository,
+)
 from app.services.applications import (
     create_application as create_application_service,
     withdraw_application as withdraw_application_service,
@@ -56,8 +62,9 @@ app = FastAPI(
     description=(
         "地域の依頼と支援者をつなぐAPI契約。業務APIはSuperTokensのHttpOnly Cookie"
         "セッションが必須で、ユーザーID・ロール・送信日時はサーバーが決定する。"
-        "`/auth/*` はSuperTokensが提供する。依頼はRepositoryに保存されるが、応募以降、"
-        "AI、本人確認は現在開発用インメモリ実装である。`/_mock/reset` は明示的に有効化"
+        "`/auth/*` はSuperTokensが提供する。依頼・応募・マッチ・チャット・完了・dispute"
+        "はRepositoryに保存されるが、review・AI・本人確認は現在開発用インメモリ実装である。"
+        "`/_mock/reset` は明示的に有効化"
         "した非本番環境だけで利用できる。"
     ),
 )
@@ -353,6 +360,12 @@ async def application_repository_dependency() -> ApplicationRepository:
     """Resolve the application repository without a test-time threadpool hop."""
     return get_application_repository()
 
+
+async def match_repository_dependency() -> MatchRepository:
+    """Resolve the matching repository selected for this process."""
+    return get_match_repository()
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -406,7 +419,7 @@ PUBLIC_REQUEST_FIELDS = {
 
 
 def reset_store() -> None:
-    global applications, matches, messages, reviews, achievements
+    global reviews, achievements
     global profile_store, users_store, verifications, reports, blocks, audit_logs
     global idempotency_store
     profile_store = {
@@ -434,28 +447,6 @@ def reset_store() -> None:
             "verificationStatus": "unverified", "areaCode": "AREA-001",
         },
     }
-    applications = {
-        "app_55": {
-            "id": "app_55",
-            "requestId": SEED_REQUEST_1024,
-            "helperId": "usr_207",
-            "message": "犬の散歩経験があります",
-            "availableAt": "2026-08-19T17:00:00+09:00",
-            "status": "applied",
-            "createdAt": "2026-08-18T12:00:00+09:00",
-        },
-        "app_56": {
-            "id": "app_56",
-            "requestId": SEED_REQUEST_1024,
-            "helperId": "usr_208",
-            "message": "18時以降なら対応できます",
-            "availableAt": "2026-08-19T18:00:00+09:00",
-            "status": "applied",
-            "createdAt": "2026-08-18T12:10:00+09:00",
-        },
-    }
-    matches = {}
-    messages = {}
     reviews = {}
     achievements = {}
     verifications = {}
@@ -486,8 +477,28 @@ def create_user_profile(user_id: str) -> None:
 
 
 configure_user_creator(create_user_profile)
-def match_or_404(match_id: str) -> dict:
-    return get_or_404(matches, match_id, "MATCH_NOT_FOUND")
+
+
+async def match_or_404(
+    repository: MatchRepository, actor: CurrentUser, match_id: str
+) -> dict[str, Any]:
+    match = await repository.get(actor, match_id)
+    if match is None:
+        raise HTTPException(404, detail={"code": "MATCH_NOT_FOUND"})
+    return match
+
+
+def raise_match_repository_error(error: MatchRepositoryError) -> None:
+    if error.code in {"APPLICATION_NOT_FOUND", "REQUEST_NOT_FOUND", "MATCH_NOT_FOUND"}:
+        status_code = 404
+    elif error.code in {"ROLE_FORBIDDEN", "ACTOR_ROLE_MISMATCH", "MESSAGE_FORBIDDEN"}:
+        status_code = 403
+    else:
+        status_code = 409
+    detail: dict[str, Any] = {"code": error.code}
+    if error.current_version is not None:
+        detail["currentVersion"] = error.current_version
+    raise HTTPException(status_code, detail=detail) from error
 
 
 def ensure_match_participant(match: dict, user_id: str) -> str:
@@ -505,6 +516,9 @@ def is_blocked_pair(first_user_id: str, second_user_id: str) -> bool:
         (first_user_id, second_user_id) in blocks
         or (second_user_id, first_user_id) in blocks
     )
+
+
+configure_match_block_checker(is_blocked_pair)
 
 
 def record_audit_event(
@@ -552,10 +566,12 @@ async def reset_mock(
     application_repository: ApplicationRepository = Depends(
         application_repository_dependency
     ),
+    match_repository: MatchRepository = Depends(match_repository_dependency),
 ):
     reset_store()
     await repository.reset()
     await application_repository.reset()
+    await match_repository.reset()
     return {"reset": True}
 
 
@@ -778,11 +794,12 @@ async def cancel_request(
     request_id: str,
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
+    application_repository: ApplicationRepository = Depends(
+        application_repository_dependency
+    ),
 ):
     await cancel_owned_request(repository, current_user, request_id)
-    for application in applications.values():
-        if application["requestId"] == request_id and application["status"] == "applied":
-            application["status"] = "cancelled"
+    await application_repository.cancel_pending_for_request(current_user, request_id)
     return None
 
 
@@ -839,79 +856,40 @@ async def select_application(
     application_id: str,
     body: SelectionInput,
     current_user: CurrentUser = Depends(get_current_user),
-    repository: RequestRepository = Depends(request_repository_dependency),
+    repository: MatchRepository = Depends(match_repository_dependency),
 ):
-    application = applications.get(application_id)
-    if not application:
-        raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
-    if application["requestId"] != body.requestId:
-        raise HTTPException(409, detail={"code": "APPLICATION_REQUEST_MISMATCH"})
-    request_item = await request_or_404(repository, current_user, body.requestId)
-    if request_item["requesterId"] != current_user.user_id:
-        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-    if request_item["version"] != body.expectedVersion:
-        raise HTTPException(409, detail={
-            "code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"],
-        })
-    if application["status"] != "applied":
-        raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
-    if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
-        raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
-    capacity_reached = request_item["acceptedHelpers"] + 1 >= request_item["requiredHelpers"]
-    new_status = "matched" if capacity_reached else "matching"
-    updated = await repository.set_status(
-        current_user, request_item["id"], new_status,
-        expected_version=request_item["version"],
-    )
-    if not updated:
-        raise HTTPException(409, detail={
-            "code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"],
-        })
-    application["status"] = "selected"
-    if capacity_reached:
-        for other in applications.values():
-            if other["requestId"] == request_item["id"] and other["status"] == "applied":
-                other["status"] = "not_selected"
-    match = {
-        "id": new_id("match"),
-        "requestId": request_item["id"],
-        "requesterId": request_item["requesterId"],
-        "helperId": application["helperId"],
-        "status": "matched",
-        "requesterConfirmed": False,
-        "helperConfirmed": False,
-        "matchedAt": now_iso(),
-        "completedAt": None,
-    }
-    matches[match["id"]] = match
-    messages[match["id"]] = []
-    return match
+    try:
+        return await repository.select_application(
+            current_user,
+            application_id,
+            body.requestId,
+            body.expectedVersion,
+        )
+    except MatchRepositoryError as error:
+        raise_match_repository_error(error)
 
 
 @app.get("/matches/{match_id}", response_model=MatchResponse, tags=["Matches"], summary="マッチ詳細を取得", description="依頼者と選択された支援者本人だけが取得できる。", responses=api_errors(401, 403, 404, 500))
-async def get_match(match_id: str, current_user: CurrentUser = Depends(get_current_user)):
-    match = match_or_404(match_id)
-    ensure_match_participant(match, current_user.user_id)
-    return match
+async def get_match(
+    match_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: MatchRepository = Depends(match_repository_dependency),
+):
+    return await match_or_404(repository, current_user, match_id)
 
 
 @app.get("/matches/{match_id}/messages", response_model=MessageListResponse, tags=["Messages"], summary="チャット履歴を取得", description="成立したマッチの当事者だけが取得できる。送信日時の昇順。ブロックした相手のメッセージは除外する。nextCursorは次ページなしでnull（現行実装は常にnull）。", responses=api_errors(401, 403, 404, 500))
 async def list_messages(
     match_id: str,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: MatchRepository = Depends(match_repository_dependency),
 ):
-    match = match_or_404(match_id)
-    ensure_match_participant(match, current_user.user_id)
-    return {
-        "items": [
-            item for item in messages.get(match_id, [])
-            if not (
-                item["senderId"] != current_user.user_id
-                and is_blocked_pair(current_user.user_id, item["senderId"])
-            )
-        ],
-        "nextCursor": None,
-    }
+    await match_or_404(repository, current_user, match_id)
+    try:
+        items = await repository.list_messages(current_user, match_id)
+    except MatchRepositoryError as error:
+        raise_match_repository_error(error)
+    return {"items": items, "nextCursor": None}
 
 
 @app.post("/matches/{match_id}/messages", response_model=MessageResponse, status_code=201, tags=["Messages"], summary="チャットメッセージを送信", description="マッチ当事者だけが送信できる。senderIdとsentAtはセッションとサーバー時刻から決定する。", responses=api_errors(401, 403, 404, 422, 500))
@@ -919,51 +897,25 @@ async def create_message(
     match_id: str,
     body: MessageInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: MatchRepository = Depends(match_repository_dependency),
 ):
-    ensure_match_participant(match_or_404(match_id), current_user.user_id)
-    item = {
-        "id": new_id("msg"),
-        "matchId": match_id,
-        "senderId": current_user.user_id,
-        "body": body.body,
-        "sentAt": now_iso(),
-        "readAt": None,
-        "moderationStatus": "allowed",
-    }
-    messages.setdefault(match_id, []).append(item)
-    return item
+    try:
+        return await repository.create_message(current_user, match_id, body.body)
+    except MatchRepositoryError as error:
+        raise_match_repository_error(error)
 
 
-# 完了確認を受け付けるマッチ状態。ここを明示しないと disputed や completed を
-# 完了操作で上書きできる。状態を変える前に検査すること。
-COMPLETABLE_MATCH_STATUSES = {"matched", "completion_pending"}
-
-
-@app.post("/matches/{match_id}/complete", response_model=MatchResponse, tags=["Matches"], summary="活動完了を確認", description="依頼者と支援者本人だけが自分の役割で確認できる。片方のみはcompletion_pending、双方確認後はcompleted。disputedまたはcompletedへの操作は409。現行実装では同じ当事者の再確認は冪等に成功する。", responses=api_errors(401, 403, 404, 409, 422, 500))
+@app.post("/matches/{match_id}/complete", response_model=MatchResponse, tags=["Matches"], summary="活動完了を確認", description="依頼者と支援者本人だけが自分の役割で確認できる。片方のみはcompletion_pending、双方確認後はcompleted。重複確認、disputedまたはcompletedへの操作は409。", responses=api_errors(401, 403, 404, 409, 422, 500))
 async def complete_match(
     match_id: str,
     body: CompletionInput,
     current_user: CurrentUser = Depends(get_current_user),
-    repository: RequestRepository = Depends(request_repository_dependency),
+    repository: MatchRepository = Depends(match_repository_dependency),
 ):
-    match = match_or_404(match_id)
-    actor_role = ensure_match_participant(match, current_user.user_id)
-    if body.actorRole != actor_role:
-        raise HTTPException(403, detail={"code": "ACTOR_ROLE_MISMATCH"})
-    if match["status"] not in COMPLETABLE_MATCH_STATUSES:
-        raise HTTPException(409, detail={"code": "MATCH_NOT_COMPLETABLE"})
-    match[f"{actor_role}Confirmed"] = True
-    if match["requesterConfirmed"] and match["helperConfirmed"]:
-        match["status"] = "completed"
-        match["completedAt"] = now_iso()
-        new_request_status = "completed"
-    else:
-        match["status"] = "completion_pending"
-        new_request_status = "completion_pending"
-    await repository.set_status(
-        current_user, match["requestId"], new_request_status, bump_version=False,
-    )
-    return match
+    try:
+        return await repository.complete(current_user, match_id, body.actorRole)
+    except MatchRepositoryError as error:
+        raise_match_repository_error(error)
 
 
 @app.post("/matches/{match_id}/dispute", response_model=MatchResponse, tags=["Matches"], summary="マッチングキャンセルを申告", description="当事者が理由を付けてマッチと依頼をdisputedへ遷移する。completedまたは既にdisputedの場合は409。", responses=api_errors(401, 403, 404, 409, 422, 500))
@@ -971,18 +923,12 @@ async def dispute_match(
     match_id: str,
     body: DisputeInput,
     current_user: CurrentUser = Depends(get_current_user),
-    repository: RequestRepository = Depends(request_repository_dependency),
+    repository: MatchRepository = Depends(match_repository_dependency),
 ):
-    match = match_or_404(match_id)
-    ensure_match_participant(match, current_user.user_id)
-    if match["status"] in {"completed", "disputed"}:
-        raise HTTPException(409, detail={"code": "MATCH_NOT_DISPUTABLE"})
-    match.update({"status": "disputed", "disputeReason": body.reason, "disputedAt": now_iso()})
-    await request_or_404(repository, current_user, match["requestId"])
-    await repository.set_status(
-        current_user, match["requestId"], "disputed", bump_version=False,
-    )
-    return match
+    try:
+        return await repository.dispute(current_user, match_id, body.reason)
+    except MatchRepositoryError as error:
+        raise_match_repository_error(error)
 
 
 @app.post("/matches/{match_id}/reviews", response_model=ReviewResponse, status_code=201, tags=["Reviews"], summary="完了した相手をレビュー", description="completedのマッチ当事者だけが相手へ1件投稿できる。未完了または重複投稿は409。", responses=api_errors(401, 403, 404, 409, 422, 500))
@@ -990,8 +936,9 @@ async def create_review(
     match_id: str,
     body: ReviewInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: MatchRepository = Depends(match_repository_dependency),
 ):
-    match = match_or_404(match_id)
+    match = await match_or_404(repository, current_user, match_id)
     actor_role = ensure_match_participant(match, current_user.user_id)
     if match["status"] != "completed":
         raise HTTPException(409, detail={"code": "MATCH_NOT_COMPLETED"})
@@ -1017,8 +964,9 @@ async def generate_achievement(
     body: AchievementInput,
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
+    match_repository: MatchRepository = Depends(match_repository_dependency),
 ):
-    match = match_or_404(body.matchId)
+    match = await match_or_404(match_repository, current_user, body.matchId)
     ensure_match_participant(match, current_user.user_id)
     if match["status"] != "completed":
         raise HTTPException(409, detail={"code": "MATCH_NOT_COMPLETED"})

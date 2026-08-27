@@ -16,7 +16,7 @@
 
 出典は [PR #48 OpenAPI契約を整備](https://github.com/Ui-Sasaki/hackathon/pull/48) で、`main`へマージ済みである。
 
-FastAPIの公開レスポンスモデル、エラー例、OpenAPIの決定的な書き出しと一致テストが追加された。応募処理もMemory/Postgresを差し替えられるRepositoryとServiceへ分離されている。API変更時は`docs/openapi.json`を再生成し、依頼・応募両Repositoryの依存性注入とリセット処理を維持する。
+FastAPIの公開レスポンスモデル、エラー例、OpenAPIの決定的な書き出しと一致テストが追加された。応募、マッチ、チャット、完了、disputeもMemory/Postgresを差し替えられるRepositoryへ分離されている。API変更時は`docs/openapi.json`を再生成し、依頼・応募・マッチ各Repositoryの依存性注入とリセット処理を維持する。
 
 ### 依頼者・支援者UI
 
@@ -29,6 +29,6 @@ FastAPIの公開レスポンスモデル、エラー例、OpenAPIの決定的な
 - [ ] `requester`／`helper`を永続的なアカウントロールとして再導入していない。
 - [ ] DBアクセスがRepositoryとトランザクション単位のアクター設定を維持している。
 - [ ] 公開APIへ内部ID、秘密情報、正確な位置情報、本人確認メタデータを追加していない。
-- [ ] 応募Repositoryと依頼Repositoryの依存性注入・リセット処理を維持している。
+- [ ] 依頼・応募・マッチRepositoryの依存性注入・リセット処理を維持している。
 - [ ] OpenAPIの生成物と実装が一致している。
 - [ ] `tetote/`のExpo Router構成とVercel設定を壊していない。
