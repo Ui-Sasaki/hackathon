@@ -6,10 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.api_support import (
     api_errors,
+    block_repository_dependency,
     match_repository_dependency,
     request_repository_dependency,
 )
 from app.auth import CurrentUser, get_current_user
+from app.repositories.blocks import BlockRepository, BlockRepositoryError
 from app.repositories.matches import MatchRepository
 from app.repositories.requests import RequestRepository
 from app.schemas import (
@@ -271,26 +273,10 @@ async def set_user_block(
     user_id: str,
     body: BlockInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: BlockRepository = Depends(block_repository_dependency),
 ):
-    from app.cruds import main as runtime
-
-    if user_id == current_user.user_id:
-        raise HTTPException(422, detail={"code": "SELF_BLOCK_NOT_ALLOWED"})
-    if user_id not in runtime.users_store:
-        raise HTTPException(404, detail={"code": "USER_PROFILE_NOT_FOUND"})
-    relation = (current_user.user_id, user_id)
-    if body.blocked:
-        runtime.blocks.add(relation)
-    else:
-        runtime.blocks.discard(relation)
-    runtime.record_audit_event(
-        actor_id=current_user.user_id,
-        event_type="user_blocked" if body.blocked else "user_unblocked",
-        target_type="user",
-        target_id=user_id,
-    )
-    return {
-        "userId": user_id,
-        "blocked": relation in runtime.blocks,
-        "updatedAt": runtime.now_iso(),
-    }
+    try:
+        return await repository.set(current_user, user_id, body.blocked)
+    except BlockRepositoryError as exc:
+        status_code = 422 if exc.code == "SELF_BLOCK_NOT_ALLOWED" else 404
+        raise HTTPException(status_code, detail={"code": exc.code}) from exc

@@ -1,6 +1,6 @@
 # テトテFastAPI 開発ガイド
 
-地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼、応募、マッチ、チャット、双方完了、disputeの保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。review、AI実績、プロフィール、本人確認、通報、ブロックのAPI保存は現在インメモリで模擬している。
+地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼、応募、マッチ、チャット、双方完了、dispute、ブロック関係の保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。review、AI実績、プロフィール、本人確認、通報のAPI保存は現在インメモリで模擬している。
 
 ## セットアップと起動
 
@@ -215,6 +215,7 @@ curl -X POST http://localhost:8000/_mock/reset --cookie "$AUTH_COOKIES"
 
 Postgres選択時は応募、マッチング、チャット、双方完了、disputeもDBへ永続化され、
 選択の定員・version検査と関連状態更新はDB関数で原子的に処理される。Memory選択時も
-同じRepository契約を使う。review、AI実績、プロフィール、本人確認、通報、ブロックは
+同じRepository契約を使う。ブロック・解除も本人限定のDB関数で関係と監査ログを
+原子的に保存する。review、AI実績、プロフィール、本人確認、通報は
 プロセス内だけに保存され、サーバーを再起動すると初期化される。これらを本番データと
 して扱わないこと。CSRF対策、レート制限は別途本実装が必要である。
