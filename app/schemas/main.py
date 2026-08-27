@@ -1,7 +1,7 @@
 """Public API contracts used by runtime validation and OpenAPI."""
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -77,17 +77,48 @@ class MaskingConfirmationResponse(ContractModel):
     message: str
 
 
-class StructuredRequestResponse(ContractModel):
-    title: str = Field(max_length=100)
-    description: str = Field(max_length=3000)
-    category: str = Field(max_length=100)
-    scheduledAt: datetime = Field(description="ISO 8601日時")
-    estimatedMinutes: int = Field(ge=10, le=240)
-    requiredHelpers: int = Field(ge=1, le=5)
+ShortExtractedText = Annotated[str, Field(min_length=1, max_length=200)]
+MissingFieldCode = Literal[
+    "title", "description", "category", "scheduledAt", "estimatedMinutes",
+    "approximateArea", "requiredHelpers", "itemsToBring", "details",
+]
+
+
+class StructuredRequestDraft(ContractModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=2000)
+    category: str = Field(min_length=1, max_length=50)
+    scheduledAt: datetime | None = Field(default=None, description="ISO 8601日時")
+    estimatedMinutes: int | None = Field(default=None, ge=10, le=240)
+    approximateArea: str | None = Field(default=None, max_length=100)
+    requiredHelpers: int | None = Field(default=None, ge=1, le=5)
+    itemsToBring: list[ShortExtractedText] = Field(max_length=20)
     riskLevel: Literal["low", "medium", "high", "prohibited"]
-    missingFields: list[str]
-    warnings: list[str]
-    requiresConfirmation: bool = True
+    riskCandidates: list[ShortExtractedText] = Field(max_length=20)
+    missingFields: list[MissingFieldCode] = Field(max_length=20)
+    warnings: list[ShortExtractedText] = Field(max_length=20)
+
+
+class AppliedMasking(ContractModel):
+    detections: list[MaskingDetection]
+    ruleVersion: str
+    confirmed: bool
+
+
+class StructureMetadata(ContractModel):
+    modelName: str
+    promptVersion: str
+    processedAt: datetime
+
+
+class StructuredRequestResponse(StructuredRequestDraft):
+    masking: AppliedMasking
+    status: Literal["draft"]
+    requiresConfirmation: Literal[True]
+    autoPublished: Literal[False]
+    additionalQuestion: str | None = None
+    metadata: StructureMetadata
 
 
 class RequestInput(ContractModel):

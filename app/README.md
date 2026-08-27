@@ -154,6 +154,18 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 固有名詞、崩した表記、文脈から推測できる情報は検出できない場合があるため、送信前に
 ユーザー自身がマスキング結果を確認する必要がある。
 
+### Claudeによる依頼構造化
+
+既定の`CLAUDE_API_ENABLED=false`では外部通信をせず、開発用のローカルProviderを
+使う。Claudeを使う場合は`CLAUDE_API_ENABLED=true`と`ANTHROPIC_API_KEY`を設定する。
+Messages APIにはタイムアウトを設定し、JSON Schemaを指定した
+`structure_request`ツールだけを選択させたうえで、tool inputをPydanticでも再検証する。
+
+応答は常に`status: draft`、`requiresConfirmation: true`、`autoPublished: false`で、
+ユーザー確認なしに公開されない。監査用Memory Repositoryにはモデル名、プロンプト版、
+処理日時、スキーマ版だけを保存し、依頼本文やマスキング前の個人情報は保存しない。
+この機能は`app/db.py`、Postgres Repository、migration、RLSへ依存しない。
+
 ## エラーレスポンスとトレースID
 
 400、401、403、404、409、422、500 のエラーは、次の共通形式で返す。

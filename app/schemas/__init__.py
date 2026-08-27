@@ -31,6 +31,7 @@ from .main import (
     ResetResponse,
     SelectionInput,
     StructureInput,
+    StructuredRequestDraft,
     StructuredRequestResponse,
     VerificationInput,
     VerificationResponse,
