@@ -229,7 +229,7 @@ class PostgresApplicationRepository:
     async def cancel_pending_for_request(
         self, actor: CurrentUser, request_id: str
     ) -> None:
-        # app.set_request_status() performs this atomically with request cancellation.
+        # app.cancel_request() performs this atomically with request cancellation.
         del actor, request_id
 
     async def reset(self) -> None:

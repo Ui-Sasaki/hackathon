@@ -22,6 +22,7 @@ from app.settings import settings
 MatchRecord = dict[str, Any]
 MessageRecord = dict[str, Any]
 BlockChecker = Callable[[str, str], bool]
+UserActiveChecker = Callable[[str], bool]
 
 
 class MatchRepositoryError(Exception):
@@ -41,6 +42,19 @@ def _iso(value: Any) -> str | None:
     if value is None or isinstance(value, str):
         return value
     return value.isoformat().replace("+00:00", "Z")
+
+
+def _request_is_expired(request: dict[str, Any]) -> bool:
+    expires_at = request.get("expiresAt")
+    if expires_at is None:
+        return False
+    if isinstance(expires_at, datetime):
+        parsed = expires_at
+    else:
+        parsed = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc) <= datetime.now(timezone.utc)
 
 
 def _row_to_record(row: Any) -> MatchRecord:
@@ -119,10 +133,14 @@ class MemoryMatchRepository:
         self._matches: dict[str, MatchRecord] = {}
         self._messages: dict[str, list[MessageRecord]] = {}
         self._blocked: BlockChecker = lambda _first, _second: False
+        self._user_is_active: UserActiveChecker = lambda _user_id: True
         self._lock = Lock()
 
     def configure_block_checker(self, checker: BlockChecker) -> None:
         self._blocked = checker
+
+    def configure_user_active_checker(self, checker: UserActiveChecker) -> None:
+        self._user_is_active = checker
 
     @staticmethod
     def _role(match: MatchRecord, actor: CurrentUser) -> str | None:
@@ -140,6 +158,8 @@ class MemoryMatchRepository:
         expected_version: int,
     ) -> MatchRecord:
         with self._lock:
+            if actor.status != "active":
+                raise MatchRepositoryError("ROLE_FORBIDDEN")
             request = self._request_repository._items.get(request_id)
             if request is None:
                 raise MatchRepositoryError("REQUEST_NOT_FOUND")
@@ -156,7 +176,11 @@ class MemoryMatchRepository:
                 raise MatchRepositoryError("APPLICATION_REQUEST_MISMATCH")
             if application["status"] != "applied":
                 raise MatchRepositoryError("APPLICATION_NOT_SELECTABLE")
-            if request["status"] not in {"published", "matching"}:
+            if not self._user_is_active(application["helperId"]):
+                raise MatchRepositoryError("APPLICATION_NOT_SELECTABLE")
+            if request["status"] not in {"published", "matching"} or _request_is_expired(
+                request
+            ):
                 raise MatchRepositoryError(
                     "REQUEST_STATE_CONFLICT", request["version"]
                 )
@@ -200,6 +224,8 @@ class MemoryMatchRepository:
             return deepcopy(match)
 
     async def get(self, actor: CurrentUser, match_id: str) -> MatchRecord | None:
+        if actor.status != "active":
+            return None
         match = self._matches.get(match_id)
         if match is None or (self._role(match, actor) is None and actor.role != "admin"):
             return None
@@ -209,6 +235,8 @@ class MemoryMatchRepository:
         self, actor: CurrentUser, match_id: str
     ) -> list[MessageRecord]:
         with self._lock:
+            if actor.status != "active":
+                raise MatchRepositoryError("ROLE_FORBIDDEN")
             match = self._matches.get(match_id)
             if match is None:
                 raise MatchRepositoryError("MATCH_NOT_FOUND")
@@ -231,6 +259,8 @@ class MemoryMatchRepository:
         self, actor: CurrentUser, match_id: str, body: str
     ) -> MessageRecord:
         with self._lock:
+            if actor.status != "active":
+                raise MatchRepositoryError("ROLE_FORBIDDEN")
             match = self._matches.get(match_id)
             if match is None:
                 raise MatchRepositoryError("MATCH_NOT_FOUND")
@@ -254,6 +284,8 @@ class MemoryMatchRepository:
         self, actor: CurrentUser, match_id: str, actor_role: str
     ) -> MatchRecord:
         with self._lock:
+            if actor.status != "active":
+                raise MatchRepositoryError("ROLE_FORBIDDEN")
             match = self._matches.get(match_id)
             if match is None:
                 raise MatchRepositoryError("MATCH_NOT_FOUND")
@@ -289,6 +321,8 @@ class MemoryMatchRepository:
         self, actor: CurrentUser, match_id: str, reason: str
     ) -> MatchRecord:
         with self._lock:
+            if actor.status != "active":
+                raise MatchRepositoryError("ROLE_FORBIDDEN")
             match = self._matches.get(match_id)
             if match is None:
                 raise MatchRepositoryError("MATCH_NOT_FOUND")
@@ -459,3 +493,8 @@ def get_match_repository() -> MatchRepository:
 def configure_match_block_checker(checker: BlockChecker) -> None:
     if isinstance(match_repository, MemoryMatchRepository):
         match_repository.configure_block_checker(checker)
+
+
+def configure_match_user_active_checker(checker: UserActiveChecker) -> None:
+    if isinstance(match_repository, MemoryMatchRepository):
+        match_repository.configure_user_active_checker(checker)

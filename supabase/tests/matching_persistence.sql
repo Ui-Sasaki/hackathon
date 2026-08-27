@@ -8,6 +8,41 @@ declare
     v_result jsonb;
 begin
     v_result := app.select_application(
+        '30000000-0000-0000-0000-000000000005',
+        '20000000-0000-0000-0000-000000000004', 1
+    );
+    if v_result ->> 'code' <> 'REQUEST_STATE_CONFLICT'
+       or exists (
+           select 1 from matches
+            where request_id = '20000000-0000-0000-0000-000000000004'
+       )
+       or (select status from applications
+            where id = '30000000-0000-0000-0000-000000000005') <> 'applied' then
+        raise exception 'FAIL 期限切れ選択でDBが変更された: %', v_result;
+    end if;
+
+    v_result := app.select_application(
+        '30000000-0000-0000-0000-000000000006',
+        '20000000-0000-0000-0000-000000000005', 1
+    );
+    if v_result ->> 'code' <> 'APPLICATION_NOT_SELECTABLE'
+       or exists (
+           select 1 from matches
+            where request_id = '20000000-0000-0000-0000-000000000005'
+       )
+       or (select status from applications
+            where id = '30000000-0000-0000-0000-000000000006') <> 'applied' then
+        raise exception 'FAIL 停止支援者の選択でDBが変更された: %', v_result;
+    end if;
+    raise notice 'OK   期限切れ依頼と停止支援者の選択をDB無変更で拒否';
+end;
+$$;
+
+do $$
+declare
+    v_result jsonb;
+begin
+    v_result := app.select_application(
         '30000000-0000-0000-0000-000000000001',
         '20000000-0000-0000-0000-000000000001', 1
     );
@@ -49,6 +84,14 @@ begin
     if v_result ->> 'code' <> 'ROLE_FORBIDDEN' then
         raise exception 'FAIL 非当事者のchat送信が拒否されない: %', v_result;
     end if;
+    if app.cancel_request(
+           '20000000-0000-0000-0000-000000000005', 1
+       ) is not null
+       or app.set_request_status(
+           '20000000-0000-0000-0000-000000000005', 'completed', 1, true
+       ) is not null then
+        raise exception 'FAIL 非所有者が依頼状態を変更できた';
+    end if;
     if has_function_privilege(
         current_user, 'app.application_helper_profile(uuid)', 'EXECUTE'
     ) or app.application_helper_profile_for_application(
@@ -57,7 +100,56 @@ begin
         raise exception 'FAIL 応募者プロフィール関数の参照範囲が過剰';
     end if;
     raise notice 'OK   RLS/RPCで非当事者のmatch/chat取得・送信を拒否';
+    raise notice 'OK   非所有者の取消と汎用状態遷移をDB無変更で拒否';
     raise notice 'OK   応募ID限定プロフィール関数と旧関数の権限取消を確認';
+end;
+$$;
+
+-- SECURITY DEFINER functions must repeat the active-actor boundary that RLS enforces.
+select set_config('app.actor_id', '10000000-0000-0000-0000-000000000005', true);
+do $$
+declare
+    v_result jsonb;
+begin
+    v_result := app.send_message(
+        '40000000-0000-0000-0000-000000000001', '停止中は送信不可'
+    );
+    if v_result ->> 'code' <> 'ROLE_FORBIDDEN'
+       or app.complete_match(
+           '40000000-0000-0000-0000-000000000001', 'helper'
+       ) ->> 'code' <> 'ROLE_FORBIDDEN'
+       or app.dispute_match(
+           '40000000-0000-0000-0000-000000000001', '停止中はdisputeできない理由'
+       ) ->> 'code' <> 'ROLE_FORBIDDEN'
+       or app.mark_messages_read(
+           '40000000-0000-0000-0000-000000000001'
+       ) ->> 'code' <> 'ROLE_FORBIDDEN'
+       or app.application_helper_profile_for_application(
+           '30000000-0000-0000-0000-000000000007'
+       ) is not null
+       or app.cancel_request(
+           '20000000-0000-0000-0000-000000000006', 1
+       ) is not null then
+        raise exception 'FAIL 停止actorがSECURITY DEFINER経路を実行できた';
+    end if;
+    raise notice 'OK   停止actorのSECURITY DEFINER経路をDB無変更で拒否';
+end;
+$$;
+
+select set_config('app.actor_id', '10000000-0000-0000-0000-000000000001', true);
+do $$
+begin
+    if exists (
+        select 1 from messages
+         where match_id = '40000000-0000-0000-0000-000000000001'
+    ) or (select status from matches
+           where id = '40000000-0000-0000-0000-000000000001') <> 'matched'
+       or (select requester_confirmed or helper_confirmed from matches
+            where id = '40000000-0000-0000-0000-000000000001')
+       or (select status from requests
+            where id = '20000000-0000-0000-0000-000000000006') <> 'matched' then
+        raise exception 'FAIL 停止actor拒否後にDBが変更されている';
+    end if;
 end;
 $$;
 
@@ -158,9 +250,7 @@ $$;
 select set_config('app.actor_id', '10000000-0000-0000-0000-000000000001', true);
 do $$
 begin
-    perform app.set_request_status(
-        '20000000-0000-0000-0000-000000000003', 'cancelled', 1, true
-    );
+    perform app.cancel_request('20000000-0000-0000-0000-000000000003', 1);
     if (select status from requests where id = '20000000-0000-0000-0000-000000000003') <> 'cancelled'
        or (select status from applications where id = '30000000-0000-0000-0000-000000000004') <> 'cancelled' then
         raise exception 'FAIL 依頼取消と応募取消が原子的でない';

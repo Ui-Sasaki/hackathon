@@ -28,9 +28,10 @@ set search_path = public, pg_temp as $$
             select count(*) from achievement_profiles ap where ap.user_id = u.id
         )
     )
-      from applications a
+     from applications a
       join users u on u.id = a.helper_id
      where a.id = p_application_id
+       and app.is_active_actor()
        and (
            a.helper_id = app.current_actor()
            or app.request_owner(a.request_id) = app.current_actor()
@@ -60,6 +61,10 @@ declare
     v_capacity_reached boolean;
     v_match_id uuid;
 begin
+    if not app.is_active_actor() then
+        return jsonb_build_object('code', 'ROLE_FORBIDDEN');
+    end if;
+
     select * into v_request
       from requests
      where id = p_request_id
@@ -87,10 +92,15 @@ begin
         return jsonb_build_object('code', 'APPLICATION_REQUEST_MISMATCH');
     end if;
     if v_application.status <> 'applied'
+       or not exists (
+           select 1 from users u
+            where u.id = v_application.helper_id and u.status = 'active'
+       )
        or app.is_blocked_pair(v_request.requester_id, v_application.helper_id) then
         return jsonb_build_object('code', 'APPLICATION_NOT_SELECTABLE');
     end if;
-    if v_request.status not in ('published', 'matching') then
+    if v_request.status not in ('published', 'matching')
+       or (v_request.expires_at is not null and v_request.expires_at <= now()) then
         return jsonb_build_object(
             'code', 'REQUEST_STATE_CONFLICT', 'currentVersion', v_request.version
         );
@@ -150,6 +160,10 @@ declare
     v_new_status match_status;
     v_request_status request_status;
 begin
+    if not app.is_active_actor() then
+        return jsonb_build_object('code', 'ROLE_FORBIDDEN');
+    end if;
+
     select * into v_match
       from matches
      where id = p_match_id
@@ -230,6 +244,10 @@ declare
     v_match matches%rowtype;
     v_requester_id uuid;
 begin
+    if not app.is_active_actor() then
+        return jsonb_build_object('code', 'ROLE_FORBIDDEN');
+    end if;
+
     select * into v_match
       from matches
      where id = p_match_id
@@ -280,6 +298,10 @@ declare
     v_requester_id uuid;
     v_message_id uuid;
 begin
+    if not app.is_active_actor() then
+        return jsonb_build_object('code', 'ROLE_FORBIDDEN');
+    end if;
+
     select * into v_match from matches where id = p_match_id;
     if not found then
         return jsonb_build_object('code', 'MATCH_NOT_FOUND');
@@ -310,6 +332,10 @@ create or replace function app.mark_messages_read(p_match_id uuid)
 returns jsonb language plpgsql security definer
 set search_path = public, pg_temp as $$
 begin
+    if not app.is_active_actor() then
+        return jsonb_build_object('code', 'ROLE_FORBIDDEN');
+    end if;
+
     if not exists (select 1 from matches where id = p_match_id) then
         return jsonb_build_object('code', 'MATCH_NOT_FOUND');
     end if;
@@ -326,7 +352,47 @@ $$;
 revoke all on function app.mark_messages_read(uuid) from public;
 grant execute on function app.mark_messages_read(uuid) to tetote_app;
 
--- Cancellation also closes every still-pending application.
+-- Requester cancellation is a narrow RPC and closes pending applications atomically.
+create or replace function app.cancel_request(
+    p_id uuid,
+    p_expected_version integer
+)
+returns uuid language plpgsql security definer
+set search_path = public, pg_temp as $$
+declare
+    v_id uuid;
+begin
+    if not app.is_active_actor() then
+        return null;
+    end if;
+
+    update requests
+       set status = 'cancelled', version = version + 1, updated_at = now()
+     where id = p_id
+       and version = p_expected_version
+       and status not in ('completed', 'cancelled')
+       and (requester_id = app.current_actor() or app.is_admin())
+    returning id into v_id;
+
+    if v_id is not null then
+        update applications
+           set status = 'cancelled', updated_at = now()
+         where request_id = v_id and status = 'applied';
+        insert into audit_logs (
+            actor_id, event_type, target_type, target_id, result, detail
+        ) values (
+            app.current_actor(), 'request_cancelled', 'request', v_id,
+            'success', '{}'::jsonb
+        );
+    end if;
+    return v_id;
+end;
+$$;
+
+revoke all on function app.cancel_request(uuid, integer) from public;
+grant execute on function app.cancel_request(uuid, integer) to tetote_app;
+
+-- Keep the legacy status helper only for report suspension and admin operations.
 create or replace function app.set_request_status(
     p_id uuid,
     p_new_status request_status,
@@ -338,11 +404,11 @@ set search_path = public, pg_temp as $$
 declare
     v_id uuid;
 begin
-    if p_new_status = 'cancelled' and not exists (
-        select 1 from requests r
-         where r.id = p_id
-           and (r.requester_id = app.current_actor() or app.is_admin())
-    ) then
+    if not app.is_active_actor() then
+        return null;
+    end if;
+
+    if p_new_status <> 'suspended' and not app.is_admin() then
         return null;
     end if;
 
@@ -354,11 +420,6 @@ begin
        and (p_expected_version is null or version = p_expected_version)
     returning id into v_id;
 
-    if v_id is not null and p_new_status = 'cancelled' then
-        update applications
-           set status = 'cancelled', updated_at = now()
-         where request_id = v_id and status = 'applied';
-    end if;
     return v_id;
 end;
 $$;

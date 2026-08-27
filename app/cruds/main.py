@@ -33,6 +33,7 @@ from app.repositories.matches import (
     MatchRepository,
     MatchRepositoryError,
     configure_match_block_checker,
+    configure_match_user_active_checker,
     get_match_repository,
 )
 from app.services.applications import (
@@ -519,6 +520,14 @@ def is_blocked_pair(first_user_id: str, second_user_id: str) -> bool:
 
 
 configure_match_block_checker(is_blocked_pair)
+
+
+def is_active_user(user_id: str) -> bool:
+    user = users_store.get(user_id)
+    return user is not None and user.get("status") == "active"
+
+
+configure_match_user_active_checker(is_active_user)
 
 
 def record_audit_event(

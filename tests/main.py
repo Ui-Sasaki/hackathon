@@ -439,6 +439,38 @@ def test_select_application_with_version_check() -> None:
     assert conflict.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
 
 
+def test_suspended_helper_application_cannot_be_selected() -> None:
+    crud_module.users_store[HELPER.user_id]["status"] = "suspended"
+
+    response = client.post(
+        "/applications/app_55/select",
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "APPLICATION_NOT_SELECTABLE"
+    request = client.get(f"/requests/{SEED_REQUEST_1024}").json()
+    assert request["status"] == "published"
+    assert request["acceptedHelpers"] == 0
+
+
+def test_expired_request_application_cannot_be_selected() -> None:
+    repository = get_request_repository()
+    assert isinstance(repository, MemoryRequestRepository)
+    repository._items[SEED_REQUEST_1024]["expiresAt"] = "2020-01-01T00:00:00Z"
+
+    response = client.post(
+        "/applications/app_55/select",
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
+    request = client.get(f"/requests/{SEED_REQUEST_1024}").json()
+    assert request["status"] == "published"
+    assert request["acceptedHelpers"] == 0
+
+
 def test_api_prefix_and_profile_update() -> None:
     response = client.patch("/api/profile", json={"displayName": "更新後の名前"})
     assert response.status_code == 200
