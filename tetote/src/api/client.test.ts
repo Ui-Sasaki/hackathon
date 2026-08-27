@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiClient } from "./client";
 import { getApiBaseUrl } from "./config";
-import { ApiAuthenticationError, ApiNetworkError, ApiTimeoutError } from "./errors";
+import { ApiAuthenticationError, ApiError, ApiNetworkError, ApiTimeoutError } from "./errors";
 
 const jsonResponse = (status: number, body: unknown = {}) =>
   new Response(JSON.stringify(body), {
@@ -98,5 +98,48 @@ describe("TODO 06: authenticated mutations", () => {
     });
 
     await expect(client.patch("/profile", {})).rejects.toBeInstanceOf(ApiAuthenticationError);
+  });
+});
+
+describe("TODO 07: FastAPI error mapping", () => {
+  it.each([401, 403, 404, 409, 422, 500])("preserves structured error fields for %i", async (status) => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(status, {
+        error: {
+          code: `ERROR_${status}`,
+          message: `message ${status}`,
+          details: { field: "title" },
+          requestId: `trace_${status}`,
+        },
+      }),
+    );
+    const client = new ApiClient({ baseUrl: "https://api.example.test", fetch: fetchMock });
+
+    const error = await client.get("/requests").catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    if (status === 401) expect(error).toBeInstanceOf(ApiAuthenticationError);
+    expect(error).toMatchObject({
+      status,
+      code: `ERROR_${status}`,
+      message: `message ${status}`,
+      details: { field: "title" },
+      requestId: `trace_${status}`,
+    });
+  });
+
+  it.each([
+    new Response("gateway unavailable", { status: 502, headers: { "Content-Type": "text/plain" } }),
+    jsonResponse(500, { unexpected: true }),
+  ])("safely maps malformed error responses", async (response) => {
+    const client = new ApiClient({
+      baseUrl: "https://api.example.test",
+      fetch: vi.fn().mockResolvedValue(response),
+    });
+
+    await expect(client.get("/requests")).rejects.toMatchObject({
+      status: response.status,
+      message: "通信処理に失敗しました",
+      requestId: null,
+    });
   });
 });
