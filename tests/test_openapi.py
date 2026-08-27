@@ -38,6 +38,20 @@ def test_generated_openapi_is_complete_and_authenticated() -> None:
         assert operation["security"] == [{"SuperTokensSession": []}], (method, path)
 
 
+def test_api_routes_do_not_register_duplicate_method_path_pairs() -> None:
+    registered: set[tuple[str, str]] = set()
+    duplicates: set[tuple[str, str]] = set()
+
+    for route in app.routes:
+        for method in getattr(route, "methods", set()):
+            pair = (method, route.path)
+            if pair in registered:
+                duplicates.add(pair)
+            registered.add(pair)
+
+    assert duplicates == set()
+
+
 def test_list_contracts_expose_cursor_paging() -> None:
     schemas = app.openapi()["components"]["schemas"]
     assert "nextCursor" in schemas["RequestListResponse"]["properties"]

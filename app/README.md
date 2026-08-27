@@ -76,8 +76,9 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 │   ├── repositories/    # requests/applications/matchesのMemory/Postgres実装
 │   ├── services/        # 保存方式に依存しない依頼の認可・状態遷移
 │   ├── settings.py      # Repository切り替えを含む実行設定
-│   ├── cruds/main.py    # エンドポイント（review等の未永続化データも保持）
-│   ├── routers/main.py  # システム系ルーター
+│   ├── api_support.py   # Repository依存関係とOpenAPI共通エラー契約
+│   ├── cruds/main.py    # ASGIアプリ組み立てと開発用共有runtime
+│   ├── routers/         # システム系・機能領域別ルーター
 │   └── schemas/main.py  # Pydantic入力スキーマ
 ├── supabase/
 │   ├── migrations/      # スキーマ・RLS・DB関数。mergeしたら編集せず追加migrationにする

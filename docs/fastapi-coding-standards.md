@@ -14,12 +14,15 @@
 |---|---|
 | `main.py` | `uvicorn main:app`用エントリーポイント |
 | `app/main.py` | ASGIアプリの公開 |
-| `app/cruds/main.py` | APIエンドポイント、業務処理、データアクセス |
+| `app/cruds/main.py` | ASGIアプリ組み立て、ミドルウェア、開発用共有runtime |
+| `app/api_support.py` | Repository依存関係、OpenAPI共通エラー契約 |
 | `app/routers/main.py` | ヘルスチェックなどシステム系ルーター |
+| `app/routers/*.py` | 機能領域別APIエンドポイント |
 | `app/schemas/main.py` | Pydantic入出力スキーマ |
 | `tests/main.py` | API・状態遷移・認可テスト |
 
 現行構成を変更する場合は、同一Issue内で責務、import、README、テストをまとめて更新する。
+機能追加時は既存の機能領域routerへ追加し、`app/cruds/main.py`へ業務endpointを戻さない。
 
 ## 3. 命名と型
 
