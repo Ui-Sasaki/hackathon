@@ -42,6 +42,8 @@
 - FastAPI担当者は、FastAPIのAPI契約、認証・認可、入力検証、業務ルール、状態遷移、エラーコード、Service、Repository境界、Memory Repository、APIテストに加え、`tetote/`からFastAPIへのAPI接続も担当する。
 - API接続には、共通APIクライアント、認証Cookieとanti-CSRF、固定モックからAPIレスポンスへの置換、IDとversionの維持、loading・empty・error・再試行・競合状態の反映、接続テストを含める。
 - API接続に必要な範囲では`tetote/`を変更できるが、既存の画面デザイン、レイアウト、スタイル、導線および操作感を必要以上に変更しない。
+- API接続では既存フロントエンドの機能、入力項目、必須条件、画面遷移を仕様の基準とし、FastAPIに項目や操作が不足する場合は、セキュリティ上実装できない理由がない限りFastAPI側のスキーマ、Service、Repository境界、Memory Repository、APIテストを追加して合わせる。
+- FastAPIが未対応であることを理由に、既存フロントエンドの入力項目、入力検証、表示、導線を削除または緩和しない。安全なアップロードなど別APIが必要な場合は既存機能を保持し、不足APIと引き継ぎ条件を明記する。
 - 画面デザイン、レイアウト、スタイル、アニメーション、`PanResponder`、端末固有UI、API接続と無関係なReact hooksやlint修正はフロントエンド担当者の責務として追わない。
 - API変更によるフロントエンドへの影響と接続方法を記録し、FastAPIと接続側のテストを同じ責務単位で完成させる。
 
