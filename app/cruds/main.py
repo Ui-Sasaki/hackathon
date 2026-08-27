@@ -8,7 +8,7 @@ import math
 import os
 import re
 from typing import Any, Awaitable, Callable
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -1062,7 +1062,7 @@ async def create_report(
     )
     if item["severity"] == "high" and body.targetType == "request":
         try:
-            target_id = uuid.UUID(body.targetId)
+            target_id = UUID(body.targetId)
         except ValueError:
             target_id = None
         if target_id is not None:
