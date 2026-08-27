@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
+import { useAuth } from "../../../auth/AuthContext";
+import { profileErrorKind, profileErrorMessage } from "../../../auth/profile-state";
 
 const prefectures = [
   "北海道",
@@ -84,6 +86,7 @@ export default function HelperProfileScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const isDesktop = width >= 768;
+  const { refreshProfile, updateProfile } = useAuth();
 
   const [name, setName] = useState("");
   const [region, setRegion] = useState("");
@@ -105,6 +108,11 @@ export default function HelperProfileScreen() {
   const [regionOpen, setRegionOpen] = useState(false);
   const [ageOpen, setAgeOpen] = useState(false);
   const [schoolYearOpen, setSchoolYearOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => { let active = true; refreshProfile().then((profile) => { if (active) { setName(profile.displayName); setRegion(profile.areaCode ?? ""); } }).catch((error) => active && setNotice(profileErrorMessage(profileErrorKind(error)))).finally(() => active && setLoading(false)); return () => { active = false; }; }, [refreshProfile]);
 
   const pickImage = async () => {
     const permission =
@@ -125,40 +133,21 @@ export default function HelperProfileScreen() {
     }
   };
 
-  const baseComplete =
-    name.trim() !== "" &&
-    region !== "" &&
-    age !== "" &&
-    image !== null &&
-    helperType !== null;
-
-  const studentComplete =
-    helperType === "student" &&
-    university.trim() !== "" &&
-    faculty.trim() !== "" &&
-    schoolYear !== "";
-
-  const workerComplete =
-    helperType === "worker" &&
-    occupation.trim() !== "";
-
-  const isFormComplete =
-    baseComplete &&
-    (studentComplete || workerComplete);
+  const isFormComplete = name.trim() !== "" && region !== "";
 
   const handleBack = () => {
     router.replace("/onboarding/role");
   };
 
-  const handleNext = () => {
-  if (!isFormComplete || !image) return;
-
-  router.push({
+  const handleNext = async () => {
+  if (!isFormComplete || saving) return;
+  setSaving(true); setNotice("");
+  try { await updateProfile({ displayName: name.trim(), areaCode: region }); router.push({
     pathname: "/onboarding/helper/help",
     params: {
-      profileImage: image,
+      profileImage: image ?? "",
     },
-  });
+  }); } catch (error) { setNotice(profileErrorMessage(profileErrorKind(error))); } finally { setSaving(false); }
 };
 
   return (
@@ -214,6 +203,9 @@ export default function HelperProfileScreen() {
           <Text style={styles.roleTitle}>
             手伝いたい
           </Text>
+          <Text>{loading ? "プロフィールを取得中です" : "支援者は画面モードで、固定権限ではありません"}</Text>
+          <Text>年代・大学名・職業などは現在API未連携です</Text>
+          {!!notice && <Text accessibilityLiveRegion="polite">{notice}</Text>}
 
           <View style={styles.form}>
             <View style={styles.iconRow}>
@@ -462,7 +454,7 @@ export default function HelperProfileScreen() {
           </View>
 
           <Pressable
-            disabled={!isFormComplete}
+            disabled={!isFormComplete || saving || loading}
             onPress={handleNext}
             style={({ pressed }) => [
               styles.button,
@@ -480,7 +472,7 @@ export default function HelperProfileScreen() {
                   styles.buttonTextDisabled,
               ]}
             >
-              次に進む
+              {saving ? "更新中..." : "次に進む"}
             </Text>
           </Pressable>
         </View>

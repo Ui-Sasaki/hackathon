@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
+import { useAuth } from "../../../auth/AuthContext";
+import { profileErrorKind, profileErrorMessage } from "../../../auth/profile-state";
 
 const prefectures = [
   "北海道",
@@ -69,6 +71,7 @@ export default function RequesterProfileScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const isDesktop = width >= 768;
+  const { refreshProfile, updateProfile } = useAuth();
 
   const [name, setName] = useState("");
   const [region, setRegion] = useState("");
@@ -78,6 +81,11 @@ export default function RequesterProfileScreen() {
 
   const [regionOpen, setRegionOpen] = useState(false);
   const [ageOpen, setAgeOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => { let active = true; refreshProfile().then((profile) => { if (active) { setName(profile.displayName); setRegion(profile.areaCode ?? ""); } }).catch((error) => active && setNotice(profileErrorMessage(profileErrorKind(error)))).finally(() => active && setLoading(false)); return () => { active = false; }; }, [refreshProfile]);
 
   const pickImage = async () => {
     const permission =
@@ -98,20 +106,18 @@ export default function RequesterProfileScreen() {
     }
   };
 
-  const isFormComplete =
-    name.trim() !== "" &&
-    region !== "" &&
-    age !== "" &&
-    image !== null;
+  const isFormComplete = name.trim() !== "" && region !== "";
 
   const handleBack = () => {
     router.replace("/onboarding/role");
   };
 
-  const handleNext = () => {
-    if (!isFormComplete) return;
-
-    router.push("/onboarding/requester/preferences");
+  const handleNext = async () => {
+    if (!isFormComplete || saving) return;
+    setSaving(true); setNotice("");
+    try { await updateProfile({ displayName: name.trim(), areaCode: region }); router.push("/onboarding/requester/preferences"); }
+    catch (error) { setNotice(profileErrorMessage(profileErrorKind(error))); }
+    finally { setSaving(false); }
   };
 
   return (
@@ -165,6 +171,9 @@ export default function RequesterProfileScreen() {
           <Text style={styles.roleTitle}>
             手伝ってほしい
           </Text>
+          <Text>{loading ? "プロフィールを取得中です" : "依頼者は画面モードで、固定権限ではありません"}</Text>
+          <Text>顔写真・年代・注意点は現在API未連携です</Text>
+          {!!notice && <Text accessibilityLiveRegion="polite">{notice}</Text>}
 
           <View style={styles.form}>
             <View style={styles.iconRow}>
@@ -258,7 +267,7 @@ export default function RequesterProfileScreen() {
           </View>
 
           <Pressable
-            disabled={!isFormComplete}
+            disabled={!isFormComplete || saving || loading}
             onPress={handleNext}
             style={({ pressed }) => [
               styles.button,
@@ -275,7 +284,7 @@ export default function RequesterProfileScreen() {
                   styles.buttonTextDisabled,
               ]}
             >
-              次に進む
+              {saving ? "更新中..." : "次に進む"}
             </Text>
           </Pressable>
         </View>
