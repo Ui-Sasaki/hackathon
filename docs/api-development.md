@@ -42,8 +42,8 @@ SDKが設定する `anti-csrf` ヘッダーも必要である。`userId`、`requ
 
 ## 実装状況
 
-依頼、応募、マッチ、チャット、双方完了、disputeはMemory/Postgres Repositoryに
-対応する。プロフィール、位置解決、レビュー、AI実績、本人確認、通報、ブロックの
+依頼、応募、マッチ、チャット、双方完了、dispute、ブロックはMemory/Postgres Repositoryに
+対応する。プロフィール、位置解決、レビュー、AI実績、本人確認、通報の
 API経路と状態・認可検査は実装済みだが、これらの保存、AI生成、本人確認審査は開発用
 インメモリ／モックである。SuperTokensの `/auth/*` はSDK提供であり、FastAPI生成の
 OpenAPIには個別操作として現れない。管理画面、Realtime、実AI、本人確認審査、

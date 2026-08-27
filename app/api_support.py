@@ -7,6 +7,7 @@ from app.repositories.applications import (
     get_application_repository,
 )
 from app.repositories.matches import MatchRepository, get_match_repository
+from app.repositories.blocks import BlockRepository, get_block_repository
 from app.repositories.requests import RequestRepository, get_request_repository
 from app.schemas import ErrorResponse
 
@@ -63,3 +64,9 @@ async def match_repository_dependency() -> MatchRepository:
     """Resolve the configured matching repository without a threadpool hop."""
 
     return get_match_repository()
+
+
+async def block_repository_dependency() -> BlockRepository:
+    """Resolve the configured user-block repository."""
+
+    return get_block_repository()
