@@ -71,4 +71,9 @@ echo "=== 9. マッチング・チャット・状態遷移検査（非特権ロ�
   -v ON_ERROR_STOP=1 -f "$HERE/matching_persistence.sql" 2>&1 \
   | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
 
+echo "=== 10. 認証境界・プロフィール永続化検査（非特権ロール）==="
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/profile_persistence.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
 echo "=== 全検査を通過した ==="

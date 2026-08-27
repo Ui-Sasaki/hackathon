@@ -477,6 +477,83 @@ def test_api_prefix_and_profile_update() -> None:
     assert response.json()["displayName"] == "更新後の名前"
 
 
+def test_profile_patch_preserves_omitted_fields_and_clears_explicit_null() -> None:
+    first = client.patch(
+        "/profile",
+        json={
+            "prefectureCode": "01",
+            "birthYear": 2001,
+            "notes": "連絡は夕方にお願いします",
+            "helperType": "worker",
+            "occupation": "エンジニア",
+            "industry": "IT",
+        },
+    )
+    assert first.status_code == 200
+    assert first.json()["birthYear"] == 2001
+
+    cleared = client.patch("/profile", json={"notes": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["notes"] is None
+    assert cleared.json()["occupation"] == "エンジニア"
+    assert cleared.json()["birthYear"] == 2001
+
+
+def test_profile_helper_type_validates_resulting_complete_state() -> None:
+    missing = client.patch("/profile", json={"helperType": "student"})
+    assert missing.status_code == 422
+    assert missing.json()["error"]["code"] == "PROFILE_VALIDATION_ERROR"
+
+    student = client.patch(
+        "/profile",
+        json={
+            "helperType": "student",
+            "university": "北海大学",
+            "faculty": "工学部",
+            "schoolYear": 2,
+        },
+    )
+    assert student.status_code == 200
+    assert student.json()["helperType"] == "student"
+    assert student.json()["occupation"] is None
+
+    worker = client.patch(
+        "/profile",
+        json={"helperType": "worker", "occupation": "看護師"},
+    )
+    assert worker.status_code == 200
+    assert worker.json()["university"] is None
+    assert worker.json()["schoolYear"] is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"displayName": None},
+        {"displayName": "   "},
+        {"prefectureCode": "48"},
+        {"areaCode": "UNKNOWN"},
+        {"birthYear": 1899},
+        {"role": "admin"},
+        {"verificationStatus": "approved"},
+        {"gender": "female"},
+    ],
+)
+def test_profile_rejects_invalid_or_protected_fields(payload: dict) -> None:
+    response = client.patch("/profile", json=payload)
+    assert response.status_code == 422
+
+
+def test_operational_areas_are_served_from_backend_contract() -> None:
+    response = client.get("/locations/areas")
+    assert response.status_code == 200
+    assert response.json()["items"] == [
+        {"code": "AREA-001", "label": "大学周辺", "prefectureCode": "01"},
+        {"code": "AREA-002", "label": "大学北側", "prefectureCode": "01"},
+        {"code": "AREA-003", "label": "駅周辺", "prefectureCode": "01"},
+    ]
+
+
 def test_create_request_is_idempotent() -> None:
     payload = {
         "title": "庭の片付け",
@@ -761,6 +838,44 @@ def test_session_dependency_returns_verified_user(monkeypatch) -> None:
     user = asyncio.run(get_current_user(request))
     assert user.user_id == "usr_101"
     assert user.verification_status == "approved"
+
+
+def test_session_dependency_supports_async_database_lookup(monkeypatch) -> None:
+    class FakeSession:
+        def get_user_id(self) -> str:
+            return "persisted-user"
+
+        def get_access_token_payload(self) -> dict:
+            return {}
+
+    def fake_verify_session(**_options):
+        async def verify(_request):
+            return FakeSession()
+
+        return verify
+
+    async def database_lookup(user_id: str) -> dict:
+        assert user_id == "persisted-user"
+        return {
+            "role": "member",
+            "status": "active",
+            "emailVerified": True,
+            "verificationStatus": "approved",
+        }
+
+    monkeypatch.setattr(auth_module, "SUPERTOKENS_ENABLED", True)
+    monkeypatch.setattr(
+        auth_module, "verify_session", fake_verify_session, raising=False
+    )
+    monkeypatch.setattr(auth_module, "_user_lookup", database_lookup)
+    request = Request(
+        {"type": "http", "method": "GET", "path": "/profile", "headers": []}
+    )
+
+    user = asyncio.run(get_current_user(request))
+
+    assert user.user_id == "persisted-user"
+    assert user.email_verified is True
 
 
 def test_auth_mock_returns_default_user_without_session(monkeypatch) -> None:

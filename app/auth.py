@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Awaitable, Callable, Literal
 
 from fastapi import HTTPException, Request, Security
 from fastapi.security import APIKeyCookie
@@ -144,12 +145,20 @@ def cors_headers() -> list[str]:
 
 # Supabase will replace this lookup. Keeping it injectable makes session tests
 # independent from a running SuperTokens Core and application database.
-_user_lookup: Callable[[str], dict[str, Any] | None] = lambda _user_id: None
+UserLookupResult = dict[str, Any] | None | Awaitable[dict[str, Any] | None]
+_user_lookup: Callable[[str], UserLookupResult] = lambda _user_id: None
 
 
-def configure_user_lookup(lookup: Callable[[str], dict[str, Any] | None]) -> None:
+def configure_user_lookup(lookup: Callable[[str], UserLookupResult]) -> None:
     global _user_lookup
     _user_lookup = lookup
+
+
+async def _lookup_user(user_id: str) -> dict[str, Any] | None:
+    record = _user_lookup(user_id)
+    if inspect.isawaitable(record):
+        return await record
+    return record
 
 
 def _current_user_from_record(
@@ -181,7 +190,7 @@ async def get_current_user(
         user_id = request.headers.get(AUTH_MOCK_USER_HEADER, AUTH_MOCK_USER_ID)
         return _current_user_from_record(
             user_id,
-            _user_lookup(user_id),
+            await _lookup_user(user_id),
             mfa_completed=True,
         )
 
@@ -203,7 +212,7 @@ async def get_current_user(
     mfa_claim = payload.get("st-mfa", {})
     return _current_user_from_record(
         user_id,
-        _user_lookup(user_id),
+        await _lookup_user(user_id),
         mfa_completed=bool(mfa_claim.get("v", False)),
     )
 

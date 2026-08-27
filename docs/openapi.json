@@ -924,6 +924,45 @@
         "title": "MessageResponse",
         "type": "object"
       },
+      "OperationalAreaListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperationalAreaResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "OperationalAreaListResponse",
+        "type": "object"
+      },
+      "OperationalAreaResponse": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "prefectureCode": {
+            "title": "Prefecturecode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "prefectureCode"
+        ],
+        "title": "OperationalAreaResponse",
+        "type": "object"
+      },
       "ProfileResponse": {
         "properties": {
           "areaCode": {
@@ -937,8 +976,19 @@
             ],
             "title": "Areacode"
           },
+          "birthYear": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birthyear"
+          },
           "displayName": {
-            "maxLength": 50,
+            "maxLength": 80,
             "title": "Displayname",
             "type": "string"
           },
@@ -946,9 +996,101 @@
             "title": "Emailverified",
             "type": "boolean"
           },
+          "faculty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faculty"
+          },
+          "helperType": {
+            "anyOf": [
+              {
+                "enum": [
+                  "student",
+                  "worker"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Helpertype"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "industry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry"
+          },
+          "interest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interest"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "occupation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occupation"
+          },
+          "prefectureCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prefecturecode"
           },
           "role": {
             "enum": [
@@ -959,6 +1101,17 @@
             "title": "Role",
             "type": "string"
           },
+          "schoolYear": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schoolyear"
+          },
           "status": {
             "enum": [
               "active",
@@ -966,6 +1119,17 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "university": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "University"
           },
           "updatedAt": {
             "anyOf": [
@@ -989,6 +1153,17 @@
             ],
             "title": "Verificationstatus",
             "type": "string"
+          },
+          "workplace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workplace"
           }
         },
         "required": [
@@ -1003,6 +1178,7 @@
         "type": "object"
       },
       "ProfileUpdateInput": {
+        "additionalProperties": false,
         "properties": {
           "areaCode": {
             "anyOf": [
@@ -1017,10 +1193,23 @@
             ],
             "title": "Areacode"
           },
+          "birthYear": {
+            "anyOf": [
+              {
+                "maximum": 2026.0,
+                "minimum": 1900.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birthyear"
+          },
           "displayName": {
             "anyOf": [
               {
-                "maxLength": 50,
+                "maxLength": 80,
                 "minLength": 1,
                 "type": "string"
               },
@@ -1029,6 +1218,145 @@
               }
             ],
             "title": "Displayname"
+          },
+          "faculty": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faculty"
+          },
+          "helperType": {
+            "anyOf": [
+              {
+                "enum": [
+                  "student",
+                  "worker"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Helpertype"
+          },
+          "industry": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry"
+          },
+          "interest": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interest"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "occupation": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occupation"
+          },
+          "prefectureCode": {
+            "anyOf": [
+              {
+                "pattern": "^(0[1-9]|[1-3][0-9]|4[0-7])$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prefecturecode"
+          },
+          "schoolYear": {
+            "anyOf": [
+              {
+                "maximum": 8.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schoolyear"
+          },
+          "university": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "University"
+          },
+          "workplace": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workplace"
           }
         },
         "title": "ProfileUpdateInput",
@@ -2580,6 +2908,87 @@
         ]
       }
     },
+    "/locations/areas": {
+      "get": {
+        "description": "活動地域の正本となるcode・label・都道府県コードを返す。",
+        "operationId": "list_operational_areas_locations_areas_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationalAreaListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "details": {},
+                    "message": "この操作を行う権限がありません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "この操作を行う権限がありません"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "利用可能な活動地域を取得",
+        "tags": [
+          "Locations"
+        ]
+      }
+    },
     "/locations/resolve": {
       "post": {
         "description": "同意済み座標を概算地域へ変換する。座標は保存も返却もしない。取得失敗時は登録地域へフォールバックする。",
@@ -3517,7 +3926,7 @@
     },
     "/profile": {
       "get": {
-        "description": "Cookieセッションの本人の公開可能なプロフィールだけを返す。",
+        "description": "Cookieセッション本人の非公開な詳細プロフィールを返す。",
         "operationId": "get_profile_profile_get",
         "responses": {
           "200": {

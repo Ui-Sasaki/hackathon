@@ -3,9 +3,11 @@
 import json
 import os
 from pathlib import Path
+import sys
 
 os.environ.setdefault("SUPERTOKENS_ENABLED", "false")
 os.environ.setdefault("REQUEST_REPOSITORY", "memory")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.main import app  # noqa: E402
 

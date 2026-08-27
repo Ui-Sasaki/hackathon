@@ -18,6 +18,8 @@ from .main import (
     MessageListResponse,
     MessageResponse,
     MatchResponse,
+    OperationalAreaListResponse,
+    OperationalAreaResponse,
     ProfileResponse,
     ProfileUpdateInput,
     ReportInput,
