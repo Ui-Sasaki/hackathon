@@ -569,7 +569,7 @@ def test_auth_mock_returns_default_user_without_session(monkeypatch) -> None:
     user = asyncio.run(get_current_user(request))
 
     assert user.user_id == "usr_101"
-    assert user.role == "requester"
+    assert user.role == "member"
     assert user.mfa_completed is True
 
 
@@ -587,7 +587,7 @@ def test_auth_mock_can_select_existing_user_by_header(monkeypatch) -> None:
     user = asyncio.run(get_current_user(request))
 
     assert user.user_id == "usr_207"
-    assert user.role == "helper"
+    assert user.role == "member"
 
 
 def test_auth_mock_rejects_unknown_user(monkeypatch) -> None:
