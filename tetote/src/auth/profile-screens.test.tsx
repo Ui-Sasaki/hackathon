@@ -29,6 +29,7 @@ vi.mock("react-native", async () => {
   return {
     ActivityIndicator: component("ActivityIndicator"),
     Alert: { alert: vi.fn() },
+    Image: component("Image"),
     Modal: component("Modal"),
     Pressable: component("Pressable"),
     ScrollView: component("ScrollView"),
@@ -68,6 +69,19 @@ const profile: AuthProfile = {
   verificationStatus: "approved",
   status: "active",
   areaCode: "AREA-001",
+  region: "北海道",
+  age: "22",
+  notes: "犬の扱いに慣れています",
+  helperType: "student",
+  university: "テトテ大学",
+  faculty: "地域学部",
+  schoolYear: "3年",
+  occupation: null,
+  industry: null,
+  workplace: null,
+  gender: "回答しない",
+  interest: "地域清掃",
+  message: "よろしくお願いします",
 };
 
 beforeEach(() => {
@@ -99,21 +113,44 @@ async function renderScreen(Component: React.ComponentType) {
 }
 
 describe.each([
-  ["依頼者", RequesterProfileScreen, "/onboarding/requester/preferences"],
-  ["支援者", HelperProfileScreen, "/onboarding/helper/help"],
-])("%sオンボーディング", (_label, Component, destination) => {
+  ["依頼者", RequesterProfileScreen, "/onboarding/requester/preferences", {
+    displayName: "更新 花子",
+    region: "北海道",
+    age: "22",
+    notes: "犬の扱いに慣れています",
+  }],
+  ["支援者", HelperProfileScreen, "/onboarding/helper/help", {
+    displayName: "更新 花子",
+    region: "北海道",
+    age: "22",
+    notes: "犬の扱いに慣れています",
+    helperType: "student",
+    university: "テトテ大学",
+    faculty: "地域学部",
+    schoolYear: "3年",
+    occupation: null,
+    industry: null,
+    workplace: null,
+  }],
+])("%sオンボーディング", (_label, Component, destination, expectedUpdate) => {
   it("API連携済みフィールドだけを保存してから遷移する", async () => {
     const renderer = await renderScreen(Component);
     const root = renderer.root;
 
     const nameInput = root.findByProps({ placeholder: "名前を入力" });
     await act(async () => nameInput.props.onChangeText("更新 花子"));
+    const imagePicker = await import("expo-image-picker");
+    vi.mocked(imagePicker.requestMediaLibraryPermissionsAsync).mockResolvedValue({
+      granted: true,
+    } as Awaited<ReturnType<typeof imagePicker.requestMediaLibraryPermissionsAsync>>);
+    vi.mocked(imagePicker.launchImageLibraryAsync).mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: "file:///profile.jpg" }],
+    } as Awaited<ReturnType<typeof imagePicker.launchImageLibraryAsync>>);
+    await press(root, "＋");
     await press(root, "次に進む");
 
-    expect(mocks.updateProfile).toHaveBeenCalledWith({
-      displayName: "更新 花子",
-      areaCode: "AREA-001",
-    });
+    expect(mocks.updateProfile).toHaveBeenCalledWith(expectedUpdate);
     expect(mocks.push).toHaveBeenCalled();
     const route = mocks.push.mock.calls[0][0];
     expect(typeof route === "string" ? route : route.pathname).toBe(destination);
@@ -123,9 +160,18 @@ describe.each([
     mocks.updateProfile.mockRejectedValue(new ProfileValidationError());
     const renderer = await renderScreen(Component);
 
+    const imagePicker = await import("expo-image-picker");
+    vi.mocked(imagePicker.requestMediaLibraryPermissionsAsync).mockResolvedValue({
+      granted: true,
+    } as Awaited<ReturnType<typeof imagePicker.requestMediaLibraryPermissionsAsync>>);
+    vi.mocked(imagePicker.launchImageLibraryAsync).mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: "file:///profile.jpg" }],
+    } as Awaited<ReturnType<typeof imagePicker.launchImageLibraryAsync>>);
+    await press(renderer.root, "＋");
     await press(renderer.root, "次に進む");
 
-    expect(textContent(renderer.root)).toContain("名前と地域の入力内容を確認してください");
+    expect(textContent(renderer.root)).toContain("プロフィールの入力内容を確認してください");
     expect(mocks.push).not.toHaveBeenCalled();
   });
 });
@@ -142,7 +188,11 @@ describe("共通プロフィール", () => {
 
     expect(mocks.updateProfile).toHaveBeenCalledWith({
       displayName: "更新 花子",
-      areaCode: "AREA-001",
+      gender: "回答しない",
+      age: "22",
+      university: "テトテ大学",
+      interest: "地域清掃",
+      message: "よろしくお願いします",
     });
     expect(textContent(root)).toContain("プロフィールを更新しました");
   });

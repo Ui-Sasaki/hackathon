@@ -178,6 +178,29 @@ class RequestUpdateInput(ContractModel):
 class ProfileUpdateInput(ContractModel):
     displayName: str | None = Field(None, min_length=1, max_length=50)
     areaCode: str | None = Field(None, min_length=1, max_length=30)
+    region: str | None = Field(None, min_length=1, max_length=20)
+    age: str | None = Field(None, min_length=1, max_length=30)
+    notes: str | None = Field(None, max_length=500)
+    helperType: Literal["student", "worker"] | None = None
+    university: str | None = Field(None, min_length=1, max_length=100)
+    faculty: str | None = Field(None, min_length=1, max_length=100)
+    schoolYear: str | None = Field(None, min_length=1, max_length=30)
+    occupation: str | None = Field(None, min_length=1, max_length=100)
+    industry: str | None = Field(None, max_length=100)
+    workplace: str | None = Field(None, max_length=100)
+    gender: str | None = Field(None, max_length=30)
+    interest: str | None = Field(None, max_length=200)
+    message: str | None = Field(None, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_helper_details(self) -> "ProfileUpdateInput":
+        if self.helperType == "student" and not all(
+            (self.university, self.faculty, self.schoolYear)
+        ):
+            raise ValueError("student helper details are required")
+        if self.helperType == "worker" and not self.occupation:
+            raise ValueError("worker occupation is required")
+        return self
 
 
 class ProfileResponse(ContractModel):
@@ -187,6 +210,19 @@ class ProfileResponse(ContractModel):
     emailVerified: bool
     verificationStatus: VerificationStatus
     areaCode: str | None = None
+    region: str | None = None
+    age: str | None = None
+    notes: str | None = None
+    helperType: Literal["student", "worker"] | None = None
+    university: str | None = None
+    faculty: str | None = None
+    schoolYear: str | None = None
+    occupation: str | None = None
+    industry: str | None = None
+    workplace: str | None = None
+    gender: str | None = None
+    interest: str | None = None
+    message: str | None = None
     status: Literal["active", "suspended"]
     updatedAt: datetime | None = None
 

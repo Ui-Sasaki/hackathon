@@ -112,7 +112,31 @@ export default function HelperProfileScreen() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
 
-  useEffect(() => { let active = true; refreshProfile().then((profile) => { if (active) { setName(profile.displayName); setRegion(profile.areaCode ?? ""); } }).catch((error) => active && setNotice(profileErrorMessage(profileErrorKind(error)))).finally(() => active && setLoading(false)); return () => { active = false; }; }, [refreshProfile]);
+  useEffect(() => {
+    let active = true;
+    refreshProfile()
+      .then((profile) => {
+        if (!active) return;
+        setName(profile.displayName);
+        setRegion(profile.region ?? "");
+        setAge(profile.age?.toString() ?? "");
+        setNotes(profile.notes ?? "");
+        setHelperType(profile.helperType ?? null);
+        setUniversity(profile.university ?? "");
+        setFaculty(profile.faculty ?? "");
+        setSchoolYear(profile.schoolYear ?? "");
+        setOccupation(profile.occupation ?? "");
+        setIndustry(profile.industry ?? "");
+        setWorkplace(profile.workplace ?? "");
+      })
+      .catch((error) => {
+        if (active) setNotice(profileErrorMessage(profileErrorKind(error)));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [refreshProfile]);
 
   const pickImage = async () => {
     const permission =
@@ -133,21 +157,58 @@ export default function HelperProfileScreen() {
     }
   };
 
-  const isFormComplete = name.trim() !== "" && region !== "";
+  const baseComplete =
+    name.trim() !== "" &&
+    region !== "" &&
+    age !== "" &&
+    image !== null &&
+    helperType !== null;
+
+  const studentComplete =
+    helperType === "student" &&
+    university.trim() !== "" &&
+    faculty.trim() !== "" &&
+    schoolYear !== "";
+
+  const workerComplete =
+    helperType === "worker" &&
+    occupation.trim() !== "";
+
+  const isFormComplete =
+    baseComplete &&
+    (studentComplete || workerComplete);
 
   const handleBack = () => {
     router.replace("/onboarding/role");
   };
 
   const handleNext = async () => {
-  if (!isFormComplete || saving) return;
-  setSaving(true); setNotice("");
-  try { await updateProfile({ displayName: name.trim(), areaCode: region }); router.push({
-    pathname: "/onboarding/helper/help",
-    params: {
-      profileImage: image ?? "",
-    },
-  }); } catch (error) { setNotice(profileErrorMessage(profileErrorKind(error))); } finally { setSaving(false); }
+  if (!isFormComplete || !image || !helperType || saving) return;
+  setSaving(true);
+  setNotice("");
+  try {
+    await updateProfile({
+      displayName: name.trim(),
+      region,
+      age,
+      notes: notes.trim(),
+      helperType,
+      university: helperType === "student" ? university.trim() : null,
+      faculty: helperType === "student" ? faculty.trim() : null,
+      schoolYear: helperType === "student" ? schoolYear : null,
+      occupation: helperType === "worker" ? occupation.trim() : null,
+      industry: helperType === "worker" ? industry.trim() : null,
+      workplace: helperType === "worker" ? workplace.trim() : null,
+    });
+    router.push({
+      pathname: "/onboarding/helper/help",
+      params: { profileImage: image },
+    });
+  } catch (error) {
+    setNotice(profileErrorMessage(profileErrorKind(error)));
+  } finally {
+    setSaving(false);
+  }
 };
 
   return (
@@ -203,8 +264,6 @@ export default function HelperProfileScreen() {
           <Text style={styles.roleTitle}>
             手伝いたい
           </Text>
-          <Text>{loading ? "プロフィールを取得中です" : "支援者は画面モードで、固定権限ではありません"}</Text>
-          <Text>年代・大学名・職業などは現在API未連携です</Text>
           {!!notice && <Text accessibilityLiveRegion="polite">{notice}</Text>}
 
           <View style={styles.form}>

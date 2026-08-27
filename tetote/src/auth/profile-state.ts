@@ -10,6 +10,6 @@ export function profileErrorKind(error: unknown): ProfileRequestError {
 
 export function profileErrorMessage(kind: ProfileRequestError): string {
   if (kind === "unauthorized") return "ログインし直してください";
-  if (kind === "validation") return "名前と地域の入力内容を確認してください";
+  if (kind === "validation") return "プロフィールの入力内容を確認してください";
   return "通信に失敗しました。時間をおいて再度お試しください";
 }

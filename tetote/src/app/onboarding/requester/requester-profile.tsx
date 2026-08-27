@@ -85,7 +85,24 @@ export default function RequesterProfileScreen() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
 
-  useEffect(() => { let active = true; refreshProfile().then((profile) => { if (active) { setName(profile.displayName); setRegion(profile.areaCode ?? ""); } }).catch((error) => active && setNotice(profileErrorMessage(profileErrorKind(error)))).finally(() => active && setLoading(false)); return () => { active = false; }; }, [refreshProfile]);
+  useEffect(() => {
+    let active = true;
+    refreshProfile()
+      .then((profile) => {
+        if (!active) return;
+        setName(profile.displayName);
+        setRegion(profile.region ?? "");
+        setAge(profile.age?.toString() ?? "");
+        setNotes(profile.notes ?? "");
+      })
+      .catch((error) => {
+        if (active) setNotice(profileErrorMessage(profileErrorKind(error)));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [refreshProfile]);
 
   const pickImage = async () => {
     const permission =
@@ -106,7 +123,11 @@ export default function RequesterProfileScreen() {
     }
   };
 
-  const isFormComplete = name.trim() !== "" && region !== "";
+  const isFormComplete =
+    name.trim() !== "" &&
+    region !== "" &&
+    age !== "" &&
+    image !== null;
 
   const handleBack = () => {
     router.replace("/onboarding/role");
@@ -114,10 +135,21 @@ export default function RequesterProfileScreen() {
 
   const handleNext = async () => {
     if (!isFormComplete || saving) return;
-    setSaving(true); setNotice("");
-    try { await updateProfile({ displayName: name.trim(), areaCode: region }); router.push("/onboarding/requester/preferences"); }
-    catch (error) { setNotice(profileErrorMessage(profileErrorKind(error))); }
-    finally { setSaving(false); }
+    setSaving(true);
+    setNotice("");
+    try {
+      await updateProfile({
+        displayName: name.trim(),
+        region,
+        age,
+        notes: notes.trim(),
+      });
+      router.push("/onboarding/requester/preferences");
+    } catch (error) {
+      setNotice(profileErrorMessage(profileErrorKind(error)));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -171,8 +203,6 @@ export default function RequesterProfileScreen() {
           <Text style={styles.roleTitle}>
             手伝ってほしい
           </Text>
-          <Text>{loading ? "プロフィールを取得中です" : "依頼者は画面モードで、固定権限ではありません"}</Text>
-          <Text>顔写真・年代・注意点は現在API未連携です</Text>
           {!!notice && <Text accessibilityLiveRegion="polite">{notice}</Text>}
 
           <View style={styles.form}>

@@ -116,6 +116,12 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/reports` | 通報 |
 | POST | `/users/{id}/block` | ブロック・解除 |
 
+`PATCH /profile`は既存フロントエンドのプロフィール入力を基準に、表示名、都道府県、
+年代、注意事項、支援者区分、大学・学部・学年、職業・業界・勤務先、性別、興味、
+一言メッセージを更新する。本人ID、ロール、メール確認、本人確認状態はセッションと
+サーバー側レコードから決定し、クライアント入力では変更できない。プロフィール画像は
+安全なアップロードAPIが未実装のため、端末ローカルURIを`PATCH /profile`へ送らない。
+
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
 認証、モック利用者、ページング、実装状況を含むフロント向け手順は
 [`docs/api-development.md`](../docs/api-development.md)を参照する。固定OpenAPIは

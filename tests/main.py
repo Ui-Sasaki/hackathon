@@ -303,6 +303,66 @@ def test_api_prefix_and_profile_update() -> None:
     assert response.json()["displayName"] == "更新後の名前"
 
 
+def test_profile_update_supports_existing_frontend_fields() -> None:
+    payload = {
+        "displayName": "田中 悠",
+        "region": "北海道",
+        "age": "22",
+        "notes": "犬の扱いに慣れています",
+        "helperType": "student",
+        "university": "テトテ大学",
+        "faculty": "地域学部",
+        "schoolYear": "3年",
+        "occupation": None,
+        "industry": None,
+        "workplace": None,
+        "gender": "回答しない",
+        "interest": "地域清掃",
+        "message": "よろしくお願いします",
+    }
+    response = client.patch("/profile", json=payload)
+
+    assert response.status_code == 200
+    for field, value in payload.items():
+        assert response.json()[field] == value
+    assert response.json()["id"] == REQUESTER.user_id
+    assert response.json()["role"] == "member"
+    assert response.json()["verificationStatus"] == "approved"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"age": ""},
+        {"age": "長" * 31},
+        {"helperType": "requester"},
+        {"helperType": "student", "university": "テトテ大学"},
+        {"helperType": "worker"},
+        {"notes": "長" * 501},
+    ],
+)
+def test_profile_update_validates_frontend_fields(payload: dict) -> None:
+    response = client.patch("/profile", json=payload)
+    assert response.status_code == 422
+
+
+def test_profile_update_preserves_helper_profile_consistency() -> None:
+    created = client.patch(
+        "/profile",
+        json={
+            "helperType": "student",
+            "university": "テトテ大学",
+            "faculty": "地域学部",
+            "schoolYear": "3年",
+        },
+    )
+    assert created.status_code == 200
+
+    incomplete = client.patch("/profile", json={"university": None})
+    assert incomplete.status_code == 422
+    assert incomplete.json()["error"]["code"] == "STUDENT_PROFILE_INCOMPLETE"
+
+
 def test_create_request_is_idempotent() -> None:
     payload = {
         "title": "庭の片付け",

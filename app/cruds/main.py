@@ -570,15 +570,22 @@ async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
     return users_store[current_user.user_id]
 
 
-@app.patch("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを更新", description="表示名または概算地域を更新する。ユーザーID、ロール、本人確認状態は入力できない。", responses=api_errors(401, 403, 422, 500))
+@app.patch("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを更新", description="既存プロフィール画面の編集項目を更新する。ユーザーID、ロール、本人確認状態は入力できない。端末ローカルの画像URIは受け付けない。", responses=api_errors(401, 403, 422, 500))
 async def update_profile(
     body: ProfileUpdateInput,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    changes = body.model_dump(exclude_none=True)
+    changes = body.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(422, detail={"code": "NO_CHANGES"})
     profile = users_store[current_user.user_id]
+    candidate = {**profile, **changes}
+    if candidate.get("helperType") == "student" and not all(
+        candidate.get(field) for field in ("university", "faculty", "schoolYear")
+    ):
+        raise HTTPException(422, detail={"code": "STUDENT_PROFILE_INCOMPLETE"})
+    if candidate.get("helperType") == "worker" and not candidate.get("occupation"):
+        raise HTTPException(422, detail={"code": "WORKER_PROFILE_INCOMPLETE"})
     profile.update(changes)
     profile["updatedAt"] = now_iso()
     return profile
