@@ -40,6 +40,13 @@ describe("authentication session lifecycle", () => {
     expect(restore).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps restore failures distinct from an expired session", async () => {
+    const failure = new Error("profile service unavailable");
+    const client = fakeClient({ restore: vi.fn().mockRejectedValue(failure) });
+
+    await expect(restoreSession(client)).rejects.toBe(failure);
+  });
+
   it.each(["signUp", "signIn"] as const)(
     "establishes a server-backed session after %s",
     async (method) => {

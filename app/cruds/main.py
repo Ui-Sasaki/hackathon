@@ -474,7 +474,7 @@ def create_user_profile(user_id: str) -> None:
         {
             "id": user_id,
             "displayName": "",
-            "role": "requester",
+            "role": "member",
             "status": "active",
             "emailVerified": False,
             "verificationStatus": "unverified",

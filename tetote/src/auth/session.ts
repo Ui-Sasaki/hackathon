@@ -6,12 +6,8 @@ export type SessionSnapshot = {
 };
 
 export async function restoreSession(client: AuthClient): Promise<SessionSnapshot> {
-  try {
-    const profile = await client.restore();
-    return { profile, status: profile ? "authenticated" : "unauthenticated" };
-  } catch {
-    return { profile: null, status: "unauthenticated" };
-  }
+  const profile = await client.restore();
+  return { profile, status: profile ? "authenticated" : "unauthenticated" };
 }
 
 export async function authenticate(

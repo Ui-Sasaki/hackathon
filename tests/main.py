@@ -614,7 +614,7 @@ def test_signup_profile_is_created_with_safe_defaults() -> None:
     assert crud_module.users_store["supertokens-user-id"] == {
         "id": "supertokens-user-id",
         "displayName": "",
-        "role": "requester",
+        "role": "member",
         "status": "active",
         "emailVerified": False,
         "verificationStatus": "unverified",
@@ -943,6 +943,26 @@ def test_complete_match_is_rejected_after_completion() -> None:
 
 def test_seeded_profile_uses_member_role() -> None:
     response = client.get("/profile")
+    assert response.status_code == 200
+    assert response.json()["role"] == "member"
+
+
+def test_newly_created_profile_matches_public_profile_contract() -> None:
+    user_id = "new-supertokens-user"
+    crud_module.create_user_profile(user_id)
+
+    async def new_user() -> CurrentUser:
+        return CurrentUser(
+            user_id=user_id,
+            role="member",
+            status="active",
+            email_verified=False,
+            verification_status="unverified",
+        )
+
+    app.dependency_overrides[get_current_user] = new_user
+    response = client.get("/profile")
+
     assert response.status_code == 200
     assert response.json()["role"] == "member"
 
