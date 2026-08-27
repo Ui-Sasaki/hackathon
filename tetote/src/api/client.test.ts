@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiClient } from "./client";
 import { getApiBaseUrl } from "./config";
-import { ApiNetworkError, ApiTimeoutError } from "./errors";
+import { ApiAuthenticationError, ApiNetworkError, ApiTimeoutError } from "./errors";
 
 const jsonResponse = (status: number, body: unknown = {}) =>
   new Response(JSON.stringify(body), {
@@ -68,5 +68,35 @@ describe("TODO 05: API client foundation", () => {
     const expectation = expect(request).rejects.toBeInstanceOf(ApiTimeoutError);
     await vi.advanceTimersByTimeAsync(25);
     await expectation;
+  });
+});
+
+describe("TODO 06: authenticated mutations", () => {
+  it.each([
+    ["GET", undefined],
+    ["PATCH", { title: "更新" }],
+  ])("uses the current SDK-intercepted fetch for %s requests", async (method, body) => {
+    const originalFetch = vi.fn();
+    vi.stubGlobal("fetch", originalFetch);
+    const client = new ApiClient({ baseUrl: "https://api.example.test" });
+    const sdkInterceptedFetch = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    vi.stubGlobal("fetch", sdkInterceptedFetch);
+
+    await client.request("/requests/request-1", { method, body });
+
+    expect(originalFetch).not.toHaveBeenCalled();
+    expect(sdkInterceptedFetch).toHaveBeenCalledOnce();
+    expect(sdkInterceptedFetch.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ credentials: "include", method }),
+    );
+  });
+
+  it("maps an expired session response to an authentication error", async () => {
+    const client = new ApiClient({
+      baseUrl: "https://api.example.test",
+      fetch: vi.fn().mockResolvedValue(jsonResponse(401)),
+    });
+
+    await expect(client.patch("/profile", {})).rejects.toBeInstanceOf(ApiAuthenticationError);
   });
 });

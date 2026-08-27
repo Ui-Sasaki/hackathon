@@ -11,3 +11,12 @@ export class ApiTimeoutError extends ApiNetworkError {
     this.name = "ApiTimeoutError";
   }
 }
+
+export class ApiAuthenticationError extends Error {
+  readonly status = 401;
+
+  constructor(message = "セッションの有効期限が切れました。もう一度ログインしてください") {
+    super(message);
+    this.name = "ApiAuthenticationError";
+  }
+}
