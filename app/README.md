@@ -1,6 +1,6 @@
 # テトテFastAPI 開発ガイド
 
-地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼、応募、マッチ、チャット、双方完了、disputeの保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。review、AI実績、プロフィール、本人確認、通報、ブロックのAPI保存は現在インメモリで模擬している。
+地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼、応募、マッチ、チャット、双方完了、dispute、本人プロフィールの保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。review、AI実績、本人確認、通報、ブロックのAPI保存は現在インメモリで模擬している。
 
 ## セットアップと起動
 
@@ -43,8 +43,9 @@ python -m uvicorn main:app --reload --port 8000
 登録、ログイン、ログアウト、パスワード再設定はSuperTokensの`/auth/*` APIを
 利用する。Cookie認証ではHttpOnly/Secure/SameSite Cookieと`anti-csrf`ヘッダーが
 使われる。ローカルHTTP開発時だけ`AUTH_COOKIE_SECURE=false`にする。
-ユーザー登録に成功すると、SuperTokensのユーザーIDに対応するアプリ内プロフィールを
-依頼者・未確認の初期状態で自動作成する。
+本番では検証済みSuperTokens subjectを初回の業務APIアクセス時にPostgresへ安全な
+`member`・未確認状態で登録する。既存利用者の表示名、role、本人確認状態は再認証で
+上書きしない。開発用Memoryでは登録成功時に同等の初期プロフィールを作る。
 
 ### SuperTokensなしで機能を試す
 
@@ -98,7 +99,8 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/auth/signout` | ログアウト |
 | POST | `/auth/user/password/reset/token` | パスワード再設定メール送信 |
 | POST | `/auth/user/password/reset` | パスワード再設定・既存セッション失効 |
-| GET / PATCH | `/profile` | プロフィール取得・更新 |
+| GET / PATCH | `/profile` | 本人だけの詳細プロフィール取得・更新 |
+| GET | `/locations/areas` | 選択可能な活動地域マスタ |
 | POST | `/locations/resolve` | 現在地の概算地域化・登録地域フォールバック |
 | POST | `/requests/structure` | 依頼文の構造化 |
 | POST | `/requests/masking-preview` | LLM送信前の個人情報マスキング確認 |
@@ -214,7 +216,8 @@ curl -X POST http://localhost:8000/_mock/reset --cookie "$AUTH_COOKIES"
 テストは `tests/main.py` の冒頭で `MOCK_RESET_ENABLED=true` を設定している。
 
 Postgres選択時は応募、マッチング、チャット、双方完了、disputeもDBへ永続化され、
-選択の定員・version検査と関連状態更新はDB関数で原子的に処理される。Memory選択時も
-同じRepository契約を使う。review、AI実績、プロフィール、本人確認、通報、ブロックは
+選択の定員・version検査と関連状態更新はDB関数で原子的に処理される。プロフィールも
+本人限定のDB関数で更新され、編集不可のrole・本人確認・statusは変更できない。Memory選択時も
+同じRepository契約を使う。review、AI実績、本人確認、通報、ブロックは
 プロセス内だけに保存され、サーバーを再起動すると初期化される。これらを本番データと
 して扱わないこと。CSRF対策、レート制限は別途本実装が必要である。

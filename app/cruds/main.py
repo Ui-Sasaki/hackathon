@@ -23,6 +23,11 @@ from app.repositories.matches import (
     configure_match_block_checker,
     configure_match_user_active_checker,
 )
+from app.repositories.profiles import (
+    configure_memory_profile_store,
+    resolve_authenticated_user,
+)
+from app.settings import settings
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
@@ -158,9 +163,9 @@ def configure_structure_llm_client(client: StructureLLMClient) -> None:
     structure_llm_client = client
 
 REGIONS = {
-    "AREA-001": {"label": "大学周辺", "latitude": 43.062, "longitude": 141.354},
-    "AREA-002": {"label": "大学北側", "latitude": 43.082, "longitude": 141.350},
-    "AREA-003": {"label": "駅周辺", "latitude": 43.068, "longitude": 141.351},
+    "AREA-001": {"label": "大学周辺", "prefectureCode": "01", "latitude": 43.062, "longitude": 141.354},
+    "AREA-002": {"label": "大学北側", "prefectureCode": "01", "latitude": 43.082, "longitude": 141.350},
+    "AREA-003": {"label": "駅周辺", "prefectureCode": "01", "latitude": 43.068, "longitude": 141.351},
 }
 
 
@@ -393,7 +398,11 @@ def reset_store() -> None:
 
 
 reset_store()
-configure_user_lookup(lambda user_id: users_store.get(user_id))
+configure_memory_profile_store(lambda: users_store)
+if settings.request_repository == "postgres":
+    configure_user_lookup(resolve_authenticated_user)
+else:
+    configure_user_lookup(lambda user_id: users_store.get(user_id))
 
 
 def create_user_profile(user_id: str) -> None:
@@ -412,7 +421,8 @@ def create_user_profile(user_id: str) -> None:
     )
 
 
-configure_user_creator(create_user_profile)
+if settings.request_repository == "memory":
+    configure_user_creator(create_user_profile)
 
 
 async def match_or_404(

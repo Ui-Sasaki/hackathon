@@ -152,19 +152,61 @@ class RequestUpdateInput(ContractModel):
 
 
 class ProfileUpdateInput(ContractModel):
-    displayName: str | None = Field(None, min_length=1, max_length=50)
+    model_config = ConfigDict(extra="forbid")
+
+    displayName: str | None = Field(None, min_length=1, max_length=80)
     areaCode: str | None = Field(None, min_length=1, max_length=30)
+    prefectureCode: str | None = Field(None, pattern=r"^(0[1-9]|[1-3][0-9]|4[0-7])$")
+    birthYear: int | None = Field(None, ge=1900, le=datetime.now().year)
+    notes: str | None = Field(None, max_length=1000)
+    helperType: Literal["student", "worker"] | None = None
+    university: str | None = Field(None, min_length=1, max_length=100)
+    faculty: str | None = Field(None, min_length=1, max_length=100)
+    schoolYear: int | None = Field(None, ge=1, le=8)
+    occupation: str | None = Field(None, min_length=1, max_length=100)
+    industry: str | None = Field(None, max_length=100)
+    workplace: str | None = Field(None, max_length=100)
+    interest: str | None = Field(None, max_length=500)
+    message: str | None = Field(None, max_length=1000)
+
+    @model_validator(mode="after")
+    def display_name_cannot_be_null(self) -> "ProfileUpdateInput":
+        if "displayName" in self.model_fields_set and self.displayName is None:
+            raise ValueError("displayName cannot be null")
+        return self
 
 
 class ProfileResponse(ContractModel):
     id: str
-    displayName: str = Field(max_length=50)
+    displayName: str = Field(max_length=80)
     role: Literal["member", "admin", "verifier"]
     emailVerified: bool
     verificationStatus: VerificationStatus
     areaCode: str | None = None
+    prefectureCode: str | None = None
+    birthYear: int | None = None
+    notes: str | None = None
+    helperType: Literal["student", "worker"] | None = None
+    university: str | None = None
+    faculty: str | None = None
+    schoolYear: int | None = None
+    occupation: str | None = None
+    industry: str | None = None
+    workplace: str | None = None
+    interest: str | None = None
+    message: str | None = None
     status: Literal["active", "suspended"]
     updatedAt: datetime | None = None
+
+
+class OperationalAreaResponse(ContractModel):
+    code: str
+    label: str
+    prefectureCode: str
+
+
+class OperationalAreaListResponse(ContractModel):
+    items: list[OperationalAreaResponse]
 
 
 class ApplicationInput(ContractModel):

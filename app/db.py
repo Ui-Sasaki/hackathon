@@ -72,10 +72,10 @@ async def actor_connection(current_user: CurrentUser) -> AsyncIterator[asyncpg.C
 async def admin_connection() -> AsyncIterator[asyncpg.Connection]:
     """A connection with no actor context set.
 
-    Only usable for calling SECURITY DEFINER functions that do not consult
-    `app.current_actor()` themselves — currently just the `/_mock/reset`
-    test-support path (`app.mock_reset_requests`). Ordinary business queries
-    must go through `actor_connection`, which RLS depends on.
+    Only usable for narrow SECURITY DEFINER functions that establish identity
+    or read non-personal master data, plus the `/_mock/reset` test-support path.
+    Ordinary business queries must go through `actor_connection`, which RLS
+    depends on.
     """
     # statement_cache_size=0: Supabase's transaction-mode pooler does not
     # support prepared statements. Harmless for direct/session connections.

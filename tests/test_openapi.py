@@ -5,7 +5,7 @@ from app.main import app
 
 
 MAJOR_OPERATIONS = {
-    ("get", "/profile"), ("patch", "/profile"),
+    ("get", "/profile"), ("patch", "/profile"), ("get", "/locations/areas"),
     ("post", "/requests/structure"), ("get", "/requests"),
     ("post", "/requests"), ("get", "/requests/{request_id}"),
     ("patch", "/requests/{request_id}"), ("delete", "/requests/{request_id}"),

@@ -40,10 +40,18 @@ SDKが設定する `anti-csrf` ヘッダーも必要である。`userId`、`requ
 - `/api` 接頭辞あり・なしの両方を実行時に受け付ける。OpenAPIでは正規パスとして
   接頭辞なしを掲載する。
 
+## 本人プロフィール
+
+`GET /profile`は本人の詳細プロフィールを返し、`PATCH /profile`は送信した項目だけを
+更新する。nullable項目は明示的な`null`で消去できる。`id`、`role`、`emailVerified`、
+`verificationStatus`、`status`は編集できず、性別と画像URIはAPI契約に含めない。
+都道府県は`prefectureCode`、実際の依頼検索に使う活動地域は`areaCode`として分ける。
+活動地域のcode・labelは推測せず、`GET /locations/areas`の一覧を利用する。
+
 ## 実装状況
 
-依頼、応募、マッチ、チャット、双方完了、disputeはMemory/Postgres Repositoryに
-対応する。プロフィール、位置解決、レビュー、AI実績、本人確認、通報、ブロックの
+依頼、応募、マッチ、チャット、双方完了、dispute、本人プロフィールはMemory/Postgres Repositoryに
+対応する。位置解決、レビュー、AI実績、本人確認、通報、ブロックの
 API経路と状態・認可検査は実装済みだが、これらの保存、AI生成、本人確認審査は開発用
 インメモリ／モックである。SuperTokensの `/auth/*` はSDK提供であり、FastAPI生成の
 OpenAPIには個別操作として現れない。管理画面、Realtime、実AI、本人確認審査、
