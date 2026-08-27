@@ -1,5 +1,5 @@
 import { getApiBaseUrl } from "./config";
-import { ApiNetworkError, ApiTimeoutError } from "./errors";
+import { ApiAuthenticationError, ApiNetworkError, ApiTimeoutError } from "./errors";
 
 export type ApiRequestOptions = Omit<RequestInit, "body" | "credentials" | "headers"> & {
   body?: unknown;
@@ -59,6 +59,7 @@ export class ApiClient {
         headers,
         signal: controller.signal,
       });
+      if (response.status === 401) throw new ApiAuthenticationError();
       if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
       if (response.status === 204) return undefined as T;
       return (await response.json()) as T;
