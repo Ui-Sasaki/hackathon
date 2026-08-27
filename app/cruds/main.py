@@ -8,7 +8,7 @@ import math
 import os
 import re
 from typing import Any, Awaitable, Callable
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
+import httpx
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.auth import (
@@ -26,11 +27,13 @@ from app.repositories.requests import RequestRepository, get_request_repository
 from app.repositories.applications import (
     ApplicationRepository, get_application_repository,
 )
+from app.repositories.structure_audits import structure_audit_repository
 from app.services.applications import (
     create_application as create_application_service,
     withdraw_application as withdraw_application_service,
 )
 from app.services.requests import cancel_owned_request, require_request, update_owned_request
+from app.services import request_structuring
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
@@ -127,6 +130,8 @@ def api_errors(*statuses: int) -> dict[int, dict[str, Any]]:
         409: ("REQUEST_STATE_CONFLICT", "依頼の状態が更新されているため処理できません"),
         422: ("VALIDATION_ERROR", "入力内容を確認してください"),
         500: ("INTERNAL_SERVER_ERROR", "サーバー内部でエラーが発生しました"),
+        502: ("STRUCTURE_INVALID_RESPONSE", "構造化サービスの応答を検証できません"),
+        503: ("STRUCTURE_SERVICE_UNAVAILABLE", "構造化サービスを利用できません"),
     }
     return {
         status: {
@@ -173,27 +178,30 @@ def mask_request_text(text: str) -> dict[str, Any]:
 async def default_structure_llm_client(
     masked_text: str, _area_code: str | None
 ) -> dict[str, Any]:
-    is_dog = "犬" in masked_text or "散歩" in masked_text
-    return {
-        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
-        "description": masked_text,
-        "category": "pet_support" if is_dog else "other",
-        "scheduledAt": "2026-08-19T17:00:00+09:00",
-        "estimatedMinutes": 30,
-        "requiredHelpers": 1,
-        "riskLevel": "medium" if is_dog else "low",
-        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in masked_text else [],
-        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
-    }
+    return await request_structuring.LocalStructureProvider().structure(
+        masked_text, _area_code
+    )
 
 
 StructureLLMClient = Callable[[str, str | None], Awaitable[dict[str, Any]]]
-structure_llm_client: StructureLLMClient = default_structure_llm_client
+class CallableStructureProvider:
+    model = "configured-structure-client"
+
+    def __init__(self, client: StructureLLMClient) -> None:
+        self.client = client
+
+    async def structure(self, text: str, area_code: str | None) -> dict[str, Any]:
+        return await self.client(text, area_code)
+
+
+structure_provider: request_structuring.StructureProvider = (
+    request_structuring.configured_provider()
+)
 
 
 def configure_structure_llm_client(client: StructureLLMClient) -> None:
-    global structure_llm_client
-    structure_llm_client = client
+    global structure_provider
+    structure_provider = CallableStructureProvider(client)
 
 REGIONS = {
     "AREA-001": {"label": "大学周辺", "latitude": 43.062, "longitude": 141.354},
@@ -553,6 +561,7 @@ async def reset_mock(
     reset_store()
     await repository.reset()
     await application_repository.reset()
+    await structure_audit_repository.reset()
     return {"reset": True}
 
 
@@ -561,15 +570,22 @@ async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
     return users_store[current_user.user_id]
 
 
-@app.patch("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを更新", description="表示名または概算地域を更新する。ユーザーID、ロール、本人確認状態は入力できない。", responses=api_errors(401, 403, 422, 500))
+@app.patch("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを更新", description="既存プロフィール画面の編集項目を更新する。ユーザーID、ロール、本人確認状態は入力できない。端末ローカルの画像URIは受け付けない。", responses=api_errors(401, 403, 422, 500))
 async def update_profile(
     body: ProfileUpdateInput,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    changes = body.model_dump(exclude_none=True)
+    changes = body.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(422, detail={"code": "NO_CHANGES"})
     profile = users_store[current_user.user_id]
+    candidate = {**profile, **changes}
+    if candidate.get("helperType") == "student" and not all(
+        candidate.get(field) for field in ("university", "faculty", "schoolYear")
+    ):
+        raise HTTPException(422, detail={"code": "STUDENT_PROFILE_INCOMPLETE"})
+    if candidate.get("helperType") == "worker" and not candidate.get("occupation"):
+        raise HTTPException(422, detail={"code": "WORKER_PROFILE_INCOMPLETE"})
     profile.update(changes)
     profile["updatedAt"] = now_iso()
     return profile
@@ -589,7 +605,7 @@ async def resolve_browser_location(
     }
 
 
-@app.post("/requests/structure", response_model=StructuredRequestResponse | MaskingConfirmationResponse, tags=["Requests"], summary="依頼文を構造化", description="自由記述を依頼候補へ構造化する開発用AIモック。個人情報をマスクし、検出時は確認を求める。結果は自動公開されない。", responses=api_errors(401, 422, 500))
+@app.post("/requests/structure", response_model=StructuredRequestResponse | MaskingConfirmationResponse, tags=["Requests"], summary="依頼文を構造化", description="自由記述を検証済みの確認用下書きへ構造化する。個人情報をマスクし、検出時は確認を求める。結果は自動公開されない。", responses=api_errors(401, 422, 500, 502, 503))
 async def structure_request(
     body: StructureInput,
     _current_user: CurrentUser = Depends(get_current_user),
@@ -606,14 +622,27 @@ async def structure_request(
     if any(word in masking["maskedText"] for word in ["電気工事", "医療行為", "介護", "送迎"]):
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
     try:
-        result = await structure_llm_client(masking["maskedText"], body.areaCode)
+        result = await request_structuring.structure_request(
+            masking["maskedText"], body.areaCode, structure_provider,
+            structure_audit_repository,
+        )
+    except httpx.TimeoutException:
+        logger.warning("Request structure provider timed out")
+        raise HTTPException(503, detail={"code": "STRUCTURE_SERVICE_TIMEOUT"})
+    except (httpx.HTTPStatusError, request_structuring.InvalidStructureResponse):
+        logger.warning("Request structure provider returned an invalid response")
+        raise HTTPException(502, detail={"code": "STRUCTURE_INVALID_RESPONSE"})
     except Exception:
         logger.warning("Request structure service failed after masking")
         raise HTTPException(503, detail={"code": "STRUCTURE_SERVICE_UNAVAILABLE"})
     masking_metrics["submitted"] += 1
     return {
         **result,
-        "requiresConfirmation": True,
+        "masking": {
+            "detections": masking["detections"],
+            "ruleVersion": masking["ruleVersion"],
+            "confirmed": body.maskingConfirmed,
+        },
     }
 
 
@@ -1062,7 +1091,7 @@ async def create_report(
     )
     if item["severity"] == "high" and body.targetType == "request":
         try:
-            target_id = uuid.UUID(body.targetId)
+            target_id = UUID(body.targetId)
         except ValueError:
             target_id = None
         if target_id is not None:

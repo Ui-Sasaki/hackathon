@@ -1,7 +1,7 @@
 """Public API contracts used by runtime validation and OpenAPI."""
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -77,17 +77,48 @@ class MaskingConfirmationResponse(ContractModel):
     message: str
 
 
-class StructuredRequestResponse(ContractModel):
-    title: str = Field(max_length=100)
-    description: str = Field(max_length=3000)
-    category: str = Field(max_length=100)
-    scheduledAt: datetime = Field(description="ISO 8601日時")
-    estimatedMinutes: int = Field(ge=10, le=240)
-    requiredHelpers: int = Field(ge=1, le=5)
+ShortExtractedText = Annotated[str, Field(min_length=1, max_length=200)]
+MissingFieldCode = Literal[
+    "title", "description", "category", "scheduledAt", "estimatedMinutes",
+    "approximateArea", "requiredHelpers", "itemsToBring", "details",
+]
+
+
+class StructuredRequestDraft(ContractModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=2000)
+    category: str = Field(min_length=1, max_length=50)
+    scheduledAt: datetime | None = Field(default=None, description="ISO 8601日時")
+    estimatedMinutes: int | None = Field(default=None, ge=10, le=240)
+    approximateArea: str | None = Field(default=None, max_length=100)
+    requiredHelpers: int | None = Field(default=None, ge=1, le=5)
+    itemsToBring: list[ShortExtractedText] = Field(max_length=20)
     riskLevel: Literal["low", "medium", "high", "prohibited"]
-    missingFields: list[str]
-    warnings: list[str]
-    requiresConfirmation: bool = True
+    riskCandidates: list[ShortExtractedText] = Field(max_length=20)
+    missingFields: list[MissingFieldCode] = Field(max_length=20)
+    warnings: list[ShortExtractedText] = Field(max_length=20)
+
+
+class AppliedMasking(ContractModel):
+    detections: list[MaskingDetection]
+    ruleVersion: str
+    confirmed: bool
+
+
+class StructureMetadata(ContractModel):
+    modelName: str
+    promptVersion: str
+    processedAt: datetime
+
+
+class StructuredRequestResponse(StructuredRequestDraft):
+    masking: AppliedMasking
+    status: Literal["draft"]
+    requiresConfirmation: Literal[True]
+    autoPublished: Literal[False]
+    additionalQuestion: str | None = None
+    metadata: StructureMetadata
 
 
 class RequestInput(ContractModel):
@@ -147,6 +178,29 @@ class RequestUpdateInput(ContractModel):
 class ProfileUpdateInput(ContractModel):
     displayName: str | None = Field(None, min_length=1, max_length=50)
     areaCode: str | None = Field(None, min_length=1, max_length=30)
+    region: str | None = Field(None, min_length=1, max_length=20)
+    age: str | None = Field(None, min_length=1, max_length=30)
+    notes: str | None = Field(None, max_length=500)
+    helperType: Literal["student", "worker"] | None = None
+    university: str | None = Field(None, min_length=1, max_length=100)
+    faculty: str | None = Field(None, min_length=1, max_length=100)
+    schoolYear: str | None = Field(None, min_length=1, max_length=30)
+    occupation: str | None = Field(None, min_length=1, max_length=100)
+    industry: str | None = Field(None, max_length=100)
+    workplace: str | None = Field(None, max_length=100)
+    gender: str | None = Field(None, max_length=30)
+    interest: str | None = Field(None, max_length=200)
+    message: str | None = Field(None, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_helper_details(self) -> "ProfileUpdateInput":
+        if self.helperType == "student" and not all(
+            (self.university, self.faculty, self.schoolYear)
+        ):
+            raise ValueError("student helper details are required")
+        if self.helperType == "worker" and not self.occupation:
+            raise ValueError("worker occupation is required")
+        return self
 
 
 class ProfileResponse(ContractModel):
@@ -156,6 +210,19 @@ class ProfileResponse(ContractModel):
     emailVerified: bool
     verificationStatus: VerificationStatus
     areaCode: str | None = None
+    region: str | None = None
+    age: str | None = None
+    notes: str | None = None
+    helperType: Literal["student", "worker"] | None = None
+    university: str | None = None
+    faculty: str | None = None
+    schoolYear: str | None = None
+    occupation: str | None = None
+    industry: str | None = None
+    workplace: str | None = None
+    gender: str | None = None
+    interest: str | None = None
+    message: str | None = None
     status: Literal["active", "suspended"]
     updatedAt: datetime | None = None
 

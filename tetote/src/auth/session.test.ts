@@ -11,6 +11,19 @@ const profile: AuthProfile = {
   verificationStatus: "unverified",
   status: "active",
   areaCode: null,
+  region: null,
+  age: null,
+  notes: null,
+  helperType: null,
+  university: null,
+  faculty: null,
+  schoolYear: null,
+  occupation: null,
+  industry: null,
+  workplace: null,
+  gender: null,
+  interest: null,
+  message: null,
 };
 
 function fakeClient(overrides: Partial<AuthClient> = {}): AuthClient {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {
   useRouter,
 } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { useAuth } from "../auth/AuthContext";
+import { profileErrorKind, profileErrorMessage } from "../auth/profile-state";
 import { useFontSize } from "../context/FontSizeContext";
 
 export default function ProfileScreen() {
@@ -20,6 +22,7 @@ export default function ProfileScreen() {
 
   const { scale } = useFontSize();
   const styles = createStyles(scale);
+  const { profile, refreshProfile, updateProfile } = useAuth();
 
   const [username, setUsername] = useState("");
   const [gender, setGender] = useState("");
@@ -27,6 +30,51 @@ export default function ProfileScreen() {
   const [university, setUniversity] = useState("");
   const [interest, setInterest] = useState("");
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    refreshProfile()
+      .then((value) => {
+        if (!active) return;
+        setUsername(value.displayName);
+        setGender(value.gender ?? "");
+        setAge(value.age?.toString() ?? "");
+        setUniversity(value.university ?? "");
+        setInterest(value.interest ?? "");
+        setMessage(value.message ?? "");
+      })
+      .catch((error) => {
+        if (active) setNotice(profileErrorMessage(profileErrorKind(error)));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [refreshProfile]);
+
+  const saveProfile = async () => {
+    if (saving || loading) return;
+    setSaving(true);
+    setNotice("");
+    try {
+      await updateProfile({
+        displayName: username.trim(),
+        gender: gender.trim(),
+        age: age.trim() || null,
+        university: university.trim() || null,
+        interest: interest.trim(),
+        message: message.trim(),
+      });
+      setNotice("プロフィールを更新しました");
+    } catch (error) {
+      setNotice(profileErrorMessage(profileErrorKind(error)));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleSettings = () => {
     if (pathname.startsWith("/help")) {
@@ -73,7 +121,11 @@ export default function ProfileScreen() {
             />
 
             <Text style={styles.verifiedText}>
-              認証アカウント
+              {profile?.verificationStatus === "approved"
+                ? "本人確認済み"
+                : profile?.verificationStatus === "pending"
+                  ? "本人確認の審査中"
+                  : "本人確認は未完了です"}
             </Text>
           </View>
 
@@ -178,6 +230,26 @@ export default function ProfileScreen() {
               </View>
             </View>
           </View>
+
+          {!!notice && (
+            <Text accessibilityLiveRegion="polite" style={styles.notice}>
+              {notice}
+            </Text>
+          )}
+
+          <Pressable
+            disabled={saving || loading}
+            onPress={saveProfile}
+            style={({ pressed }) => [
+              styles.saveButton,
+              (saving || loading) && styles.saveButtonDisabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.saveButtonText}>
+              {loading ? "取得中..." : saving ? "更新中..." : "保存する"}
+            </Text>
+          </Pressable>
         </View>
       </ScrollView>
     </View>
@@ -380,6 +452,32 @@ const createStyles = (scale: number) =>
     pressed: {
       opacity: 0.7,
       transform: [{ scale: 0.97 }],
+    },
+
+    notice: {
+      marginTop: 18,
+      textAlign: "center",
+      color: "#8A3B12",
+      fontWeight: "700",
+    },
+
+    saveButton: {
+      minHeight: 48,
+      borderRadius: 24,
+      backgroundColor: "#159326",
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: 18,
+    },
+
+    saveButtonDisabled: {
+      opacity: 0.55,
+    },
+
+    saveButtonText: {
+      color: "#FFFFFF",
+      fontSize: 15 * scale,
+      fontWeight: "800",
     },
   });
 
