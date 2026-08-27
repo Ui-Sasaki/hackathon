@@ -405,7 +405,7 @@ def test_masking_service_failure_does_not_log_or_return_unmasked_input(caplog) -
         raise RuntimeError("provider-key-secret")
 
     crud_module.configure_structure_llm_client(unavailable)
-    with caplog.at_level(logging.WARNING, logger="app.cruds.main"):
+    with caplog.at_level(logging.WARNING, logger="app.routers.requests"):
         response = client.post(
             "/requests/structure",
             json={
