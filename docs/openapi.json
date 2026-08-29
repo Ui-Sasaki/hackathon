@@ -1034,6 +1034,61 @@
         "title": "ProfileUpdateInput",
         "type": "object"
       },
+      "RecommendedRequestItem": {
+        "properties": {
+          "reason": {
+            "description": "ユーザーに提示する推薦理由",
+            "title": "Reason",
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/RequestResponse"
+          },
+          "score": {
+            "description": "推薦総合スコア(0-100)",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "request",
+          "score",
+          "reason"
+        ],
+        "title": "RecommendedRequestItem",
+        "type": "object"
+      },
+      "RecommendedRequestListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendedRequestItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "次ページなしの場合null",
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "RecommendedRequestListResponse",
+        "type": "object"
+      },
       "ReportInput": {
         "properties": {
           "description": {
@@ -4247,6 +4302,120 @@
           }
         ],
         "summary": "LLM送信前のマスキング結果を確認",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/requests/recommended": {
+      "get": {
+        "description": "支援者のプロフィールに基づき、応募可能な依頼をスコアリングして推薦順に返す。",
+        "operationId": "get_recommended_requests_requests_recommended_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": -90,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Latitude"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 180,
+                  "minimum": -180,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Longitude"
+            }
+          },
+          {
+            "in": "query",
+            "name": "consentGranted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Consentgranted",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "locationFailure",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(denied|timeout|unsupported|unavailable)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Locationfailure"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendedRequestListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "パーソナライズされた依頼推薦",
         "tags": [
           "Requests"
         ]

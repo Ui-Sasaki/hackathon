@@ -348,3 +348,12 @@ class ResetResponse(ContractModel):
 class AuthInput(ContractModel):
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
     password: str = Field(min_length=8, max_length=128)
+
+class RecommendedRequestItem(ContractModel):
+    request: RequestResponse
+    score: int = Field(ge=0, le=100, description="推薦総合スコア(0-100)")
+    reason: str = Field(description="ユーザーに提示する推薦理由")
+
+class RecommendedRequestListResponse(ContractModel):
+    items: list[RecommendedRequestItem]
+    nextCursor: str | None = Field(description="次ページなしの場合null")
