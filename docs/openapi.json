@@ -1671,82 +1671,38 @@
       },
       "StructuredRequestResponse": {
         "properties": {
-          "category": {
-            "maxLength": 100,
-            "title": "Category",
-            "type": "string"
-          },
-          "description": {
-            "maxLength": 3000,
-            "title": "Description",
-            "type": "string"
-          },
-          "estimatedMinutes": {
-            "maximum": 240.0,
-            "minimum": 10.0,
-            "title": "Estimatedminutes",
-            "type": "integer"
+          "complete": {
+            "description": "必要な情報が全て揃っているか",
+            "title": "Complete",
+            "type": "boolean"
           },
           "masking": {
             "$ref": "#/components/schemas/AppliedMasking"
           },
-          "missingFields": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Missingfields",
-            "type": "array"
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "不足している情報について尋ねる質問文",
+            "title": "Question"
           },
-          "requiredHelpers": {
-            "maximum": 5.0,
-            "minimum": 1.0,
-            "title": "Requiredhelpers",
-            "type": "integer"
+          "request": {
+            "$ref": "#/components/schemas/VoiceRequestData"
           },
           "requiresConfirmation": {
             "default": true,
             "title": "Requiresconfirmation",
             "type": "boolean"
-          },
-          "riskLevel": {
-            "enum": [
-              "low",
-              "medium",
-              "high",
-              "prohibited"
-            ],
-            "title": "Risklevel",
-            "type": "string"
-          },
-          "scheduledAt": {
-            "description": "ISO 8601日時",
-            "format": "date-time",
-            "title": "Scheduledat",
-            "type": "string"
-          },
-          "title": {
-            "maxLength": 100,
-            "title": "Title",
-            "type": "string"
-          },
-          "warnings": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Warnings",
-            "type": "array"
           }
         },
         "required": [
-          "title",
-          "description",
-          "category",
-          "scheduledAt",
-          "estimatedMinutes",
-          "requiredHelpers",
-          "riskLevel",
-          "missingFields",
-          "warnings",
+          "complete",
+          "request",
           "masking"
         ],
         "title": "StructuredRequestResponse",
@@ -1858,6 +1814,72 @@
           "createdAt"
         ],
         "title": "VerificationResponse",
+        "type": "object"
+      },
+      "VoiceRequestData": {
+        "properties": {
+          "deadline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "期限・希望日時",
+            "title": "Deadline"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "所要時間",
+            "title": "Duration"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "場所",
+            "title": "Location"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "補足事項",
+            "title": "Notes"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "依頼内容",
+            "title": "Task"
+          }
+        },
+        "title": "VoiceRequestData",
         "type": "object"
       }
     },

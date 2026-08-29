@@ -8,8 +8,11 @@ import math
 import os
 import re
 import uuid
+from google import genai
+from google.genai import types
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
+from pydantic import BaseModel, Field
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -177,18 +180,69 @@ def mask_request_text(text: str) -> dict[str, Any]:
 async def default_structure_llm_client(
     masked_text: str, _area_code: str | None
 ) -> dict[str, Any]:
-    is_dog = "犬" in masked_text or "散歩" in masked_text
-    return {
-        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
-        "description": masked_text,
-        "category": "pet_support" if is_dog else "other",
-        "scheduledAt": "2026-08-19T17:00:00+09:00",
-        "estimatedMinutes": 30,
-        "requiredHelpers": 1,
-        "riskLevel": "medium" if is_dog else "low",
-        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in masked_text else [],
-        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+    api_key = os.environ.get("GEMINI_API_KEY")
+    
+    # APIキーがない場合のフロントエンド開発用フェイクデータ
+    if not api_key:
+        is_complete = "時間" in masked_text and "場所" in masked_text
+        return {
+            "complete": is_complete,
+            "question": None if is_complete else "どこで、どのくらいの時間お願いしたいですか？",
+            "request": {
+                "task": masked_text,
+                "location": "板橋区" if "板橋" in masked_text else None,
+                "duration": None,
+                "deadline": None,
+                "notes": "これはAPIキー未設定時のモックデータです。"
+            }
+        }
+
+    client = genai.Client(api_key=api_key)
+    
+    prompt = f"""
+以下の依頼テキストから必要な情報を抽出し、JSON形式で出力してください。
+
+【依頼テキスト】
+{masked_text}
+
+【判定ルール】
+1. task, location, duration, deadline の4つの基本情報がすべて読み取れるか確認してください。
+2. すべて揃っている場合は complete: true とし、question: null にしてください。
+3. 1つでも不足している場合は complete: false とし、不足情報をユーザーに自然な日本語で優しく尋ねる質問を question に設定してください。
+4. その他の補足情報や注意事項は notes にまとめてください。
+"""
+    
+    # 出力形式を完全に固定するスキーマ定義
+    response_schema = {
+        "type": "OBJECT",
+        "properties": {
+            "complete": {"type": "BOOLEAN"},
+            "question": {"type": "STRING", "nullable": True},
+            "request": {
+                "type": "OBJECT",
+                "properties": {
+                    "task": {"type": "STRING", "nullable": True},
+                    "location": {"type": "STRING", "nullable": True},
+                    "duration": {"type": "STRING", "nullable": True},
+                    "deadline": {"type": "STRING", "nullable": True},
+                    "notes": {"type": "STRING", "nullable": True}
+                }
+            }
+        },
+        "required": ["complete", "question", "request"]
     }
+
+    response = await client.aio.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=response_schema,
+            temperature=0.0,
+        ),
+    )
+    
+    return json.loads(response.text)
 
 
 StructureLLMClient = Callable[[str, str | None], Awaitable[dict[str, Any]]]

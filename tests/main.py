@@ -312,7 +312,7 @@ def test_structure_request() -> None:
         json={"text": "病気なので犬の散歩をお願いしたい", "areaCode": "AREA-001"},
     )
     assert response.status_code == 200
-    assert response.json()["category"] == "pet_support"
+    assert response.json()["request"]["task"] == "病気なので犬の散歩をお願いしたい"
 
 
 def test_masking_preview_detects_japanese_and_full_width_pii_formats() -> None:
@@ -375,7 +375,7 @@ def test_structure_requires_confirmation_and_only_sends_masked_text_to_llm() -> 
     assert calls == [("連絡先[電話番号]へ電話して、犬の散歩をお願いします", "AREA-001")]
     assert confirmed.status_code == 200
     assert "090-1234-5678" not in confirmed.text
-    assert confirmed.json()["description"] == "連絡先[電話番号]へ電話して、犬の散歩をお願いします"
+    assert confirmed.json()["request"]["task"] == "連絡先[電話番号]へ電話して、犬の散歩をお願いします"
     assert confirmed.json()["masking"]["confirmed"] is True
 
 
