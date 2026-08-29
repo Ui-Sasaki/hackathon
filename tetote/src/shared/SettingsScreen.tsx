@@ -14,10 +14,12 @@ import {
 } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useFontSize } from "../context/FontSizeContext";
+import { useAuth } from "../auth/AuthContext";
 
 export default function HelperSettingsScreen() {
   const router = useRouter();
   const pathname = usePathname();
+  const { signOut } = useAuth();
 
   const handleBack = () => {
     if (pathname.startsWith("/help")) {
@@ -41,12 +43,24 @@ export default function HelperSettingsScreen() {
 
   const [logoutModalVisible, setLogoutModalVisible] =
     useState(false);
+  const [logoutError, setLogoutError] = useState("");
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const fs = (size: number) => size * scale;
 
-  const handleLogout = () => {
-    setLogoutModalVisible(false);
-    router.replace("/auth/login");
+  const handleLogout = async () => {
+    if (isLoggingOut) return;
+    setLogoutError("");
+    setIsLoggingOut(true);
+    try {
+      await signOut();
+      setLogoutModalVisible(false);
+      router.replace("/auth/login");
+    } catch {
+      setLogoutError("ログアウトに失敗しました。もう一度お試しください");
+    } finally {
+      setIsLoggingOut(false);
+    }
   };
 
   const handleDeleteAccount = () => {
@@ -367,8 +381,10 @@ export default function HelperSettingsScreen() {
 
             <Pressable
               onPress={handleLogout}
+              disabled={isLoggingOut}
               style={({ pressed }) => [
                 styles.logoutConfirmButton,
+                isLoggingOut && styles.disabled,
                 pressed && styles.pressed,
               ]}
             >
@@ -378,9 +394,13 @@ export default function HelperSettingsScreen() {
                   { fontSize: fs(15) },
                 ]}
               >
-                ログアウト
+                {isLoggingOut ? "ログアウト中…" : "ログアウト"}
               </Text>
             </Pressable>
+
+            {logoutError ? (
+              <Text style={styles.logoutError}>{logoutError}</Text>
+            ) : null}
 
             <Pressable
               onPress={() =>
@@ -798,6 +818,18 @@ const styles = StyleSheet.create({
   logoutConfirmButtonText: {
     color: "#FFFFFF",
     fontWeight: "800",
+  },
+
+  logoutError: {
+    color: "#D9534F",
+    fontSize: 13,
+    fontWeight: "600",
+    marginTop: 12,
+    textAlign: "center",
+  },
+
+  disabled: {
+    opacity: 0.55,
   },
 
   deleteButton: {

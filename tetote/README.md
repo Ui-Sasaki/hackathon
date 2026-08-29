@@ -54,3 +54,26 @@ Join our community of developers creating universal apps.
 
 - [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
 - [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+
+## 認証のローカル確認
+
+FastAPI と SuperTokens Core を起動し、フロントのAPI URLを指定してWeb版を起動する。
+
+```bash
+EXPO_PUBLIC_API_URL=http://localhost:8000 npm run web
+```
+
+FastAPI側は `WEBSITE_DOMAIN` を実際のフロントOrigin（既定は
+`http://localhost:3000`）に一致させる。ローカルHTTPでのみ
+`AUTH_COOKIE_SECURE=false` を使い、Preview・本番はHTTPS、Secure Cookieを必須とする。
+
+Chrome、Safari、Edgeの開発者ツールで次を確認する。
+
+- 登録・ログイン後にHttpOnlyのセッションCookieが発行され、再読み込み後も復元される
+- API通信が `credentials: include` で行われ、SuperTokens SDKがanti-CSRFヘッダーを付与する
+- CookieのSameSite設定がフロント/APIの配置に合い、本番CookieにSecure属性がある
+- ログアウト後または期限切れ後に保護画面へ戻れず、ログイン画面へ1回だけ遷移する
+- パスワード、Cookie、セッショントークン、anti-CSRF値がURL・Storage・ログへ出ない
+
+認証テストは `npm test`、静的検査は `npm run lint`、Web成果物は
+`npx expo export --platform web` で確認する。
