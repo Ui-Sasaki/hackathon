@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 import {
   View,
   Text,
+  TextInput,
   StyleSheet,
   Pressable,
   ScrollView,
@@ -10,375 +11,345 @@ import {
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useFontSize } from "../../context/FontSizeContext";
-
-type RequestData = {
-  task: string | null;
-  location: string | null;
-  duration: string | null;
-  deadline: string | null;
-  notes: string | null;
-};
-
-type VoiceRequestResponse = {
-  complete: boolean;
-  question: string | null;
-  request: RequestData;
-};
-
-type Message = {
-  id: number;
-  role: "ai" | "user";
-  text: string;
-};
-
-declare global {
-  interface Window {
-    SpeechRecognition?: any;
-    webkitSpeechRecognition?: any;
-  }
-}
+import { describeMasked, maskPersonalInfo } from "../../voice/masking";
+import {
+  RecognitionController,
+  webSpeechAdapter,
+} from "../../voice/recognition";
+import {
+  initialVoiceState,
+  submissionOf,
+  voiceReducer,
+  VOICE_ERROR_MESSAGES,
+} from "../../voice/session";
 
 export default function RequestVoiceScreen() {
   const router = useRouter();
   const { scale } = useFontSize();
   const styles = createStyles(scale);
 
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      role: "ai",
-      text: "どのようなお手伝いが必要ですか？",
-    },
-  ]);
+  const [state, dispatch] = useReducer(voiceReducer, initialVoiceState);
+  const controllerRef = useRef<RecognitionController | null>(null);
 
-  const [isListening, setIsListening] = useState(false);
-  const [isThinking, setIsThinking] = useState(false);
-
-  const [requestData, setRequestData] =
-    useState<RequestData>({
-      task: null,
-      location: null,
-      duration: null,
-      deadline: null,
-      notes: null,
-    });
-
-  const recognitionRef = useRef<any>(null);
-  const scrollRef = useRef<ScrollView>(null);
-
-  const mockBackend = async (
-    text: string
-  ): Promise<VoiceRequestResponse> => {
-    await new Promise((resolve) =>
-      setTimeout(resolve, 700)
-    );
-
-    if (!requestData.task) {
-      return {
-        complete: false,
-        question: "どこでお願いしたいですか？",
-        request: {
-          ...requestData,
-          task: text,
-        },
-      };
+  // 非対応ブラウザでは録音を始めさせず、最初から手入力へ促す。
+  useEffect(() => {
+    if (!webSpeechAdapter.isSupported()) {
+      dispatch({ type: "fail", reason: "unsupported" });
     }
+  }, []);
 
-    if (!requestData.location) {
-      return {
-        complete: false,
-        question:
-          "どのくらいの時間を予定していますか？",
-        request: {
-          ...requestData,
-          location: text,
-        },
-      };
-    }
+  // 画面を離れるときは録音を破棄する。音声を残さないための後始末。
+  useEffect(() => {
+    return () => {
+      controllerRef.current?.abort();
+      controllerRef.current = null;
+    };
+  }, []);
 
-    if (!requestData.duration) {
-      return {
-        complete: false,
-        question:
-          "いつまで依頼していたいですか？",
-        request: {
-          ...requestData,
-          duration: text,
-        },
-      };
-    }
+  const startRecording = () => {
+    controllerRef.current?.abort();
+    dispatch({ type: "start" });
 
-    return {
-      complete: true,
-      question: null,
-      request: {
-        ...requestData,
-        deadline: text,
+    controllerRef.current = webSpeechAdapter.start({
+      onTranscript: (text) => {
+        controllerRef.current = null;
+        dispatch({ type: "transcribed", text });
       },
-    };
+      onError: (reason) => {
+        controllerRef.current = null;
+        dispatch({ type: "fail", reason });
+      },
+    });
   };
 
-  const sendToBackend = async (text: string) => {
-    setIsThinking(true);
+  const stopRecording = () => {
+    dispatch({ type: "stop" });
+    controllerRef.current?.stop();
+  };
 
-    try {
-      const data = await mockBackend(text);
+  const cancelRecording = () => {
+    controllerRef.current?.abort();
+    controllerRef.current = null;
+    dispatch({ type: "cancel" });
+  };
 
-      setRequestData(data.request);
+  const switchToManualInput = () => {
+    controllerRef.current?.abort();
+    controllerRef.current = null;
+    router.replace("/help/request-manual");
+  };
 
-      if (data.complete) {
-        router.push({
-          pathname: "/help/request-confirm",
-          params: {
-            task: data.request.task ?? "",
-            location: data.request.location ?? "",
-            duration: data.request.duration ?? "",
-            deadline: data.request.deadline ?? "",
-            notes: data.request.notes ?? "",
-          },
-        });
+  // 確認画面へ進んだ後に戻ってきても、同じ内容を編集できる状態で見せる。
+  const isReviewing =
+    state.status === "review" || state.status === "confirmed";
+  const draft = isReviewing ? state.draft : "";
 
-        return;
-      }
-
-      if (data.question) {
-        setMessages((current) => [
-          ...current,
-          {
-            id: Date.now(),
-            role: "ai",
-            text: data.question!,
-          },
-        ]);
-      }
-    } catch {
-      setMessages((current) => [
-        ...current,
-        {
-          id: Date.now(),
-          role: "ai",
-          text:
-            "エラーが発生しました。もう一度お試しください。",
-        },
-      ]);
-    } finally {
-      setIsThinking(false);
+  // 送信前に何を伏せるかを、確認画面へ進む前に利用者へ見せる。
+  const maskNotice = useMemo(() => {
+    if (!isReviewing) {
+      return null;
     }
-  };
 
-  const startListening = () => {
-    if (typeof window === "undefined") {
+    return describeMasked(maskPersonalInfo(draft).masked);
+  }, [draft, isReviewing]);
+
+  // 確認を押したときにだけ次の画面へ進む。渡すのは必ずマスク済みテキスト。
+  // 確認画面から戻って再度押した場合も、同じ内容でもう一度進める。
+  const confirmDraft = () => {
+    const next = voiceReducer(state, { type: "confirm" });
+    dispatch({ type: "confirm" });
+
+    const submission = submissionOf(next);
+
+    if (!submission) {
       return;
     }
 
-    const SpeechRecognition =
-      window.SpeechRecognition ||
-      window.webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      setMessages((current) => [
-        ...current,
-        {
-          id: Date.now(),
-          role: "ai",
-          text:
-            "このブラウザでは音声入力を利用できません。",
-        },
-      ]);
-
-      return;
-    }
-
-    const recognition =
-      new SpeechRecognition();
-
-    recognition.lang = "ja-JP";
-    recognition.interimResults = false;
-    recognition.continuous = false;
-
-    recognition.onstart = () => {
-      setIsListening(true);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognition.onerror = () => {
-      setIsListening(false);
-    };
-
-    recognition.onresult = (event: any) => {
-      const transcript =
-        event.results[
-          event.results.length - 1
-        ][0].transcript;
-
-      setMessages((current) => [
-        ...current,
-        {
-          id: Date.now(),
-          role: "user",
-          text: transcript,
-        },
-      ]);
-
-      sendToBackend(transcript);
-    };
-
-    recognitionRef.current = recognition;
-
-    recognition.start();
+    router.push({
+      pathname: "/help/request-confirm",
+      params: { content: submission.text },
+    });
   };
 
   return (
     <View style={styles.screen}>
-      <View style={styles.container}>
-        <Pressable
-          onPress={() => router.back()}
-          style={({ pressed }) => [
-            styles.backButton,
-            pressed && styles.pressed,
-          ]}
-        >
-          <Ionicons
-            name="arrow-back"
-            size={18}
-            color="#111111"
-          />
-
-          <Text style={styles.backText}>
-            戻る
-          </Text>
-        </Pressable>
-
-        <Text style={styles.title}>
-          音声で入力
-        </Text>
-
-        <Text style={styles.description}>
-          AIと会話しながら依頼内容を作成します
-        </Text>
-
-        <ScrollView
-          ref={scrollRef}
-          style={styles.chat}
-          contentContainerStyle={
-            styles.chatContent
-          }
-          showsVerticalScrollIndicator={false}
-          onContentSizeChange={() =>
-            scrollRef.current?.scrollToEnd({
-              animated: true,
-            })
-          }
-        >
-          {messages.map((message) => (
-            <View
-              key={message.id}
-              style={[
-                styles.messageRow,
-                message.role === "user"
-                  ? styles.userRow
-                  : styles.aiRow,
-              ]}
-            >
-              {message.role === "ai" && (
-                <View style={styles.aiIcon}>
-                  <Ionicons
-                    name="sparkles"
-                    size={18}
-                    color="#FFFFFF"
-                  />
-                </View>
-              )}
-
-              <View
-                style={[
-                  styles.bubble,
-                  message.role === "user"
-                    ? styles.userBubble
-                    : styles.aiBubble,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.messageText,
-                    message.role === "user" &&
-                      styles.userMessageText,
-                  ]}
-                >
-                  {message.text}
-                </Text>
-              </View>
-            </View>
-          ))}
-
-          {isThinking && (
-            <View style={styles.thinkingRow}>
-              <ActivityIndicator
-                size="small"
-                color="#245C2D"
-              />
-
-              <Text
-                style={styles.thinkingText}
-              >
-                AIが確認しています...
-              </Text>
-            </View>
-          )}
-        </ScrollView>
-
-        <View style={styles.voiceArea}>
-          <Text style={styles.voiceStatus}>
-            {isListening
-              ? "聞いています..."
-              : isThinking
-                ? "回答を確認しています..."
-                : "マイクをタップして話してください"}
-          </Text>
-
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.container}>
           <Pressable
-            disabled={isThinking}
-            onPress={startListening}
+            onPress={() => router.replace("/help/request")}
             style={({ pressed }) => [
-              styles.micButton,
-              isListening &&
-                styles.micButtonListening,
-              isThinking &&
-                styles.micButtonDisabled,
+              styles.backButton,
               pressed && styles.pressed,
             ]}
           >
-            <Ionicons
-              name={
-                isListening
-                  ? "mic"
-                  : "mic-outline"
-              }
-              size={44}
-              color="#FFFFFF"
-            />
+            <Ionicons name="arrow-back" size={18} color="#111111" />
+
+            <Text style={styles.backText}>戻る</Text>
           </Pressable>
 
-          {isListening && (
-            <View
-              style={styles.listeningBadge}
-            >
-              <View
-                style={styles.listeningDot}
-              />
+          <Text style={styles.title}>音声で入力</Text>
 
-              <Text
-                style={styles.listeningText}
-              >
-                音声を認識中
+          <Text style={styles.description}>
+            話した内容を文字にします。確認してから依頼へ進みます
+          </Text>
+
+          {state.status === "idle" && (
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Ionicons name="mic-outline" size={22} color="#245C2D" />
+
+                <Text style={styles.cardTitle}>マイクの利用について</Text>
+              </View>
+
+              <Text style={styles.cardText}>
+                依頼したい内容を聞き取って文字にするためだけにマイクを使います。
               </Text>
+
+              <Text style={styles.cardText}>
+                音声はこのアプリに保存しません。文字にした内容は、あなたが確認して「進む」を押すまで送信されません。
+              </Text>
+
+              <Text style={styles.cardText}>
+                電話番号やメールアドレス、詳しい住所は、送信前に自動で伏せます。
+              </Text>
+
+              <Pressable
+                onPress={startRecording}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Ionicons name="mic" size={20} color="#FFFFFF" />
+
+                <Text style={styles.primaryButtonText}>
+                  マイクを許可して録音を始める
+                </Text>
+              </Pressable>
             </View>
           )}
+
+          {state.status === "listening" && (
+            <View style={styles.card}>
+              <View style={styles.listeningBadge}>
+                <View style={styles.listeningDot} />
+
+                <Text style={styles.listeningText}>録音中</Text>
+              </View>
+
+              <Text style={styles.cardText}>
+                依頼したい内容を話してください。話し終わったら「録音を止める」を押します。
+              </Text>
+
+              <View style={styles.micCircle}>
+                <Ionicons name="mic" size={44} color="#FFFFFF" />
+              </View>
+
+              <Pressable
+                onPress={stopRecording}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Ionicons name="stop" size={20} color="#FFFFFF" />
+
+                <Text style={styles.primaryButtonText}>録音を止める</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={cancelRecording}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.secondaryButtonText}>録音を取り消す</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {state.status === "transcribing" && (
+            <View style={styles.card}>
+              <ActivityIndicator size="small" color="#245C2D" />
+
+              <Text style={styles.cardText}>文字にしています...</Text>
+            </View>
+          )}
+
+          {isReviewing && (
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Ionicons
+                  name="document-text-outline"
+                  size={22}
+                  color="#245C2D"
+                />
+
+                <Text style={styles.cardTitle}>聞き取った内容</Text>
+              </View>
+
+              <Text style={styles.cardText}>
+                違うところがあれば、そのまま直せます。
+              </Text>
+
+              <TextInput
+                value={draft}
+                onChangeText={(text) => dispatch({ type: "edit", text })}
+                multiline
+                placeholder="聞き取った内容がここに表示されます"
+                placeholderTextColor="#888888"
+                style={styles.transcriptInput}
+              />
+
+              {maskNotice && (
+                <View style={styles.maskNotice}>
+                  <Ionicons name="lock-closed" size={16} color="#245C2D" />
+
+                  <Text style={styles.maskNoticeText}>{maskNotice}</Text>
+                </View>
+              )}
+
+              <Pressable
+                onPress={confirmDraft}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.primaryButtonText}>
+                  この内容で確認へ進む
+                </Text>
+
+                <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
+              </Pressable>
+
+              <Pressable
+                onPress={startRecording}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.secondaryButtonText}>録音し直す</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={cancelRecording}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.secondaryButtonText}>取り消す</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {state.status === "error" && (
+            <View style={[styles.card, styles.errorCard]}>
+              <View style={styles.cardHeader}>
+                <Ionicons name="alert-circle" size={22} color="#B4402A" />
+
+                <Text style={[styles.cardTitle, styles.errorTitle]}>
+                  音声入力を使えませんでした
+                </Text>
+              </View>
+
+              <Text style={styles.cardText}>
+                {VOICE_ERROR_MESSAGES[state.reason]}
+              </Text>
+
+              {state.reason !== "unsupported" && (
+                <Pressable
+                  onPress={startRecording}
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Ionicons name="refresh" size={20} color="#FFFFFF" />
+
+                  <Text style={styles.primaryButtonText}>
+                    もう一度録音する
+                  </Text>
+                </Pressable>
+              )}
+
+              <Pressable
+                onPress={switchToManualInput}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.secondaryButtonText}>
+                  手で入力へ切り替える
+                </Text>
+              </Pressable>
+            </View>
+          )}
+
+          {state.status !== "error" && (
+            <Pressable
+              onPress={switchToManualInput}
+              style={({ pressed }) => [
+                styles.fallbackLink,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Ionicons name="hand-left-outline" size={18} color="#245C2D" />
+
+              <Text style={styles.fallbackLinkText}>
+                うまく話せないときは手で入力
+              </Text>
+            </Pressable>
+          )}
         </View>
-      </View>
+      </ScrollView>
     </View>
   );
 }
@@ -388,6 +359,11 @@ const createStyles = (scale: number) =>
     screen: {
       flex: 1,
       backgroundColor: "#FFF5E9",
+      alignItems: "center",
+    },
+
+    scrollContent: {
+      flexGrow: 1,
       alignItems: "center",
     },
 
@@ -433,120 +409,87 @@ const createStyles = (scale: number) =>
       fontSize: 14 * scale,
     },
 
-    chat: {
-      flex: 1,
-      marginTop: 30,
-    },
-
-    chatContent: {
-      paddingBottom: 24,
-    },
-
-    messageRow: {
+    card: {
+      marginTop: 26,
       width: "100%",
-      flexDirection: "row",
-      alignItems: "flex-end",
-      marginBottom: 18,
-    },
-
-    aiRow: {
-      justifyContent: "flex-start",
-    },
-
-    userRow: {
-      justifyContent: "flex-end",
-    },
-
-    aiIcon: {
-      width: 34,
-      height: 34,
-      borderRadius: 17,
-      backgroundColor: "#F2A329",
-      justifyContent: "center",
-      alignItems: "center",
-      marginRight: 8,
-    },
-
-    bubble: {
-      maxWidth: "78%",
-      paddingHorizontal: 16,
-      paddingVertical: 13,
-      borderRadius: 18,
-    },
-
-    aiBubble: {
+      borderRadius: 22,
       backgroundColor: "#FFFFFF",
-      borderBottomLeftRadius: 5,
+      paddingHorizontal: 22,
+      paddingVertical: 24,
+      gap: 14,
+      alignItems: "center",
     },
 
-    userBubble: {
-      backgroundColor: "#245C2D",
-      borderBottomRightRadius: 5,
+    errorCard: {
+      backgroundColor: "#FDEDE9",
     },
 
-    messageText: {
-      color: "#333333",
+    cardHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      alignSelf: "flex-start",
+    },
+
+    cardTitle: {
+      color: "#245C2D",
+      fontSize: 17 * scale,
+      fontWeight: "800",
+    },
+
+    errorTitle: {
+      color: "#B4402A",
+    },
+
+    cardText: {
+      alignSelf: "flex-start",
+      color: "#444444",
+      fontSize: 14 * scale,
+      lineHeight: 21 * scale,
+    },
+
+    transcriptInput: {
+      width: "100%",
+      minHeight: 132,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: "#CFCFCF",
+      backgroundColor: "#FFFDF9",
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      color: "#111111",
       fontSize: 15 * scale,
       lineHeight: 22 * scale,
+      textAlignVertical: "top",
     },
 
-    userMessageText: {
-      color: "#FFFFFF",
-    },
-
-    thinkingRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 9,
-      marginLeft: 42,
-    },
-
-    thinkingText: {
-      color: "#777777",
-      fontSize: 13 * scale,
-    },
-
-    voiceArea: {
-      alignItems: "center",
-      paddingTop: 16,
-    },
-
-    voiceStatus: {
-      color: "#666666",
-      fontSize: 14 * scale,
-      marginBottom: 14,
-    },
-
-    micButton: {
-      width: 84,
-      height: 84,
-      borderRadius: 42,
-      backgroundColor: "#159326",
-      justifyContent: "center",
-      alignItems: "center",
-      shadowColor: "#000000",
-      shadowOpacity: 0.15,
-      shadowRadius: 8,
-      shadowOffset: {
-        width: 0,
-        height: 4,
-      },
-      elevation: 5,
-    },
-
-    micButtonListening: {
-      backgroundColor: "#F2A329",
-    },
-
-    micButtonDisabled: {
-      opacity: 0.55,
-    },
-
-    listeningBadge: {
+    maskNotice: {
+      alignSelf: "flex-start",
       flexDirection: "row",
       alignItems: "center",
       gap: 6,
-      marginTop: 12,
+    },
+
+    maskNoticeText: {
+      color: "#245C2D",
+      fontSize: 13 * scale,
+      fontWeight: "700",
+    },
+
+    micCircle: {
+      width: 84,
+      height: 84,
+      borderRadius: 42,
+      backgroundColor: "#F2A329",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+
+    listeningBadge: {
+      alignSelf: "flex-start",
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
     },
 
     listeningDot: {
@@ -559,6 +502,54 @@ const createStyles = (scale: number) =>
     listeningText: {
       color: "#666666",
       fontSize: 13 * scale,
+      fontWeight: "700",
+    },
+
+    primaryButton: {
+      width: "100%",
+      height: 54,
+      borderRadius: 999,
+      backgroundColor: "#159326",
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+    },
+
+    primaryButtonText: {
+      color: "#FFFFFF",
+      fontSize: 16 * scale,
+      fontWeight: "800",
+    },
+
+    secondaryButton: {
+      width: "100%",
+      height: 48,
+      borderRadius: 999,
+      backgroundColor: "#D9D9D9",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+
+    secondaryButtonText: {
+      color: "#111111",
+      fontSize: 15 * scale,
+      fontWeight: "800",
+    },
+
+    fallbackLink: {
+      marginTop: 22,
+      alignSelf: "center",
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+    },
+
+    fallbackLinkText: {
+      color: "#245C2D",
+      fontSize: 14 * scale,
+      fontWeight: "700",
+      textDecorationLine: "underline",
     },
 
     pressed: {
