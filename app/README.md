@@ -1,6 +1,6 @@
 # テトテFastAPI 開発ガイド
 
-地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼（`requests`）の保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。応募・マッチング・チャット等その他の業務データ、AI、本人確認は現在インメモリで模擬している。
+地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼、応募、マッチ、チャット、双方完了、disputeの保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。review、AI実績、プロフィール、本人確認、通報、ブロックのAPI保存は現在インメモリで模擬している。
 
 ## セットアップと起動
 
@@ -73,10 +73,10 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 ├── app/
 │   ├── main.py          # ASGIアプリの公開
 │   ├── db.py            # Postgres接続・actor scoped transaction（#4）
-│   ├── repositories/    # requestsの保存インターフェースとMemory/Postgres実装
+│   ├── repositories/    # requests/applications/matchesのMemory/Postgres実装
 │   ├── services/        # 保存方式に依存しない依頼の認可・状態遷移
 │   ├── settings.py      # Repository切り替えを含む実行設定
-│   ├── cruds/main.py    # エンドポイント（他業務データはインメモリ）
+│   ├── cruds/main.py    # エンドポイント（review等の未永続化データも保持）
 │   ├── routers/main.py  # システム系ルーター
 │   └── schemas/main.py  # Pydantic入力スキーマ
 ├── supabase/
@@ -202,7 +202,7 @@ MOCK_RESET_ENABLED=true \
 1. `MOCK_RESET_ENABLED=true` で起動する（開発・テスト環境のみ）
 2. 認証済みセッションで呼び出す
 
-この操作はインメモリの業務ストアと、現在選択されている依頼Repositoryをリセットする。
+この操作はインメモリの業務ストアと、現在選択されている依頼・応募・マッチRepositoryをリセットする。
 
 ```bash
 MOCK_RESET_ENABLED=true python -m uvicorn main:app --reload --port 8000
@@ -212,7 +212,8 @@ curl -X POST http://localhost:8000/_mock/reset --cookie "$AUTH_COOKIES"
 無効な環境では、エンドポイントの存在を伏せるため認証の有無にかかわらず404を返す。
 テストは `tests/main.py` の冒頭で `MOCK_RESET_ENABLED=true` を設定している。
 
-応募・マッチング・チャット等の業務データ、AI、本人確認はプロセス内だけに保存され、
-サーバーを再起動すると初期化される（これらの永続化は #4 の対象外）。
-本番環境では認可の細部（RLS のRPC本体、#7 の排他制御等）、CSRF対策、レート制限を
-本実装へ置き換えること。
+Postgres選択時は応募、マッチング、チャット、双方完了、disputeもDBへ永続化され、
+選択の定員・version検査と関連状態更新はDB関数で原子的に処理される。Memory選択時も
+同じRepository契約を使う。review、AI実績、プロフィール、本人確認、通報、ブロックは
+プロセス内だけに保存され、サーバーを再起動すると初期化される。これらを本番データと
+して扱わないこと。CSRF対策、レート制限は別途本実装が必要である。

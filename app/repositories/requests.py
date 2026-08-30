@@ -426,9 +426,13 @@ class PostgresRequestRepository:
     async def cancel(
         self, actor: CurrentUser, request_id: str, expected_version: int
     ) -> bool:
-        return await self.set_status(
-            actor, request_id, "cancelled", expected_version=expected_version,
-        )
+        async with actor_connection(actor) as conn:
+            updated = await conn.fetchval(
+                "select app.cancel_request($1, $2)",
+                uuid.UUID(request_id),
+                expected_version,
+            )
+        return updated is not None
 
     async def set_status(self, actor: CurrentUser, request_id: str, status: str,
                          *, expected_version: int | None = None,

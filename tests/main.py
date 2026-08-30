@@ -25,6 +25,9 @@ from app.repositories.applications import (
     MemoryApplicationRepository, PostgresApplicationRepository,
     get_application_repository,
 )
+from app.repositories.matches import (
+    MemoryMatchRepository, PostgresMatchRepository,
+)
 from app.settings import load_settings
 
 
@@ -426,6 +429,7 @@ def test_select_application_with_version_check() -> None:
     )
     assert response.status_code == 201
     assert response.json()["status"] == "matched"
+    assert client.get(f"/requests/{SEED_REQUEST_1024}").json()["acceptedHelpers"] == 1
 
     conflict = client.post(
         "/applications/app_56/select",
@@ -433,6 +437,38 @@ def test_select_application_with_version_check() -> None:
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
+
+
+def test_suspended_helper_application_cannot_be_selected() -> None:
+    crud_module.users_store[HELPER.user_id]["status"] = "suspended"
+
+    response = client.post(
+        "/applications/app_55/select",
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "APPLICATION_NOT_SELECTABLE"
+    request = client.get(f"/requests/{SEED_REQUEST_1024}").json()
+    assert request["status"] == "published"
+    assert request["acceptedHelpers"] == 0
+
+
+def test_expired_request_application_cannot_be_selected() -> None:
+    repository = get_request_repository()
+    assert isinstance(repository, MemoryRequestRepository)
+    repository._items[SEED_REQUEST_1024]["expiresAt"] = "2020-01-01T00:00:00Z"
+
+    response = client.post(
+        "/applications/app_55/select",
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
+    request = client.get(f"/requests/{SEED_REQUEST_1024}").json()
+    assert request["status"] == "published"
+    assert request["acceptedHelpers"] == 0
 
 
 def test_api_prefix_and_profile_update() -> None:
@@ -504,8 +540,20 @@ def test_repository_implementations_share_request_contract() -> None:
 
 
 def test_repository_implementations_share_application_contract() -> None:
-    operations = {"list_for_request", "get", "create", "withdraw", "reset"}
+    operations = {
+        "list_for_request", "get", "create", "withdraw",
+        "cancel_pending_for_request", "reset",
+    }
     for implementation in (MemoryApplicationRepository, PostgresApplicationRepository):
+        assert operations <= set(dir(implementation))
+
+
+def test_repository_implementations_share_match_contract() -> None:
+    operations = {
+        "select_application", "get", "list_messages", "create_message",
+        "complete", "dispute", "reset",
+    }
+    for implementation in (MemoryMatchRepository, PostgresMatchRepository):
         assert operations <= set(dir(implementation))
 
 
@@ -929,6 +977,13 @@ def test_messages_from_blocked_user_are_hidden() -> None:
     assert response.status_code == 200
     assert response.json()["items"] == []
 
+    blocked_send = client.post(
+        f"/matches/{match_id}/messages", json={"body": "送信できないメッセージ"}
+    )
+    assert blocked_send.status_code == 403
+    assert blocked_send.json()["error"]["code"] == "MESSAGE_FORBIDDEN"
+    assert client.get(f"/matches/{match_id}/messages").json()["items"] == []
+
 
 def assert_common_error(response, status_code: int) -> dict:
     assert response.status_code == status_code
@@ -1020,7 +1075,7 @@ def create_match() -> str:
     return response.json()["id"]
 
 
-def test_complete_match_needs_both_parties_and_tolerates_repeat() -> None:
+def test_complete_match_needs_both_parties_and_rejects_repeat() -> None:
     async def helper_user() -> CurrentUser:
         return HELPER
 
@@ -1036,8 +1091,13 @@ def test_complete_match_needs_both_parties_and_tolerates_repeat() -> None:
         f"/matches/{match_id}/complete",
         json={"completed": True, "actorRole": "requester"},
     )
-    assert repeated.status_code == 200
-    assert repeated.json()["status"] == "completion_pending"
+    assert repeated.status_code == 409
+    assert repeated.json()["error"]["code"] == "MATCH_NOT_COMPLETABLE"
+
+    unchanged = client.get(f"/matches/{match_id}").json()
+    assert unchanged["status"] == "completion_pending"
+    assert unchanged["requesterConfirmed"] is True
+    assert unchanged["helperConfirmed"] is False
 
     app.dependency_overrides[get_current_user] = helper_user
     second = client.post(
