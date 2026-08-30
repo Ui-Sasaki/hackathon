@@ -31,12 +31,16 @@
     "react-native-screens": "~4.26.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "~0.21.0",
-    "react-native-worklets": "0.10.1"
+    "react-native-worklets": "0.10.1",
+    "supertokens-web-js": "^0.16.0"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "eslint": "^9.39.1",
+    "eslint-config-expo": "^57.0.1",
     "react-native-svg-transformer": "^1.5.3",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.11"
   },
   "scripts": {
     "start": "expo start",
@@ -44,7 +48,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test": "vitest run"
   },
   "private": true
 }

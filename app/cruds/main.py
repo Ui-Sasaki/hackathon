@@ -1,8 +1,14 @@
+from copy import deepcopy
+import base64
+import binascii
 from datetime import datetime, timezone
+import json
 import logging
+import math
 import os
-from typing import Any
+import re
 import uuid
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -10,27 +16,50 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.auth import (
-    SUPERTOKENS_ENABLED, CurrentUser, configure_user_lookup, cors_headers, get_current_user,
+    SUPERTOKENS_ENABLED, CurrentUser, configure_user_creator, configure_user_lookup,
+    cors_headers, get_current_user,
 )
-from app.db import actor_connection, admin_connection
+from app.repositories.requests import (
+    InvalidCursor, RequestRepository, decode_cursor, encode_cursor, get_request_repository,
+)
+from app.repositories.applications import (
+    ApplicationRepository, get_application_repository,
+)
+from app.services.applications import (
+    create_application as create_application_service,
+    withdraw_application as withdraw_application_service,
+)
+from app.services.requests import cancel_owned_request, require_request, update_owned_request
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
 from app.schemas import (
-    AchievementInput, AchievementVisibilityInput, ApplicationInput,
-    BlockInput, CompletionInput, DisputeInput, MessageInput, ProfileUpdateInput,
-    ReportInput, RequestInput, RequestUpdateInput, ReviewInput, SelectionInput,
-    StructureInput, VerificationInput,
+    AchievementInput, AchievementResponse, AchievementVisibilityInput,
+    ApplicationInput, ApplicationListResponse, ApplicationResponse,
+    BlockInput, BlockResponse, CompletionInput, DisputeInput, ErrorResponse,
+    LocationResolveInput, LocationResolveResponse, MatchResponse, MessageInput,
+    MaskingConfirmationResponse, MessageListResponse, MessageResponse,
+    ProfileResponse, ProfileUpdateInput,
+    ReportInput, ReportResponse, RequestInput, RequestListResponse, RequestResponse,
+    RequestUpdateInput, ResetResponse, ReviewInput, ReviewResponse, SelectionInput,
+    StructureInput, StructuredRequestResponse, VerificationInput, VerificationResponse,
 )
 
 
 app = FastAPI(
-    title="たすけの輪 Mock API",
+    title="たすけの輪 API",
     version="0.1.0",
-    description="フロントエンド開発専用。認証と外部サービスは模擬である。",
+    description=(
+        "地域の依頼と支援者をつなぐAPI契約。業務APIはSuperTokensのHttpOnly Cookie"
+        "セッションが必須で、ユーザーID・ロール・送信日時はサーバーが決定する。"
+        "`/auth/*` はSuperTokensが提供する。依頼はRepositoryに保存されるが、応募以降、"
+        "AI、本人確認は現在開発用インメモリ実装である。`/_mock/reset` は明示的に有効化"
+        "した非本番環境だけで利用できる。"
+    ),
 )
 
 app.add_middleware(
@@ -75,7 +104,9 @@ ERROR_MESSAGES = {
     "MATCH_NOT_FOUND": "マッチが見つかりません",
     "APPLICATION_NOT_FOUND": "応募が見つかりません",
     "REQUEST_STATE_CONFLICT": "依頼の状態が更新されているため処理できません",
+    "INVALID_CURSOR": "カーソルが無効です",
     "VALIDATION_ERROR": "入力内容を確認してください",
+    "REGION_SELECTION_REQUIRED": "地域を選択してください",
     "INTERNAL_SERVER_ERROR": "サーバー内部でエラーが発生しました",
 }
 
@@ -88,7 +119,126 @@ STATUS_ERROR_CODES = {
     422: "VALIDATION_ERROR",
     500: "INTERNAL_SERVER_ERROR",
 }
+
+
+def api_errors(*statuses: int) -> dict[int, dict[str, Any]]:
+    """OpenAPI error contracts, limited to errors reachable by each operation."""
+    examples = {
+        400: ("BAD_REQUEST", "リクエストを処理できません"),
+        401: ("AUTHENTICATION_REQUIRED", "認証が必要です"),
+        403: ("ROLE_FORBIDDEN", "この操作を行う権限がありません"),
+        404: ("REQUEST_NOT_FOUND", "対象が見つかりません"),
+        409: ("REQUEST_STATE_CONFLICT", "依頼の状態が更新されているため処理できません"),
+        422: ("VALIDATION_ERROR", "入力内容を確認してください"),
+        500: ("INTERNAL_SERVER_ERROR", "サーバー内部でエラーが発生しました"),
+    }
+    return {
+        status: {
+            "model": ErrorResponse,
+            "description": examples[status][1],
+            "content": {"application/json": {"example": {"error": {
+                "code": examples[status][0], "message": examples[status][1],
+                "details": {}, "requestId": "trace_0123abcd",
+            }}}},
+        }
+        for status in statuses
+    }
 logger = logging.getLogger(__name__)
+
+MASKING_RULE_VERSION = "pii-mask-v1"
+masking_metrics = {"previewed": 0, "confirmationRequired": 0, "submitted": 0}
+PII_MASK_RULES = (
+    ("email", "[メールアドレス]", re.compile(r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９._%+－-]+[@＠][A-Za-z0-9Ａ-Ｚａ-ｚ０-９.-]+[.．][A-Za-zＡ-Ｚａ-ｚ]{2,}")),
+    ("phone", "[電話番号]", re.compile(r"(?<![0-9０-９])[0０][0-9０-９]{1,4}[-ー－―]?[0-9０-９]{1,4}[-ー－―]?[0-9０-９]{3,4}(?![0-9０-９])")),
+    ("postal_code", "[郵便番号]", re.compile(r"〒?\s*[0-9０-９]{3}[-ー－―][0-9０-９]{4}")),
+    ("certificate_number", "[証明書番号]", re.compile(r"(?:免許証|学生証|証明書)(?:番号|No[.．]?)?\s*[:：]?\s*[A-Za-zＡ-Ｚａ-ｚ0-9０-９-]{5,}")),
+    ("address", "[詳細住所]", re.compile(r"(?:東京都|北海道|(?:京都|大阪)府|.{2,3}県).{1,20}(?:市|区|町|村).{1,30}(?:[0-9０-９]+(?:[-ー－―丁目番地号][0-9０-９]*)+|丁目)")),
+    ("name", "[氏名]", re.compile(r"(?:氏名|名前)\s*(?:は|[:：])?\s*[一-龥々]{2,8}(?:\s|　)?[一-龥々]{1,8}")),
+)
+
+
+def mask_request_text(text: str) -> dict[str, Any]:
+    masked_text = text
+    detections = []
+    for pii_type, placeholder, pattern in PII_MASK_RULES:
+        masked_text, count = pattern.subn(placeholder, masked_text)
+        if count:
+            detections.append(
+                {"type": pii_type, "placeholder": placeholder, "count": count}
+            )
+    return {
+        "maskedText": masked_text,
+        "detections": detections,
+        "hasDetections": bool(detections),
+        "ruleVersion": MASKING_RULE_VERSION,
+    }
+
+
+async def default_structure_llm_client(
+    masked_text: str, _area_code: str | None
+) -> dict[str, Any]:
+    is_dog = "犬" in masked_text or "散歩" in masked_text
+    return {
+        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
+        "description": masked_text,
+        "category": "pet_support" if is_dog else "other",
+        "scheduledAt": "2026-08-19T17:00:00+09:00",
+        "estimatedMinutes": 30,
+        "requiredHelpers": 1,
+        "riskLevel": "medium" if is_dog else "low",
+        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in masked_text else [],
+        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+    }
+
+
+StructureLLMClient = Callable[[str, str | None], Awaitable[dict[str, Any]]]
+structure_llm_client: StructureLLMClient = default_structure_llm_client
+
+
+def configure_structure_llm_client(client: StructureLLMClient) -> None:
+    global structure_llm_client
+    structure_llm_client = client
+
+REGIONS = {
+    "AREA-001": {"label": "大学周辺", "latitude": 43.062, "longitude": 141.354},
+    "AREA-002": {"label": "大学北側", "latitude": 43.082, "longitude": 141.350},
+    "AREA-003": {"label": "駅周辺", "latitude": 43.068, "longitude": 141.351},
+}
+
+
+def distance_km(latitude: float, longitude: float, region: dict[str, Any]) -> float:
+    radius_km = 6371.0
+    lat1, lat2 = math.radians(latitude), math.radians(region["latitude"])
+    lat_delta = math.radians(region["latitude"] - latitude)
+    lon_delta = math.radians(region["longitude"] - longitude)
+    a = (
+        math.sin(lat_delta / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(lon_delta / 2) ** 2
+    )
+    return radius_km * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def nearest_region(latitude: float, longitude: float) -> str:
+    return min(
+        REGIONS,
+        key=lambda code: distance_km(latitude, longitude, REGIONS[code]),
+    )
+
+
+def resolve_location(
+    location: LocationResolveInput | None,
+    current_user: CurrentUser,
+    selected_area_code: str | None = None,
+) -> tuple[str, str]:
+    if location and location.latitude is not None and location.longitude is not None:
+        return nearest_region(location.latitude, location.longitude), "current_location"
+    area_code = selected_area_code or users_store.get(current_user.user_id, {}).get(
+        "areaCode"
+    )
+    if not area_code or area_code not in REGIONS:
+        raise HTTPException(422, detail={"code": "REGION_SELECTION_REQUIRED"})
+    source = "selected_region" if selected_area_code else "registered_region"
+    return area_code, source
 
 
 def request_id_for(request: Request) -> str:
@@ -194,6 +344,15 @@ class RequestIdMiddleware:
 app.add_middleware(RequestIdMiddleware)
 
 
+async def request_repository_dependency() -> RequestRepository:
+    """Resolve the configured repository without a test-time threadpool hop."""
+    return get_request_repository()
+
+
+async def application_repository_dependency() -> ApplicationRepository:
+    """Resolve the application repository without a test-time threadpool hop."""
+    return get_application_repository()
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -216,11 +375,6 @@ def get_or_404(store: dict, entity_id: str, error_code: str) -> dict:
 SEED_REQUEST_1024 = "5fcfec7f-a8b0-58d4-931e-593d60355ee3"
 SEED_REQUEST_1025 = "39521aee-fc9b-5be6-9652-b3cf45d9107f"
 
-# areaLabel・distanceKm は実際の距離計算（#5・F-02）が入るまでの固定プレースホルダー。
-# 依頼ごとに異なる値を持たせても意味が無いため、新規作成時と同じ値に統一する。
-PLACEHOLDER_AREA_LABEL = "大学周辺・約1km"
-PLACEHOLDER_DISTANCE_KM = 1.0
-
 HELPERS = {
     "usr_207": {
         "id": "usr_207",
@@ -238,6 +392,16 @@ HELPERS = {
         "skillTags": ["ペット支援"],
         "achievementCount": 3,
     },
+}
+
+AREA_CENTERS = {
+    "AREA-001": (35.6812, 139.7671),
+}
+
+PUBLIC_REQUEST_FIELDS = {
+    "id", "requesterId", "title", "description", "category", "riskLevel",
+    "areaCode", "areaLabel", "scheduledAt", "estimatedMinutes",
+    "requiredHelpers", "acceptedHelpers", "status", "warnings", "createdAt",
 }
 
 
@@ -263,6 +427,11 @@ def reset_store() -> None:
         "usr_208": {
             **HELPERS["usr_208"], "role": "member", "status": "active",
             "emailVerified": True,
+        },
+        "usr_301": {
+            "id": "usr_301", "displayName": "鈴木 雪", "role": "member",
+            "status": "active", "emailVerified": True,
+            "verificationStatus": "unverified", "areaCode": "AREA-001",
         },
     }
     applications = {
@@ -300,6 +469,23 @@ reset_store()
 configure_user_lookup(lambda user_id: users_store.get(user_id))
 
 
+def create_user_profile(user_id: str) -> None:
+    """Create the application-side profile linked to a SuperTokens user."""
+
+    users_store.setdefault(
+        user_id,
+        {
+            "id": user_id,
+            "displayName": "",
+            "role": "member",
+            "status": "active",
+            "emailVerified": False,
+            "verificationStatus": "unverified",
+        },
+    )
+
+
+configure_user_creator(create_user_profile)
 def match_or_404(match_id: str) -> dict:
     return get_or_404(matches, match_id, "MATCH_NOT_FOUND")
 
@@ -358,23 +544,27 @@ async def require_mock_environment() -> None:
         raise HTTPException(404, detail={"code": "NOT_FOUND"})
 
 
-@app.post("/_mock/reset", tags=["Mock control"])
+@app.post("/_mock/reset", response_model=ResetResponse, tags=["Development mock"], summary="開発用モックデータを初期化", description="非本番かつMOCK_RESET_ENABLED=trueの場合だけ、認証済み利用者が実行できる。全モックデータを初期状態へ戻す。", responses=api_errors(401, 404, 500))
 async def reset_mock(
     _: None = Depends(require_mock_environment),
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    application_repository: ApplicationRepository = Depends(
+        application_repository_dependency
+    ),
 ):
     reset_store()
-    async with admin_connection() as conn:
-        await conn.execute("select app.mock_reset_requests()")
+    await repository.reset()
+    await application_repository.reset()
     return {"reset": True}
 
 
-@app.get("/profile", tags=["Profile"])
+@app.get("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを取得", description="Cookieセッションの本人の公開可能なプロフィールだけを返す。", responses=api_errors(401, 403, 500))
 async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
     return users_store[current_user.user_id]
 
 
-@app.patch("/profile", tags=["Profile"])
+@app.patch("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを更新", description="表示名または概算地域を更新する。ユーザーID、ロール、本人確認状態は入力できない。", responses=api_errors(401, 403, 422, 500))
 async def update_profile(
     body: ProfileUpdateInput,
     current_user: CurrentUser = Depends(get_current_user),
@@ -388,155 +578,168 @@ async def update_profile(
     return profile
 
 
-@app.post("/requests/structure", tags=["Requests"])
+@app.post("/locations/resolve", response_model=LocationResolveResponse, tags=["Locations"], summary="現在地を概算地域へ変換", description="同意済み座標を概算地域へ変換する。座標は保存も返却もしない。取得失敗時は登録地域へフォールバックする。", responses=api_errors(401, 422, 500))
+async def resolve_browser_location(
+    body: LocationResolveInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    area_code, source = resolve_location(body, current_user)
+    return {
+        "areaCode": area_code,
+        "areaLabel": REGIONS[area_code]["label"],
+        "source": source,
+        "fallbackUsed": source == "registered_region",
+    }
+
+
+@app.post("/requests/structure", response_model=StructuredRequestResponse | MaskingConfirmationResponse, tags=["Requests"], summary="依頼文を構造化", description="自由記述を依頼候補へ構造化する開発用AIモック。個人情報をマスクし、検出時は確認を求める。結果は自動公開されない。", responses=api_errors(401, 422, 500))
 async def structure_request(
     body: StructureInput,
     _current_user: CurrentUser = Depends(get_current_user),
 ):
-    if any(word in body.text for word in ["電気工事", "医療行為", "介護", "送迎"]):
+    masking = mask_request_text(body.text)
+    if masking["hasDetections"] and not body.maskingConfirmed:
+        masking_metrics["confirmationRequired"] += 1
+        return {
+            **masking,
+            "status": "masking_confirmation_required",
+            "requiresMaskingConfirmation": True,
+            "message": "マスキング箇所を確認し、必要なら元の入力を修正してください",
+        }
+    if any(word in masking["maskedText"] for word in ["電気工事", "医療行為", "介護", "送迎"]):
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
-    is_dog = "犬" in body.text or "散歩" in body.text
-    return {
-        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
-        "description": body.text,
-        "category": "pet_support" if is_dog else "other",
-        "scheduledAt": "2026-08-19T17:00:00+09:00",
-        "estimatedMinutes": 30,
-        "requiredHelpers": 1,
-        "riskLevel": "medium" if is_dog else "low",
-        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in body.text else [],
-        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
-    }
-
-
-def _fmt_ts(value) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat().replace("+00:00", "Z")
-
-
-def _request_row_to_api(row) -> dict:
-    return {
-        "id": str(row["id"]),
-        "requesterId": row["requester_auth_subject"],
-        "title": row["title"],
-        # original_text は #20 が懸念する「AI構造化前の生入力」の露出ではなく、
-        # create_request 以来この API が返してきた description そのものである。
-        "description": row["original_text"],
-        "category": row["category_id"],
-        "riskLevel": row["risk_level"],
-        "areaCode": row["area_code"],
-        # 実距離計算は #5 / F-02 の対象。それまでは新規作成時と同じ固定値にする。
-        "areaLabel": PLACEHOLDER_AREA_LABEL,
-        "distanceKm": PLACEHOLDER_DISTANCE_KM,
-        "acceptedHelpers": row["accepted_helpers"],
-        "scheduledAt": _fmt_ts(row["scheduled_at"]),
-        "estimatedMinutes": row["estimated_minutes"],
-        "requiredHelpers": row["required_helpers"],
-        "status": row["status"],
-        "version": row["version"],
-        "warnings": [],
-        "createdAt": _fmt_ts(row["created_at"]),
-        "updatedAt": _fmt_ts(row["updated_at"]),
-    }
-    # approximate_latitude / approximate_longitude / structured_content は、
-    # 認証なしでも読める経路が無くなった今でも、公開レスポンスへ含めない（#20）。
-
-
-async def _fetch_request(conn, request_id: str):
-    return await conn.fetchrow(
-        """
-        select r.id, r.title, r.original_text, r.category_id, r.risk_level,
-               r.area_code, r.scheduled_at, r.estimated_minutes, r.required_helpers,
-               r.status, r.version, r.created_at, r.updated_at,
-               app.auth_subject_of(r.requester_id) as requester_auth_subject,
-               (select count(*) from matches m where m.request_id = r.id) as accepted_helpers
-          from requests r
-         where r.id = $1
-        """,
-        request_id,
-    )
-
-
-async def request_or_404(conn, request_id: str) -> dict:
     try:
-        parsed_id = uuid.UUID(request_id)
-    except ValueError:
-        # id が uuid の形をしていない時点で存在しないと分かる。素通しすると
-        # asyncpg が DB 側の型エラーを 500 として投げてしまう。
-        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
-    row = await _fetch_request(conn, parsed_id)
-    if row is None:
-        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
-    return _request_row_to_api(row)
+        result = await structure_llm_client(masking["maskedText"], body.areaCode)
+    except Exception:
+        logger.warning("Request structure service failed after masking")
+        raise HTTPException(503, detail={"code": "STRUCTURE_SERVICE_UNAVAILABLE"})
+    masking_metrics["submitted"] += 1
+    return {
+        **result,
+        "masking": {
+            "detections": masking["detections"],
+            "ruleVersion": masking["ruleVersion"],
+            "confirmed": body.maskingConfirmed,
+        },
+        "requiresConfirmation": True,
+    }
 
 
-@app.get("/requests", tags=["Requests"])
+@app.post("/requests/masking-preview", tags=["Requests"], summary="LLM送信前のマスキング結果を確認")
+async def preview_request_masking(
+    body: StructureInput,
+    _current_user: CurrentUser = Depends(get_current_user),
+):
+    masking_metrics["previewed"] += 1
+    return mask_request_text(body.text)
+
+
+async def request_or_404(
+    repository: RequestRepository, current_user: CurrentUser, request_id: str,
+) -> dict:
+    return await require_request(repository, current_user, request_id)
+
+
+@app.get("/requests", response_model=RequestListResponse, tags=["Requests"], summary="公開依頼を検索", description="カテゴリ・日時・必要人数・概算距離・本人確認状態で絞り込み、カーソルページングで返す。現在地または登録地域による並び替え元もoriginで返す。", responses=api_errors(401, 422, 500))
 async def list_requests(
     category: str | None = None,
     areaCode: str | None = None,
+    scheduledFrom: datetime | None = None,
+    scheduledTo: datetime | None = None,
+    requiredHelpers: int | None = Query(default=None, ge=1, le=5),
+    maxDistanceKm: float | None = Query(default=None, ge=0),
+    verificationStatus: str | None = Query(
+        default=None, pattern="^(unverified|pending|approved|rejected|expired)$"
+    ),
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+    consentGranted: bool = False,
+    locationFailure: str | None = Query(
+        default=None, pattern="^(denied|timeout|unsupported|unavailable)$"
+    ),
+    cursor: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
-    async with actor_connection(current_user) as conn:
-        rows = await conn.fetch(
-            """
-            select r.id, r.title, r.original_text, r.category_id, r.risk_level,
-                   r.area_code, r.scheduled_at, r.estimated_minutes, r.required_helpers,
-                   r.status, r.version, r.created_at, r.updated_at,
-                   app.auth_subject_of(r.requester_id) as requester_auth_subject,
-                   (select count(*) from matches m where m.request_id = r.id) as accepted_helpers
-              from requests r
-             where r.status = 'published'
-               and ($1::text is null or r.category_id = $1)
-               and ($2::text is null or r.area_code = $2)
-             order by r.created_at desc, r.id desc
-             limit $3
-            """,
-            category,
-            areaCode,
-            limit,
+    try:
+        location = LocationResolveInput(
+            consentGranted=consentGranted,
+            latitude=latitude,
+            longitude=longitude,
+            failureReason=locationFailure,
         )
-    items = [_request_row_to_api(row) for row in rows]
-    items = [
-        item for item in items
-        if not is_blocked_pair(current_user.user_id, item["requesterId"])
-    ]
-    return {"items": items, "nextCursor": None}
+    except ValidationError:
+        raise HTTPException(422, detail={"code": "VALIDATION_ERROR"}) from None
+    origin_area_code, source = resolve_location(location, current_user, areaCode)
+    try:
+        request_cursor = decode_cursor(cursor) if cursor is not None else None
+    except InvalidCursor as exc:
+        raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+    blocked_requester_ids = sorted(
+        {
+            second_user_id
+            for first_user_id, second_user_id in blocks
+            if first_user_id == current_user.user_id
+        }
+        | {
+            first_user_id
+            for first_user_id, second_user_id in blocks
+            if second_user_id == current_user.user_id
+        }
+    )
+    try:
+        items = await repository.list(
+            current_user,
+            category=category,
+            area_code=areaCode,
+            limit=limit + 1,
+            cursor=request_cursor,
+            scheduled_from=scheduledFrom,
+            scheduled_to=scheduledTo,
+            required_helpers=requiredHelpers,
+            max_distance_km=maxDistanceKm,
+            verification_status=verificationStatus,
+            blocked_requester_ids=blocked_requester_ids,
+        )
+    except InvalidCursor as exc:
+        raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+    has_more = len(items) > limit
+    page = items[:limit]
+    cursor_item = page[-1] if page else None
+    if latitude is not None and longitude is not None:
+        page.sort(
+            key=lambda item: distance_km(
+                latitude, longitude, REGIONS.get(item["areaCode"], REGIONS["AREA-001"])
+            )
+        )
+    else:
+        page.sort(key=lambda item: item["areaCode"] != origin_area_code)
+    next_cursor = encode_cursor(cursor_item) if has_more and cursor_item else None
+    return {
+        "items": page,
+        "nextCursor": next_cursor,
+        "origin": {"areaCode": origin_area_code, "source": source},
+    }
 
 
-@app.post("/requests", status_code=201, tags=["Requests"])
+@app.post("/requests", response_model=RequestResponse, status_code=201, tags=["Requests"], summary="依頼を作成", description="認証済み本人を依頼者としてdraftを作成する。Idempotency-Keyが同じ再送は同じ結果を返す。", responses=api_errors(401, 422, 500))
 async def create_request(
     body: RequestInput,
     idempotency_key: str = Header(alias="Idempotency-Key"),
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     cache_key = ("create_request", current_user.user_id, idempotency_key)
     if cache_key in idempotency_store:
         return idempotency_store[cache_key]
-    async with actor_connection(current_user) as conn:
-        row = await conn.fetchrow(
-            """
-            insert into requests (
-                requester_id, title, original_text, category_id, risk_level,
-                area_code, scheduled_at, estimated_minutes, required_helpers
-            ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            returning id, title, original_text, category_id, risk_level,
-                      area_code, scheduled_at, estimated_minutes, required_helpers,
-                      status, version, created_at, updated_at
-            """,
-            await conn.fetchval("select app.current_actor()"),
-            body.title,
-            body.description,
-            body.category,
-            body.riskLevel,
-            body.areaCode,
-            datetime.fromisoformat(body.scheduledAt),
-            body.estimatedMinutes,
-            body.requiredHelpers,
-        )
-        item = _request_row_to_api({**dict(row), "requester_auth_subject": current_user.user_id,
-                                     "accepted_helpers": 0})
+    area_code, _source = resolve_location(None, current_user, body.areaCode)
+    item = await repository.create(current_user, {
+        "title": body.title, "description": body.description, "category": body.category,
+        "riskLevel": body.riskLevel, "areaCode": area_code,
+        "scheduledAt": body.scheduledAt, "estimatedMinutes": body.estimatedMinutes,
+        "requiredHelpers": body.requiredHelpers,
+    })
     idempotency_store[cache_key] = item
     return item
 
@@ -545,196 +748,125 @@ async def create_request(
 # RLS は未認証アクター（app.actor_id 未設定）に一律 deny を返すため、Postgres へ
 # 接続した時点で認証必須が構造として強制される。get_current_user() が無効な
 # セッションを 401 で弾き、RLS が届かない行を 404 として隠す。
-@app.get("/requests/{request_id}", tags=["Requests"])
+@app.get("/requests/{request_id}", response_model=RequestResponse, tags=["Requests"], summary="依頼詳細を取得", description="閲覧可能な依頼を返す。ブロック関係など非表示対象は存在を伏せて404。", responses=api_errors(401, 404, 500))
 async def get_request(
     request_id: str,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
-    async with actor_connection(current_user) as conn:
-        item = await request_or_404(conn, request_id)
+    item = await request_or_404(repository, current_user, request_id)
     if is_blocked_pair(current_user.user_id, item["requesterId"]):
         raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
     return item
 
 
-@app.patch("/requests/{request_id}", tags=["Requests"])
+@app.patch("/requests/{request_id}", response_model=RequestResponse, tags=["Requests"], summary="自分の依頼を更新", description="依頼者本人だけが更新可能。expectedVersion不一致や更新不能状態は409。", responses=api_errors(401, 403, 404, 409, 422, 500))
 async def update_request(
     request_id: str,
     body: RequestUpdateInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
-    async with actor_connection(current_user) as conn:
-        item = await request_or_404(conn, request_id)
-        if item["requesterId"] != current_user.user_id:
-            raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-        if item["status"] not in {"draft", "pending_review", "published"}:
-            raise HTTPException(409, detail={"code": "REQUEST_NOT_EDITABLE"})
-        if item["version"] != body.expectedVersion:
-            raise HTTPException(
-                409, detail={"code": "REQUEST_STATE_CONFLICT", "currentVersion": item["version"]}
-            )
-        changes = body.model_dump(exclude={"expectedVersion"}, exclude_none=True)
-        if "requiredHelpers" in changes and changes["requiredHelpers"] < item["acceptedHelpers"]:
-            raise HTTPException(409, detail={"code": "HELPER_COUNT_CONFLICT"})
-        if not changes:
-            return item
-        # version は関数側の WHERE でも検査する。request_or_404 の読み取りと
-        # この呼び出しの間に他の更新が割り込んでいたら、0件更新で楽観ロックが働く。
-        updated = await conn.fetchval(
-            "select app.update_request($1, $2, $3, $4, $5, $6, $7)",
-            uuid.UUID(request_id),
-            item["version"],
-            changes.get("title"),
-            changes.get("description"),
-            datetime.fromisoformat(changes["scheduledAt"]) if "scheduledAt" in changes else None,
-            changes.get("estimatedMinutes"),
-            changes.get("requiredHelpers"),
-        )
-        if updated is None:
-            raise HTTPException(
-                409, detail={"code": "REQUEST_STATE_CONFLICT", "currentVersion": item["version"]}
-            )
-        return await request_or_404(conn, request_id)
+    changes = body.model_dump(exclude={"expectedVersion"}, exclude_none=True)
+    return await update_owned_request(
+        repository, current_user, request_id, body.expectedVersion, changes,
+    )
 
 
-@app.delete("/requests/{request_id}", status_code=204, tags=["Requests"])
+@app.delete("/requests/{request_id}", status_code=204, tags=["Requests"], summary="自分の依頼を取消", description="依頼者本人が取消可能な状態の依頼をcancelledへ遷移させ、未処理応募もcancelledにする。レスポンス本文はない。", responses=api_errors(401, 403, 404, 409, 500))
 async def cancel_request(
     request_id: str,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
-    async with actor_connection(current_user) as conn:
-        item = await request_or_404(conn, request_id)
-        if item["requesterId"] != current_user.user_id:
-            raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-        if item["status"] in {"completed", "cancelled"}:
-            raise HTTPException(409, detail={"code": "INVALID_REQUEST_TRANSITION"})
-        await conn.fetchval(
-            "select app.set_request_status($1, 'cancelled')", uuid.UUID(request_id)
-        )
+    await cancel_owned_request(repository, current_user, request_id)
     for application in applications.values():
         if application["requestId"] == request_id and application["status"] == "applied":
             application["status"] = "cancelled"
     return None
 
 
-@app.get("/requests/{request_id}/applications", tags=["Applications"])
+@app.get("/requests/{request_id}/applications", response_model=ApplicationListResponse, tags=["Applications"], summary="自分の依頼の応募者を一覧", description="依頼者本人だけが閲覧でき、ブロック関係の応募者は除外する。", responses=api_errors(401, 403, 404, 500))
 async def list_applications(
     request_id: str,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    application_repository: ApplicationRepository = Depends(
+        application_repository_dependency
+    ),
 ):
-    async with actor_connection(current_user) as conn:
-        request_item = await request_or_404(conn, request_id)
+    request_item = await request_or_404(repository, current_user, request_id)
     if request_item["requesterId"] != current_user.user_id:
         raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-    return {
-        "items": [
-            {**item, "helper": HELPERS[item["helperId"]]}
-            for item in applications.values()
-            if item["requestId"] == request_id
-            and not is_blocked_pair(current_user.user_id, item["helperId"])
-        ]
-    }
+    items = await application_repository.list_for_request(current_user, request_id)
+    return {"items": [
+        {**item, "helper": item.get("helper") or HELPERS[item["helperId"]]}
+        for item in items
+        if not is_blocked_pair(current_user.user_id, item["helperId"])
+    ]}
 
 
-@app.post("/requests/{request_id}/applications", status_code=201, tags=["Applications"])
+@app.post("/requests/{request_id}/applications", response_model=ApplicationResponse, status_code=201, tags=["Applications"], summary="公開依頼へ応募", description="認証済み本人を支援者として応募する。自分の依頼、重複応募、公開中でない依頼には応募できない。", responses=api_errors(401, 403, 404, 409, 422, 500))
 async def create_application(
     request_id: str,
     body: ApplicationInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    application_repository: ApplicationRepository = Depends(
+        application_repository_dependency
+    ),
 ):
-    async with actor_connection(current_user) as conn:
-        request_item = await request_or_404(conn, request_id)
+    request_item = await request_or_404(repository, current_user, request_id)
     if is_blocked_pair(current_user.user_id, request_item["requesterId"]):
         raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
-    if request_item["status"] != "published":
-        raise HTTPException(409, detail={"code": "REQUEST_NOT_OPEN"})
-    if request_item["requesterId"] == current_user.user_id:
-        raise HTTPException(403, detail={"code": "SELF_APPLICATION_NOT_ALLOWED"})
-    if any(
-        item["requestId"] == request_id
-        and item["helperId"] == current_user.user_id
-        and item["status"] not in {"withdrawn", "cancelled"}
-        for item in applications.values()
-    ):
-        raise HTTPException(409, detail={"code": "DUPLICATE_APPLICATION"})
-    item = {
-        "id": new_id("app"),
-        "requestId": request_id,
-        "helperId": current_user.user_id,
-        **body.model_dump(),
-        "status": "applied",
-        "createdAt": now_iso(),
-    }
-    applications[item["id"]] = item
-    return item
+    return await create_application_service(
+        application_repository, current_user,
+        request_item, body.model_dump(),
+    )
 
 
-@app.post("/applications/{application_id}/withdraw", tags=["Applications"])
+@app.post("/applications/{application_id}/withdraw", response_model=ApplicationResponse, tags=["Applications"], summary="応募を取り下げ", description="応募した本人だけがapplied状態をwithdrawnへ遷移できる。", responses=api_errors(401, 403, 404, 409, 500))
 async def withdraw_application(
     application_id: str,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: ApplicationRepository = Depends(application_repository_dependency),
 ):
-    application = applications.get(application_id)
-    if not application:
-        raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
-    if application["helperId"] != current_user.user_id:
-        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-    if application["status"] != "applied":
-        raise HTTPException(409, detail={"code": "APPLICATION_NOT_WITHDRAWABLE"})
-    application["status"] = "withdrawn"
-    application["updatedAt"] = now_iso()
-    return application
+    return await withdraw_application_service(repository, current_user, application_id)
 
 
-@app.post("/applications/{application_id}/select", status_code=201, tags=["Applications"])
+@app.post("/applications/{application_id}/select", response_model=MatchResponse, status_code=201, tags=["Applications"], summary="応募者を選択してマッチ成立", description="依頼者本人だけが応募者を選択できる。expectedVersionで定員超過と同時更新を防ぎ、不一致・定員到達・選択不能状態は409。定員到達時は依頼をmatched、未選択応募をnot_selectedへ遷移する。", responses=api_errors(401, 403, 404, 409, 422, 500))
 async def select_application(
     application_id: str,
     body: SelectionInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     application = applications.get(application_id)
     if not application:
         raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
     if application["requestId"] != body.requestId:
         raise HTTPException(409, detail={"code": "APPLICATION_REQUEST_MISMATCH"})
-    async with actor_connection(current_user) as conn:
-        request_item = await request_or_404(conn, body.requestId)
-        if request_item["requesterId"] != current_user.user_id:
-            raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-        if request_item["version"] != body.expectedVersion:
-            raise HTTPException(
-                409,
-                detail={
-                    "code": "REQUEST_STATE_CONFLICT",
-                    "currentVersion": request_item["version"],
-                },
-            )
-        if application["status"] != "applied":
-            raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
-        if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
-            raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
-        # matches への insert が accepted_helpers の増分そのものなので、この値自体は
-        # どこにも永続化しない。#7 が実装する排他ロック（トランザクション境界・
-        # 同時実行制御）はここでは行わない。既存の振る舞いを壊さないための
-        # 最小限の書き込みに留める。
-        capacity_reached = (
-            request_item["acceptedHelpers"] + 1 >= request_item["requiredHelpers"]
-        )
-        new_status = "matched" if capacity_reached else "matching"
-        updated = await conn.fetchval(
-            "select app.set_request_status($1, $2::request_status, $3)",
-            uuid.UUID(request_item["id"]),
-            new_status,
-            request_item["version"],
-        )
-        if updated is None:
-            raise HTTPException(
-                409,
-                detail={
-                    "code": "REQUEST_STATE_CONFLICT",
-                    "currentVersion": request_item["version"],
-                },
-            )
+    request_item = await request_or_404(repository, current_user, body.requestId)
+    if request_item["requesterId"] != current_user.user_id:
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+    if request_item["version"] != body.expectedVersion:
+        raise HTTPException(409, detail={
+            "code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"],
+        })
+    if application["status"] != "applied":
+        raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
+    if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
+        raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
+    capacity_reached = request_item["acceptedHelpers"] + 1 >= request_item["requiredHelpers"]
+    new_status = "matched" if capacity_reached else "matching"
+    updated = await repository.set_status(
+        current_user, request_item["id"], new_status,
+        expected_version=request_item["version"],
+    )
+    if not updated:
+        raise HTTPException(409, detail={
+            "code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"],
+        })
     application["status"] = "selected"
     if capacity_reached:
         for other in applications.values():
@@ -756,14 +888,14 @@ async def select_application(
     return match
 
 
-@app.get("/matches/{match_id}", tags=["Matches"])
+@app.get("/matches/{match_id}", response_model=MatchResponse, tags=["Matches"], summary="マッチ詳細を取得", description="依頼者と選択された支援者本人だけが取得できる。", responses=api_errors(401, 403, 404, 500))
 async def get_match(match_id: str, current_user: CurrentUser = Depends(get_current_user)):
     match = match_or_404(match_id)
     ensure_match_participant(match, current_user.user_id)
     return match
 
 
-@app.get("/matches/{match_id}/messages", tags=["Messages"])
+@app.get("/matches/{match_id}/messages", response_model=MessageListResponse, tags=["Messages"], summary="チャット履歴を取得", description="成立したマッチの当事者だけが取得できる。送信日時の昇順。ブロックした相手のメッセージは除外する。nextCursorは次ページなしでnull（現行実装は常にnull）。", responses=api_errors(401, 403, 404, 500))
 async def list_messages(
     match_id: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -782,7 +914,7 @@ async def list_messages(
     }
 
 
-@app.post("/matches/{match_id}/messages", status_code=201, tags=["Messages"])
+@app.post("/matches/{match_id}/messages", response_model=MessageResponse, status_code=201, tags=["Messages"], summary="チャットメッセージを送信", description="マッチ当事者だけが送信できる。senderIdとsentAtはセッションとサーバー時刻から決定する。", responses=api_errors(401, 403, 404, 422, 500))
 async def create_message(
     match_id: str,
     body: MessageInput,
@@ -807,11 +939,12 @@ async def create_message(
 COMPLETABLE_MATCH_STATUSES = {"matched", "completion_pending"}
 
 
-@app.post("/matches/{match_id}/complete", tags=["Matches"])
+@app.post("/matches/{match_id}/complete", response_model=MatchResponse, tags=["Matches"], summary="活動完了を確認", description="依頼者と支援者本人だけが自分の役割で確認できる。片方のみはcompletion_pending、双方確認後はcompleted。disputedまたはcompletedへの操作は409。現行実装では同じ当事者の再確認は冪等に成功する。", responses=api_errors(401, 403, 404, 409, 422, 500))
 async def complete_match(
     match_id: str,
     body: CompletionInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     match = match_or_404(match_id)
     actor_role = ensure_match_participant(match, current_user.user_id)
@@ -827,41 +960,32 @@ async def complete_match(
     else:
         match["status"] = "completion_pending"
         new_request_status = "completion_pending"
-    async with actor_connection(current_user) as conn:
-        # The match participant check above is the authorization boundary.
-        # A helper cannot directly read the request after it leaves the
-        # published state under RLS, but must still be able to confirm
-        # completion. The server-owned match supplies the request ID to the
-        # constrained transition function.
-        await conn.fetchval(
-            "select app.set_request_status($1, $2::request_status, null, false)",
-            uuid.UUID(match["requestId"]),
-            new_request_status,
-        )
+    await repository.set_status(
+        current_user, match["requestId"], new_request_status, bump_version=False,
+    )
     return match
 
 
-@app.post("/matches/{match_id}/dispute", tags=["Matches"])
+@app.post("/matches/{match_id}/dispute", response_model=MatchResponse, tags=["Matches"], summary="マッチングキャンセルを申告", description="当事者が理由を付けてマッチと依頼をdisputedへ遷移する。completedまたは既にdisputedの場合は409。", responses=api_errors(401, 403, 404, 409, 422, 500))
 async def dispute_match(
     match_id: str,
     body: DisputeInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     match = match_or_404(match_id)
     ensure_match_participant(match, current_user.user_id)
     if match["status"] in {"completed", "disputed"}:
         raise HTTPException(409, detail={"code": "MATCH_NOT_DISPUTABLE"})
     match.update({"status": "disputed", "disputeReason": body.reason, "disputedAt": now_iso()})
-    async with actor_connection(current_user) as conn:
-        await request_or_404(conn, match["requestId"])
-        await conn.fetchval(
-            "select app.set_request_status($1, 'disputed', null, false)",
-            uuid.UUID(match["requestId"]),
-        )
+    await request_or_404(repository, current_user, match["requestId"])
+    await repository.set_status(
+        current_user, match["requestId"], "disputed", bump_version=False,
+    )
     return match
 
 
-@app.post("/matches/{match_id}/reviews", status_code=201, tags=["Reviews"])
+@app.post("/matches/{match_id}/reviews", response_model=ReviewResponse, status_code=201, tags=["Reviews"], summary="完了した相手をレビュー", description="completedのマッチ当事者だけが相手へ1件投稿できる。未完了または重複投稿は409。", responses=api_errors(401, 403, 404, 409, 422, 500))
 async def create_review(
     match_id: str,
     body: ReviewInput,
@@ -888,17 +1012,17 @@ async def create_review(
     return item
 
 
-@app.post("/achievements/generate", status_code=201, tags=["Achievements"])
+@app.post("/achievements/generate", response_model=AchievementResponse, status_code=201, tags=["Achievements"], summary="AI実績プロフィールを生成", description="completedのマッチ当事者だけが生成できる開発用AIモック。個人情報を含めず、公開には本人承認が必要。", responses=api_errors(401, 403, 404, 409, 422, 500))
 async def generate_achievement(
     body: AchievementInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     match = match_or_404(body.matchId)
     ensure_match_participant(match, current_user.user_id)
     if match["status"] != "completed":
         raise HTTPException(409, detail={"code": "MATCH_NOT_COMPLETED"})
-    async with actor_connection(current_user) as conn:
-        request_item = await request_or_404(conn, match["requestId"])
+    request_item = await request_or_404(repository, current_user, match["requestId"])
     item = {
         "id": new_id("ach"),
         "userId": match["helperId"],
@@ -916,7 +1040,7 @@ async def generate_achievement(
     return item
 
 
-@app.patch("/achievements/visibility", tags=["Achievements"])
+@app.patch("/achievements/visibility", response_model=AchievementResponse, tags=["Achievements"], summary="AI実績の公開範囲を更新", description="実績の対象本人だけが変更できる。public指定はapproved=trueによる本人承認が必須。", responses=api_errors(401, 403, 404, 409, 422, 500))
 async def update_achievement_visibility(
     body: AchievementVisibilityInput,
     current_user: CurrentUser = Depends(get_current_user),
@@ -935,7 +1059,7 @@ async def update_achievement_visibility(
     return item
 
 
-@app.post("/verifications", status_code=201, tags=["Verification"])
+@app.post("/verifications", response_model=VerificationResponse, status_code=201, tags=["Verification"], summary="本人確認を申請", description="大学メールまたは学生証で申請する開発用モック。学生証方式は非公開ストレージキーが必須だが、キーや画像はレスポンスに含めない。審査中の重複申請は409。", responses=api_errors(401, 409, 422, 500))
 async def create_verification(
     body: VerificationInput,
     current_user: CurrentUser = Depends(get_current_user),
@@ -959,10 +1083,11 @@ async def create_verification(
     return item
 
 
-@app.post("/reports", status_code=201, tags=["Safety"])
+@app.post("/reports", response_model=ReportResponse, status_code=201, tags=["Safety"], summary="違反・危険行為を通報", description="通報者はセッションから決定する。詐欺または危険作業の依頼通報はhighとなり、対象依頼をsuspendedへ自動遷移する。", responses=api_errors(401, 422, 500))
 async def create_report(
     body: ReportInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
 ):
     item = {
         "id": new_id("report"),
@@ -986,10 +1111,7 @@ async def create_report(
         except ValueError:
             target_id = None
         if target_id is not None:
-            async with actor_connection(current_user) as conn:
-                await conn.fetchval(
-                    "select app.set_request_status($1, 'suspended')", target_id
-                )
+            await repository.set_status(current_user, str(target_id), "suspended")
             record_audit_event(
                 actor_id=current_user.user_id,
                 event_type="request_auto_suspended",
@@ -1000,7 +1122,7 @@ async def create_report(
     return item
 
 
-@app.post("/users/{user_id}/block", status_code=201, tags=["Safety"])
+@app.post("/users/{user_id}/block", response_model=BlockResponse, status_code=201, tags=["Safety"], summary="利用者をブロックまたは解除", description="blocked=trueでブロック、falseで解除する。セッション本人との関係として保存し、対象との依頼・応募・メッセージを非表示にする。自分自身は指定不可。", responses=api_errors(401, 404, 422, 500))
 async def set_user_block(
     user_id: str,
     body: BlockInput,

@@ -1,47 +1,254 @@
-from typing import Literal
+"""Public API contracts used by runtime validation and OpenAPI."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+LocationFailure = Literal["denied", "timeout", "unsupported", "unavailable"]
+RequestStatus = Literal["draft", "pending_review", "published", "matching", "matched", "in_progress", "completion_pending", "completed", "rejected", "cancelled", "expired", "suspended", "disputed"]
+ApplicationStatus = Literal["applied", "selected", "accepted", "completed", "not_selected", "withdrawn", "cancelled"]
+MatchStatus = Literal["matched", "in_progress", "completion_pending", "completed", "disputed"]
+VerificationStatus = Literal["unverified", "pending", "approved", "rejected", "expired"]
 
 
-class StructureInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    text: str = Field(min_length=5, max_length=3000)
-    areaCode: str
+class ContractModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
 
 
-class RequestInput(BaseModel):
+class ErrorDetail(ContractModel):
+    code: str = Field(description="クライアント判定用のUPPER_SNAKE_CASEコード")
+    message: str = Field(description="利用者向けの安全なメッセージ")
+    details: dict[str, Any] = Field(default_factory=dict, description="安全に公開できる追加情報")
+    requestId: str = Field(description="X-Request-IDと一致するトレースID")
+
+
+class ErrorResponse(ContractModel):
+    error: ErrorDetail
+
+
+class LocationResolveInput(ContractModel):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{"consentGranted": True, "latitude": 43.082, "longitude": 141.350}]})
+    consentGranted: bool = Field(False, description="現在地利用への明示的な同意")
+    latitude: float | None = Field(None, ge=-90, le=90, description="同意時だけ送る緯度。保存・返却しない")
+    longitude: float | None = Field(None, ge=-180, le=180, description="同意時だけ送る経度。保存・返却しない")
+    failureReason: LocationFailure | None = Field(None, description="位置取得失敗理由")
+
+    @model_validator(mode="after")
+    def validate_location_result(self) -> "LocationResolveInput":
+        has_coordinates = self.latitude is not None or self.longitude is not None
+        if has_coordinates and (self.latitude is None or self.longitude is None or not self.consentGranted):
+            raise ValueError("coordinates require consent and must be provided together")
+        if self.consentGranted and not has_coordinates and self.failureReason is None:
+            raise ValueError("consent requires coordinates or a failure reason")
+        if has_coordinates and self.failureReason is not None:
+            raise ValueError("failureReason cannot be combined with coordinates")
+        return self
+
+
+class LocationResolveResponse(ContractModel):
+    areaCode: str = Field(description="概算地域コード")
+    areaLabel: str = Field(description="表示用の概算地域名")
+    source: Literal["current_location", "selected_region", "registered_region"]
+    fallbackUsed: bool
+
+
+class StructureInput(ContractModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"text": "病気なので小型犬の散歩をお願いしたい", "areaCode": "AREA-001"}]})
+    text: str = Field(min_length=5, max_length=3000, description="個人情報を含めない依頼文")
+    areaCode: str | None = Field(None, min_length=1, max_length=30)
+    location: LocationResolveInput | None = None
+    maskingConfirmed: bool = False
+
+
+class MaskingDetection(ContractModel):
+    type: str
+    placeholder: str
+    count: int = Field(ge=1)
+
+
+class MaskingConfirmationResponse(ContractModel):
+    maskedText: str
+    detections: list[MaskingDetection]
+    hasDetections: bool
+    ruleVersion: str
+    status: Literal["masking_confirmation_required"]
+    requiresMaskingConfirmation: Literal[True]
+    message: str
+
+
+class AppliedMasking(ContractModel):
+    detections: list[MaskingDetection]
+    ruleVersion: str
+    confirmed: bool
+
+
+class StructuredRequestResponse(ContractModel):
+    title: str = Field(max_length=100)
+    description: str = Field(max_length=3000)
+    category: str = Field(max_length=100)
+    scheduledAt: datetime = Field(description="ISO 8601日時")
+    estimatedMinutes: int = Field(ge=10, le=240)
+    requiredHelpers: int = Field(ge=1, le=5)
+    riskLevel: Literal["low", "medium", "high", "prohibited"]
+    missingFields: list[str]
+    warnings: list[str]
+    masking: AppliedMasking
+    requiresConfirmation: bool = True
+
+
+class RequestInput(ContractModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"title": "庭の片付け", "description": "庭の落ち葉を一緒に片付けてください", "category": "cleaning", "scheduledAt": "2026-08-22T10:00:00+09:00", "estimatedMinutes": 30, "requiredHelpers": 1, "areaCode": "AREA-001", "riskLevel": "low", "confirmed": True}]})
     title: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=2000)
-    category: str
-    scheduledAt: str
+    category: str = Field(min_length=1, max_length=100)
+    scheduledAt: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$", description="ISO 8601、タイムゾーン付き")
     estimatedMinutes: int = Field(ge=10, le=240)
-    requiredHelpers: int = Field(default=1, ge=1, le=5)
-    areaCode: str
+    requiredHelpers: int = Field(1, ge=1, le=5)
+    areaCode: str = Field(min_length=1, max_length=30, description="概算地域コード")
     riskLevel: Literal["low", "medium"] = "low"
-    confirmed: Literal[True]
+    confirmed: Literal[True] = Field(description="利用者が内容を確認済み")
 
 
-class ApplicationInput(BaseModel):
+class RequestResponse(ContractModel):
+    id: str
+    requesterId: str
+    title: str
+    description: str
+    category: str
+    riskLevel: Literal["low", "medium", "high", "prohibited"]
+    areaCode: str
+    areaLabel: str
+    distanceKm: float | None = Field(None, ge=0, description="概算距離")
+    acceptedHelpers: int = Field(ge=0)
+    scheduledAt: datetime
+    estimatedMinutes: int = Field(ge=10, le=240)
+    requiredHelpers: int = Field(ge=1, le=5)
+    status: RequestStatus
+    version: int = Field(ge=1, description="楽観ロック値")
+    warnings: list[str]
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class ListOrigin(ContractModel):
+    areaCode: str
+    source: Literal["current_location", "selected_region", "registered_region"]
+
+
+class RequestListResponse(ContractModel):
+    items: list[RequestResponse]
+    nextCursor: str | None = Field(description="次ページなしの場合null")
+    origin: ListOrigin
+
+
+class RequestUpdateInput(ContractModel):
+    title: str | None = Field(None, min_length=1, max_length=100)
+    description: str | None = Field(None, min_length=1, max_length=2000)
+    scheduledAt: str | None = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$")
+    estimatedMinutes: int | None = Field(None, ge=10, le=240)
+    requiredHelpers: int | None = Field(None, ge=1, le=5)
+    expectedVersion: int = Field(ge=1)
+
+
+class ProfileUpdateInput(ContractModel):
+    displayName: str | None = Field(None, min_length=1, max_length=50)
+    areaCode: str | None = Field(None, min_length=1, max_length=30)
+
+
+class ProfileResponse(ContractModel):
+    id: str
+    displayName: str = Field(max_length=50)
+    role: Literal["member", "admin", "verifier"]
+    emailVerified: bool
+    verificationStatus: VerificationStatus
+    areaCode: str | None = None
+    status: Literal["active", "suspended"]
+    updatedAt: datetime | None = None
+
+
+class ApplicationInput(ContractModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"message": "犬の散歩経験があります", "availableAt": "2026-08-19T17:00:00+09:00"}]})
     message: str = Field(min_length=1, max_length=1000)
-    availableAt: str
+    availableAt: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$")
 
 
-class SelectionInput(BaseModel):
+class ApplicationResponse(ContractModel):
+    id: str
+    requestId: str
+    helperId: str
+    message: str
+    availableAt: datetime
+    status: ApplicationStatus
+    createdAt: datetime
+    updatedAt: datetime | None = None
+
+
+class HelperSummary(ContractModel):
+    id: str
+    displayName: str
+    verificationStatus: VerificationStatus
+    universityVerified: bool
+    skillTags: list[str]
+    achievementCount: int = Field(ge=0)
+
+
+class ApplicationWithHelperResponse(ApplicationResponse):
+    helper: HelperSummary
+
+
+class ApplicationListResponse(ContractModel):
+    items: list[ApplicationWithHelperResponse]
+
+
+class SelectionInput(ContractModel):
     requestId: str
     expectedVersion: int = Field(ge=1)
 
 
-class MessageInput(BaseModel):
+class MatchResponse(ContractModel):
+    id: str
+    requestId: str
+    requesterId: str
+    helperId: str
+    status: MatchStatus
+    requesterConfirmed: bool
+    helperConfirmed: bool
+    matchedAt: datetime
+    completedAt: datetime | None
+    disputeReason: str | None = None
+    disputedAt: datetime | None = None
+
+
+class MessageInput(ContractModel):
     body: str = Field(min_length=1, max_length=2000)
 
 
-class CompletionInput(BaseModel):
+class MessageResponse(ContractModel):
+    id: str
+    matchId: str
+    senderId: str
+    body: str
+    sentAt: datetime
+    readAt: datetime | None
+    moderationStatus: Literal["allowed", "flagged", "hidden"]
+
+
+class MessageListResponse(ContractModel):
+    items: list[MessageResponse]
+    nextCursor: str | None = Field(description="次ページなしの場合null。現行実装は常にnull")
+
+
+class CompletionInput(ContractModel):
     completed: Literal[True]
     actorRole: Literal["requester", "helper"]
 
 
-class ReviewInput(BaseModel):
+class DisputeInput(ContractModel):
+    reason: str = Field(min_length=10, max_length=1000)
+
+
+class ReviewInput(ContractModel):
     onTime: bool
     polite: bool
     safetyAware: bool
@@ -49,54 +256,90 @@ class ReviewInput(BaseModel):
     comment: str = Field(min_length=1, max_length=1000)
 
 
-class AchievementInput(BaseModel):
+class ReviewResponse(ReviewInput):
+    id: str
+    matchId: str
+    reviewerId: str
+    revieweeId: str
+    createdAt: datetime
+
+
+class AchievementInput(ContractModel):
     matchId: str
     visibility: Literal["private", "members", "public"] = "members"
 
 
-class ReportInput(BaseModel):
-    targetType: Literal["user", "request", "match", "message", "review"]
-    targetId: str
-    reason: Literal[
-        "fraud", "harassment", "dangerous_work", "false_information", "no_show",
-        "personal_information_request", "payment_request", "other",
-    ]
-    description: str = Field(min_length=10, max_length=2000)
+class AchievementFacts(ContractModel):
+    category: str
+    minutes: int = Field(ge=0)
 
 
-class ProfileUpdateInput(BaseModel):
-    displayName: str | None = Field(default=None, min_length=1, max_length=50)
-    areaCode: str | None = Field(default=None, min_length=1, max_length=30)
+class AchievementResponse(ContractModel):
+    id: str
+    userId: str
+    matchId: str
+    generatedText: str
+    facts: AchievementFacts
+    visibility: Literal["private", "members", "public"]
+    status: Literal["generated", "approved"]
+    modelName: str
+    promptVersion: str
+    generatedAt: datetime
+    approvedAt: datetime | None
 
 
-class RequestUpdateInput(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=100)
-    description: str | None = Field(default=None, min_length=1, max_length=2000)
-    scheduledAt: str | None = None
-    estimatedMinutes: int | None = Field(default=None, ge=10, le=240)
-    requiredHelpers: int | None = Field(default=None, ge=1, le=5)
-    expectedVersion: int = Field(ge=1)
-
-
-class DisputeInput(BaseModel):
-    reason: str = Field(min_length=10, max_length=1000)
-
-
-class AchievementVisibilityInput(BaseModel):
+class AchievementVisibilityInput(ContractModel):
     achievementId: str
     visibility: Literal["private", "members", "public"]
     approved: bool = False
 
 
-class VerificationInput(BaseModel):
+class VerificationInput(ContractModel):
     method: Literal["university_email", "student_card"]
-    storageObjectKey: str | None = Field(default=None, max_length=300)
+    storageObjectKey: str | None = Field(None, max_length=300, description="学生証方式のみ。非公開ストレージのキー")
 
 
-class BlockInput(BaseModel):
+class VerificationResponse(ContractModel):
+    id: str
+    userId: str
+    method: Literal["university_email", "student_card"]
+    status: VerificationStatus
+    createdAt: datetime
+
+
+class ReportInput(ContractModel):
+    targetType: Literal["user", "request", "match", "message", "review"]
+    targetId: str = Field(min_length=1, max_length=100)
+    reason: Literal["fraud", "harassment", "dangerous_work", "false_information", "no_show", "personal_information_request", "payment_request", "other"]
+    description: str = Field(min_length=10, max_length=2000)
+
+
+class ReportResponse(ContractModel):
+    id: str
+    reporterId: str
+    targetType: Literal["user", "request", "match", "message", "review"]
+    targetId: str
+    reason: str
+    description: str
+    severity: Literal["medium", "high"]
+    status: Literal["open", "resolved"]
+    createdAt: datetime
+
+
+class BlockInput(ContractModel):
     blocked: bool = True
 
 
-class AuthInput(BaseModel):
+class BlockResponse(ContractModel):
+    userId: str
+    blocked: bool
+    updatedAt: datetime
+
+
+class ResetResponse(ContractModel):
+    reset: Literal[True]
+
+
+class AuthInput(ContractModel):
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
     password: str = Field(min_length=8, max_length=128)

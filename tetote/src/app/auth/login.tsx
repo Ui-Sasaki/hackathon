@@ -9,11 +9,19 @@ import {
   Modal,
 } from "react-native";
 import { useState } from "react";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { useAuth } from "../../auth/AuthContext";
+
+function safeReturnTo(value: string | string[] | undefined): string {
+  const path = Array.isArray(value) ? value[0] : value;
+  return path?.startsWith("/") && !path.startsWith("//") ? path : "/helper";
+}
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string | string[] }>();
+  const { signIn } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -25,8 +33,10 @@ export default function LoginScreen() {
     useState(false);
 
   const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
+    if (isSubmitting) return;
     setError("");
 
     if (!email || !password) {
@@ -34,12 +44,23 @@ export default function LoginScreen() {
       return;
     }
 
-    setShowSuccess(true);
-
-    setTimeout(() => {
-      setShowSuccess(false);
-      router.replace("/helper");
-    }, 2000);
+    setIsSubmitting(true);
+    try {
+      const result = await signIn(email.trim(), password);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      setShowSuccess(true);
+      setTimeout(() => {
+        setShowSuccess(false);
+        router.replace(safeReturnTo(returnTo));
+      }, 800);
+    } catch {
+      setError("通信に失敗しました。接続を確認してもう一度お試しください");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -68,7 +89,7 @@ export default function LoginScreen() {
         </Text>
 
         <Text style={styles.subtitle}>
-          おかえりなさい 
+          おかえりなさい
         </Text>
 
         <View style={styles.form}>
@@ -131,13 +152,15 @@ export default function LoginScreen() {
 
           <Pressable
             onPress={handleLogin}
+            disabled={isSubmitting}
             style={({ pressed }) => [
               styles.loginButton,
+              isSubmitting && styles.disabled,
               pressed && styles.pressed,
             ]}
           >
             <Text style={styles.loginButtonText}>
-              ログイン
+              {isSubmitting ? "ログイン中…" : "ログイン"}
             </Text>
           </Pressable>
         </View>
@@ -309,6 +332,10 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.75,
     transform: [{ scale: 0.98 }],
+  },
+
+  disabled: {
+    opacity: 0.55,
   },
 
   /* SUCCESS POPUP */

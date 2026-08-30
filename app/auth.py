@@ -6,19 +6,28 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Security
+from fastapi.security import APIKeyCookie
 
 
 SUPERTOKENS_ENABLED = os.getenv("SUPERTOKENS_ENABLED", "true").lower() in {
     "1", "true", "yes", "on"
 }
+AUTH_MOCK_ENABLED = os.getenv("AUTH_MOCK_ENABLED", "false").lower() in {
+    "1", "true", "yes", "on"
+}
+AUTH_MOCK_USER_ID = os.getenv("AUTH_MOCK_USER_ID", "usr_101")
+AUTH_MOCK_USER_HEADER = "X-Mock-User-Id"
 
 if SUPERTOKENS_ENABLED:
     from supertokens_python import InputAppInfo, SupertokensConfig, get_all_cors_headers, init
     from supertokens_python.exceptions import SuperTokensError
     from supertokens_python.recipe import emailpassword, multifactorauth, session
     from supertokens_python.recipe.emailpassword import EmailPasswordOverrideConfig
-    from supertokens_python.recipe.emailpassword.interfaces import PasswordResetPostOkResult
+    from supertokens_python.recipe.emailpassword.interfaces import (
+        PasswordResetPostOkResult,
+        SignUpPostOkResult,
+    )
     from supertokens_python.recipe.session.asyncio import revoke_all_sessions_for_user
     from supertokens_python.recipe.session.framework.fastapi import verify_session
 
@@ -27,6 +36,15 @@ if SUPERTOKENS_ENABLED:
 # 依頼やマッチに対する文脈上のアクターなので、ここには含めない
 # （要件定義書 §5 では双方が依頼作成と応募を行える）。
 Role = Literal["member", "admin", "verifier"]
+session_cookie = APIKeyCookie(
+    name="sAccessToken",
+    scheme_name="SuperTokensSession",
+    description=(
+        "SuperTokensが発行するHttpOnly Cookieセッション。更新系ではSDKが付与する"
+        "anti-csrfヘッダーも必要です。ユーザーIDやロールはセッションから決定します。"
+    ),
+    auto_error=False,
+)
 
 
 @dataclass(frozen=True)
@@ -45,8 +63,25 @@ def _env_bool(name: str, default: bool) -> bool:
     return os.getenv(name, str(default)).lower() in {"1", "true", "yes", "on"}
 
 
+_user_creator: Callable[[str], None] = lambda _user_id: None
+
+
+def configure_user_creator(creator: Callable[[str], None]) -> None:
+    """Configure application-profile creation after a successful sign-up."""
+
+    global _user_creator
+    _user_creator = creator
+
+
 def _override_emailpassword_apis(original):
+    original_sign_up_post = original.sign_up_post
     original_password_reset_post = original.password_reset_post
+
+    async def sign_up_post(*args, **kwargs):
+        result = await original_sign_up_post(*args, **kwargs)
+        if isinstance(result, SignUpPostOkResult):
+            _user_creator(result.user.id)
+        return result
 
     async def password_reset_post(*args, **kwargs):
         result = await original_password_reset_post(*args, **kwargs)
@@ -56,6 +91,7 @@ def _override_emailpassword_apis(original):
             await revoke_all_sessions_for_user(result.user.id)
         return result
 
+    original.sign_up_post = sign_up_post
     original.password_reset_post = password_reset_post
     return original
 
@@ -98,9 +134,12 @@ initialise_supertokens()
 
 
 def cors_headers() -> list[str]:
+    headers = ["Content-Type", "Idempotency-Key"]
+    if AUTH_MOCK_ENABLED:
+        headers.append(AUTH_MOCK_USER_HEADER)
     if not SUPERTOKENS_ENABLED:
-        return ["Content-Type", "Idempotency-Key"]
-    return ["Content-Type", "Idempotency-Key", *get_all_cors_headers()]
+        return headers
+    return [*headers, *get_all_cors_headers()]
 
 
 # Supabase will replace this lookup. Keeping it injectable makes session tests
@@ -113,7 +152,39 @@ def configure_user_lookup(lookup: Callable[[str], dict[str, Any] | None]) -> Non
     _user_lookup = lookup
 
 
-async def get_current_user(request: Request) -> CurrentUser:
+def _current_user_from_record(
+    user_id: str,
+    record: dict[str, Any] | None,
+    *,
+    mfa_completed: bool = False,
+) -> CurrentUser:
+    if record is None:
+        raise HTTPException(403, detail={"code": "USER_PROFILE_NOT_FOUND"})
+    if record.get("status") != "active":
+        raise HTTPException(403, detail={"code": "USER_SUSPENDED"})
+
+    return CurrentUser(
+        user_id=user_id,
+        role=record["role"],
+        status=record["status"],
+        email_verified=record.get("emailVerified", False),
+        verification_status=record.get("verificationStatus", "unverified"),
+        mfa_completed=mfa_completed,
+    )
+
+
+async def get_current_user(
+    request: Request,
+    _session_cookie: str | None = Security(session_cookie),
+) -> CurrentUser:
+    if AUTH_MOCK_ENABLED:
+        user_id = request.headers.get(AUTH_MOCK_USER_HEADER, AUTH_MOCK_USER_ID)
+        return _current_user_from_record(
+            user_id,
+            _user_lookup(user_id),
+            mfa_completed=True,
+        )
+
     if not SUPERTOKENS_ENABLED:
         raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
     try:
@@ -128,20 +199,11 @@ async def get_current_user(request: Request) -> CurrentUser:
         raise HTTPException(401, detail={"code": "AUTHENTICATION_REQUIRED"})
 
     user_id = verified.get_user_id()
-    record = _user_lookup(user_id)
-    if record is None:
-        raise HTTPException(403, detail={"code": "USER_PROFILE_NOT_FOUND"})
-    if record.get("status") != "active":
-        raise HTTPException(403, detail={"code": "USER_SUSPENDED"})
-
     payload = verified.get_access_token_payload()
     mfa_claim = payload.get("st-mfa", {})
-    return CurrentUser(
-        user_id=user_id,
-        role=record["role"],
-        status=record["status"],
-        email_verified=record.get("emailVerified", False),
-        verification_status=record.get("verificationStatus", "unverified"),
+    return _current_user_from_record(
+        user_id,
+        _user_lookup(user_id),
         mfa_completed=bool(mfa_claim.get("v", False)),
     )
 
