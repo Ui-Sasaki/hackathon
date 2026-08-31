@@ -7,6 +7,8 @@ import {
   applicantListLoadingState,
   createApplication,
   listApplicants,
+  selectApplicant,
+  selectionErrorMessage,
   withdrawalErrorMessage,
   withdrawApplication,
 } from "./client";
@@ -292,5 +294,73 @@ describe("TODO 18: applicant list API", () => {
       error: { cause: networkError },
     });
     expect(failed.error).toBeInstanceOf(ApiNetworkError);
+  });
+});
+
+describe("TODO 19: applicant selection API", () => {
+  const match = {
+    id: "match-1",
+    requestId: "request-1",
+    requesterId: "requester-from-session",
+    helperId: "helper-1",
+    status: "matched" as const,
+    requesterConfirmed: false,
+    helperConfirmed: false,
+    matchedAt: "2026-08-31T03:00:00Z",
+    completedAt: null,
+    disputeReason: null,
+    disputedAt: null,
+    version: 1,
+  };
+
+  it("sends only expectedVersion and keeps the server match id and version", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response(201, match));
+    const client = new ApiClient({ baseUrl: "https://api.example.test", fetch: fetchMock });
+
+    await expect(selectApplicant("application/with spaces", 4, client)).resolves.toEqual(match);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.example.test/applications/application%2Fwith%20spaces/select",
+    );
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ expectedVersion: 4 });
+    expect(init.body).not.toContain("requestId");
+    expect(init.body).not.toContain("requesterId");
+    expect(init.body).not.toContain("helperId");
+  });
+
+  it.each([
+    [401, "AUTHENTICATION_REQUIRED"],
+    [403, "ROLE_FORBIDDEN"],
+    [404, "APPLICATION_NOT_FOUND"],
+    [409, "REQUEST_STATE_CONFLICT"],
+  ])("preserves status %i and selection code %s", async (status, code) => {
+    const client = new ApiClient({
+      baseUrl: "https://api.example.test",
+      fetch: vi.fn().mockResolvedValue(response(status, {
+        error: { code, message: "選択できません", details: {}, requestId: "trace-select" },
+      })),
+    });
+
+    const error = await selectApplicant("application-1", 3, client).catch(
+      (reason: unknown) => reason,
+    );
+    expect(error).toMatchObject({ status, code, requestId: "trace-select" });
+    expect(selectionErrorMessage(error)).not.toBe("選択できません");
+  });
+
+  it("deduplicates selection while the same application is being submitted", async () => {
+    let resolveResponse: ((value: Response) => void) | undefined;
+    const fetchMock = vi.fn().mockImplementation(
+      () => new Promise<Response>((resolve) => { resolveResponse = resolve; }),
+    );
+    const client = new ApiClient({ baseUrl: "https://api.example.test", fetch: fetchMock });
+
+    const first = selectApplicant("application-1", 3, client);
+    const second = selectApplicant("application-1", 3, client);
+    expect(second).toBe(first);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    resolveResponse?.(response(201, match));
+    await expect(first).resolves.toEqual(match);
   });
 });

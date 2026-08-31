@@ -30,6 +30,7 @@ from app.repositories.applications import (
 from app.repositories.structure_audits import structure_audit_repository
 from app.services.applications import (
     create_application as create_application_service,
+    select_application as select_application_service,
     withdraw_application as withdraw_application_service,
 )
 from app.services.requests import cancel_owned_request, require_request, update_owned_request
@@ -824,38 +825,27 @@ async def select_application(
     body: SelectionInput,
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
+    application_repository: ApplicationRepository = Depends(
+        application_repository_dependency
+    ),
 ):
-    application = applications.get(application_id)
-    if not application:
-        raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
-    if application["requestId"] != body.requestId:
-        raise HTTPException(409, detail={"code": "APPLICATION_REQUEST_MISMATCH"})
-    request_item = await request_or_404(repository, current_user, body.requestId)
-    if request_item["requesterId"] != current_user.user_id:
-        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-    if request_item["version"] != body.expectedVersion:
-        raise HTTPException(409, detail={
-            "code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"],
-        })
-    if application["status"] != "applied":
-        raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
-    if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
-        raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
-    capacity_reached = request_item["acceptedHelpers"] + 1 >= request_item["requiredHelpers"]
-    new_status = "matched" if capacity_reached else "matching"
-    updated = await repository.set_status(
-        current_user, request_item["id"], new_status,
-        expected_version=request_item["version"],
+    existing = await application_repository.get(current_user, application_id)
+    blocked = existing is not None and is_blocked_pair(
+        current_user.user_id, existing["helperId"]
     )
-    if not updated:
-        raise HTTPException(409, detail={
-            "code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"],
-        })
-    application["status"] = "selected"
-    if capacity_reached:
-        for other in applications.values():
-            if other["requestId"] == request_item["id"] and other["status"] == "applied":
-                other["status"] = "not_selected"
+    application, request_item = await select_application_service(
+        application_repository,
+        repository,
+        current_user,
+        application_id,
+        body.expectedVersion,
+        blocked=blocked,
+        helper_verified=(
+            existing is not None
+            and users_store.get(existing["helperId"], {}).get("verificationStatus")
+            == "approved"
+        ),
+    )
     match = {
         "id": new_id("match"),
         "requestId": request_item["id"],
@@ -866,6 +856,7 @@ async def select_application(
         "helperConfirmed": False,
         "matchedAt": now_iso(),
         "completedAt": None,
+        "version": 1,
     }
     matches[match["id"]] = match
     messages[match["id"]] = []

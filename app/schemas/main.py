@@ -262,7 +262,7 @@ class ApplicationListResponse(ContractModel):
 
 
 class SelectionInput(ContractModel):
-    requestId: str
+    model_config = ConfigDict(extra="forbid")
     expectedVersion: int = Field(ge=1)
 
 
@@ -278,6 +278,7 @@ class MatchResponse(ContractModel):
     completedAt: datetime | None
     disputeReason: str | None = None
     disputedAt: datetime | None = None
+    version: int = Field(ge=1)
 
 
 class MessageInput(ContractModel):

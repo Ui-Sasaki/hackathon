@@ -284,17 +284,87 @@ def test_masking_service_failure_does_not_log_or_return_unmasked_input(caplog) -
 def test_select_application_with_version_check() -> None:
     response = client.post(
         "/applications/app_55/select",
-        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+        json={"expectedVersion": 3},
     )
     assert response.status_code == 201
     assert response.json()["status"] == "matched"
 
     conflict = client.post(
         "/applications/app_56/select",
-        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+        json={"expectedVersion": 3},
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
+
+
+def test_select_application_rejects_client_request_id_and_unauthorized_actor() -> None:
+    invalid = client.post(
+        "/applications/app_55/select",
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+    )
+    assert invalid.status_code == 422
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    forbidden = client.post(
+        "/applications/app_56/select", json={"expectedVersion": 3},
+    )
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"]["code"] == "ROLE_FORBIDDEN"
+
+
+def test_select_application_hides_missing_and_blocked_applications() -> None:
+    missing = client.post(
+        "/applications/missing/select", json={"expectedVersion": 3},
+    )
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "APPLICATION_NOT_FOUND"
+
+    assert client.post(f"/users/{HELPER.user_id}/block", json={"blocked": True}).status_code == 201
+    blocked = client.post(
+        "/applications/app_55/select", json={"expectedVersion": 3},
+    )
+    assert blocked.status_code == 404
+    assert blocked.json()["error"]["code"] == "APPLICATION_NOT_FOUND"
+
+
+def test_repository_created_application_can_be_selected() -> None:
+    request_id = create_open_request_for_application()
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    created = client.post(
+        f"/requests/{request_id}/applications",
+        json={"message": "対応できます", "availableAt": "2099-08-22T09:00:00+09:00"},
+    )
+    assert created.status_code == 201
+
+    app.dependency_overrides[get_current_user] = requester_user
+    selected = client.post(
+        f"/applications/{created.json()['id']}/select",
+        json={"expectedVersion": 2},
+    )
+    assert selected.status_code == 201
+    assert selected.json()["requestId"] == request_id
+    assert selected.json()["helperId"] == HELPER.user_id
+    assert selected.json()["version"] == 1
+
+
+def test_select_application_rechecks_required_helper_verification() -> None:
+    repository = get_request_repository()
+    assert isinstance(repository, MemoryRequestRepository)
+    repository._items[SEED_REQUEST_1024]["verificationRequired"] = True
+    crud_module.users_store[HELPER.user_id]["verificationStatus"] = "expired"
+
+    response = client.post(
+        "/applications/app_55/select", json={"expectedVersion": 3},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "HELPER_VERIFICATION_REQUIRED"
 
 
 def test_api_prefix_and_profile_update() -> None:
@@ -429,6 +499,11 @@ def test_repository_implementations_share_application_contract() -> None:
     operations = {"list_for_request", "get", "create", "withdraw", "reset"}
     for implementation in (MemoryApplicationRepository, PostgresApplicationRepository):
         assert operations <= set(dir(implementation))
+    assert "select" in dir(MemoryApplicationRepository)
+
+
+def test_memory_request_repository_supports_selection_capacity_reservation() -> None:
+    assert "reserve_helper" in dir(MemoryRequestRepository)
 
 
 def test_production_settings_never_fall_back_to_memory(monkeypatch) -> None:
@@ -920,7 +995,7 @@ def test_mock_reset_succeeds_for_authenticated_caller_in_enabled_environment() -
 def create_match() -> str:
     response = client.post(
         "/applications/app_55/select",
-        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+        json={"expectedVersion": 3},
     )
     assert response.status_code == 201
     return response.json()["id"]

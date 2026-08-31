@@ -23,6 +23,25 @@ const withdrawalErrorMessages: Record<string, string> = {
   APPLICATION_NOT_WITHDRAWABLE: "この応募はすでに取り下げ済みか、現在の状態では取り下げできません。",
 };
 
+const selectionErrorMessages: Record<string, string> = {
+  AUTHENTICATION_REQUIRED: "セッションの有効期限が切れました。もう一度ログインしてください。",
+  ROLE_FORBIDDEN: "この応募者を選択する権限がありません。",
+  APPLICATION_NOT_FOUND: "応募が見つかりません。",
+  REQUEST_NOT_FOUND: "依頼が見つかりません。",
+  REQUEST_STATE_CONFLICT: "依頼が更新されています。最新の応募者一覧を取得してください。",
+  APPLICATION_NOT_SELECTABLE: "この応募は現在選択できません。",
+  HELPER_VERIFICATION_REQUIRED: "応募者の本人確認状態が変更されたため選択できません。",
+  CAPACITY_REACHED: "募集人数に達しています。",
+  APPLICATION_SELECTION_UNAVAILABLE: "現在応募者を選択できません。時間をおいてお試しください。",
+};
+
+export function selectionErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    return selectionErrorMessages[error.code] ?? error.message;
+  }
+  return "応募者を選択できませんでした。通信環境を確認して、もう一度お試しください。";
+}
+
 export function withdrawalErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     return withdrawalErrorMessages[error.code] ?? error.message;
@@ -91,6 +110,45 @@ export async function listApplicants(
   } catch (error) {
     return { status: "error", requestId, items: [], error };
   }
+}
+
+export type Match = {
+  id: string;
+  requestId: string;
+  requesterId: string;
+  helperId: string;
+  status: "matched" | "in_progress" | "completion_pending" | "completed" | "disputed";
+  requesterConfirmed: boolean;
+  helperConfirmed: boolean;
+  matchedAt: string;
+  completedAt: string | null;
+  disputeReason: string | null;
+  disputedAt: string | null;
+  version: number;
+};
+
+const pendingSelections = new WeakMap<ApiClient, Map<string, Promise<Match>>>();
+
+export function selectApplicant(
+  applicationId: string,
+  expectedVersion: number,
+  client: ApiClient = apiClient,
+): Promise<Match> {
+  let clientSelections = pendingSelections.get(client);
+  if (!clientSelections) {
+    clientSelections = new Map();
+    pendingSelections.set(client, clientSelections);
+  }
+  const pending = clientSelections.get(applicationId);
+  if (pending) return pending;
+
+  const selection = client
+    .post<Match>(`/applications/${encodeURIComponent(applicationId)}/select`, {
+      expectedVersion,
+    })
+    .finally(() => clientSelections?.delete(applicationId));
+  clientSelections.set(applicationId, selection);
+  return selection;
 }
 
 export function createApplication(
