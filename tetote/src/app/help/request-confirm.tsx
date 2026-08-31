@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   View,
   Text,
   StyleSheet,
@@ -13,6 +14,23 @@ import {
 } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useFontSize } from "../../context/FontSizeContext";
+import { ApiAuthenticationError, ApiError } from "../../api/errors";
+import {
+  canProceedAfterMasking,
+  confirmMaskingPreview,
+  previewRequestMasking,
+  type MaskingPreviewState,
+} from "../../api/request-masking";
+
+function maskingErrorMessage(error: unknown): string {
+  if (error instanceof ApiAuthenticationError) {
+    return "セッションの有効期限が切れました。もう一度ログインしてください。";
+  }
+  if (error instanceof ApiError && error.status === 422) {
+    return "依頼内容を確認して、もう一度お試しください。";
+  }
+  return "マスキング結果を取得できませんでした。通信環境を確認してください。";
+}
 
 export default function RequestConfirmScreen() {
   const router = useRouter();
@@ -21,6 +39,10 @@ export default function RequestConfirmScreen() {
 
   const [successVisible, setSuccessVisible] =
     useState(false);
+  const [maskingState, setMaskingState] =
+    useState<MaskingPreviewState | null>(null);
+  const [maskingLoading, setMaskingLoading] =
+    useState(true);
 
   const {
     content,
@@ -34,7 +56,28 @@ export default function RequestConfirmScreen() {
     deadline?: string;
   }>();
 
+  const retryMaskingPreview = async () => {
+    setMaskingLoading(true);
+    setMaskingState(null);
+    const state = await previewRequestMasking(content ?? "");
+    setMaskingState(state);
+    setMaskingLoading(false);
+  };
+
+  useEffect(() => {
+    let active = true;
+    void previewRequestMasking(content ?? "").then((state) => {
+      if (!active) return;
+      setMaskingState(state);
+      setMaskingLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [content]);
+
   const handleSubmit = () => {
+    if (!canProceedAfterMasking(maskingState)) return;
     setSuccessVisible(true);
 
     setTimeout(() => {
@@ -87,8 +130,47 @@ export default function RequestConfirmScreen() {
 
             <View style={styles.infoBox}>
               <Text style={styles.infoText}>
-                {content || "未入力"}
+                {maskingState?.preview?.maskedText ?? content ?? "未入力"}
               </Text>
+            </View>
+
+            <View style={styles.maskingBox}>
+              <Text style={styles.maskingTitle}>個人情報のマスキング確認</Text>
+              {maskingLoading && <ActivityIndicator color="#D89B31" />}
+              {maskingState?.status === "error" && (
+                <>
+                  <Text style={styles.errorText}>
+                    {maskingErrorMessage(maskingState.error)}
+                  </Text>
+                  <Pressable onPress={() => void retryMaskingPreview()} style={styles.retryButton}>
+                    <Text style={styles.retryButtonText}>再試行する</Text>
+                  </Pressable>
+                </>
+              )}
+              {maskingState?.preview && (
+                <>
+                  <Text style={styles.maskingMeta}>
+                    検出種別: {maskingState.preview.detections.map((item) => item.type).join("、") || "なし"}
+                  </Text>
+                  <Text style={styles.maskingMeta}>
+                    ルール版: {maskingState.preview.ruleVersion}
+                  </Text>
+                  <Pressable
+                    disabled={maskingState.status === "confirmed"}
+                    onPress={() => setMaskingState(confirmMaskingPreview(maskingState))}
+                    style={[
+                      styles.maskingConfirmButton,
+                      maskingState.status === "confirmed" && styles.confirmedButton,
+                    ]}
+                  >
+                    <Text style={styles.maskingConfirmText}>
+                      {maskingState.status === "confirmed"
+                        ? "マスキング結果を確認済み"
+                        : "マスキング結果を確認しました"}
+                    </Text>
+                  </Pressable>
+                </>
+              )}
             </View>
 
             <Text style={styles.sectionTitle}>
@@ -134,9 +216,11 @@ export default function RequestConfirmScreen() {
             </View>
 
             <Pressable
+              disabled={!canProceedAfterMasking(maskingState)}
               onPress={handleSubmit}
               style={({ pressed }) => [
                 styles.submitButton,
+                !canProceedAfterMasking(maskingState) && styles.disabledButton,
                 pressed && styles.pressed,
               ]}
             >
@@ -257,6 +341,68 @@ const createStyles = (scale: number) =>
       marginBottom: 8,
     },
 
+    maskingBox: {
+      width: "100%",
+      backgroundColor: "#FFF0D6",
+      borderRadius: 16,
+      padding: 14,
+      marginBottom: 20,
+      gap: 8,
+    },
+
+    maskingTitle: {
+      color: "#8B651F",
+      fontSize: 14 * scale,
+      fontWeight: "900",
+    },
+
+    maskingMeta: {
+      color: "#6F531E",
+      fontSize: 12 * scale,
+      lineHeight: 18 * scale,
+      fontWeight: "700",
+    },
+
+    errorText: {
+      color: "#A52A2A",
+      fontSize: 12 * scale,
+      lineHeight: 18 * scale,
+      fontWeight: "700",
+    },
+
+    retryButton: {
+      alignSelf: "flex-start",
+      borderRadius: 999,
+      backgroundColor: "#D9D9D9",
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+    },
+
+    retryButtonText: {
+      color: "#333333",
+      fontSize: 12 * scale,
+      fontWeight: "800",
+    },
+
+    maskingConfirmButton: {
+      minHeight: 42,
+      borderRadius: 999,
+      backgroundColor: "#D89B31",
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: 12,
+    },
+
+    confirmedButton: {
+      backgroundColor: "#6E8B3D",
+    },
+
+    maskingConfirmText: {
+      color: "#FFFFFF",
+      fontSize: 13 * scale,
+      fontWeight: "800",
+    },
+
     infoBox: {
       width: "100%",
       minHeight: 74,
@@ -320,6 +466,10 @@ const createStyles = (scale: number) =>
       color: "#FFFFFF",
       fontSize: 20 * scale,
       fontWeight: "600",
+    },
+
+    disabledButton: {
+      opacity: 0.45,
     },
 
     editButton: {
