@@ -1,6 +1,14 @@
-# バックエンド・API接続 TODO（2026-08-27）
+# バックエンド・API接続 TODO（2026-08-31更新）
 
 FastAPI実装と`tetote/`からFastAPIへのAPI接続を、1コミットずつレビューできる単位で管理する。画面デザイン、スタイル、アニメーション、端末固有UI、API接続と無関係なReact hooksやlint修正は対象外とする。
+
+## 現在の進捗
+
+- 完了・コミット済み：01〜08（共通APIクライアント、anti-CSRF、共通エラー変換、概算地域APIまで）。
+- 実装・テスト済み／未コミット：09（マスキングプレビューAPI接続）、16（応募作成API接続）。レビュー後のコミット待ち。
+- 次の未着手項目：10（依頼構造化API接続）。
+- 2026-08-31検証：`tetote/`のテストは49件成功、バックエンドは80件成功。
+- TypeScript全体検査：`animated-icon.module.css`と`global.css`の既存型宣言不足により未完了。TODO 16の追加コードに起因するエラーは検出されていない。
 
 ## 共通ルール
 
@@ -182,56 +190,57 @@ FastAPI実装と`tetote/`からFastAPIへのAPI接続を、1コミットずつ�
 
 ### 05. 共通APIクライアント基盤
 
-想定コミット：`feat(api-client): add FastAPI client foundation`
+コミット：`7d7c52c feat(api-client): add FastAPI client foundation`
 
-- [ ] `EXPO_PUBLIC_API_URL`からベースURLを取得する。
-- [ ] Cookieセッションを全リクエストへ適用する。
-- [ ] JSONの送受信と共通ヘッダーを実装する。
-- [ ] タイムアウトとネットワークエラーを型で表現する。
-- [ ] ユーザーID、ロール、actor ID、送信日時を自動付与しない。
-- [ ] APIクライアント単体テストを追加する。
-- [ ] `npm test -- --run`を成功させる。
+- [x] `EXPO_PUBLIC_API_URL`からベースURLを取得する。
+- [x] Cookieセッションを全リクエストへ適用する。
+- [x] JSONの送受信と共通ヘッダーを実装する。
+- [x] タイムアウトとネットワークエラーを型で表現する。
+- [x] ユーザーID、ロール、actor ID、送信日時を自動付与しない。
+- [x] APIクライアント単体テストを追加する。
+- [x] `npm test -- --run`を成功させる。
 
 ### 06. anti-CSRFと更新リクエスト
 
-想定コミット：`feat(api-client): support authenticated mutations`
+コミット：`dcaa2f3 feat(api-client): support authenticated mutations`
 
-- [ ] SuperTokens SDKのanti-CSRF処理を更新リクエストへ適用する。
-- [ ] Cookieやトークンをログへ出さない。
-- [ ] GETと更新系の認証動作をテストする。
-- [ ] セッション期限切れを認証エラーへ変換する。
+- [x] SuperTokens SDKのanti-CSRF処理を更新リクエストへ適用する。
+- [x] Cookieやトークンをログへ出さない。
+- [x] GETと更新系の認証動作をテストする。
+- [x] セッション期限切れを認証エラーへ変換する。
 
 ### 07. APIエラーの共通変換
 
-想定コミット：`feat(api-client): map FastAPI errors`
+コミット：`707f822 feat(api-client): map FastAPI errors`
 
-- [ ] 共通エラー形式を型定義する。
-- [ ] 401、403、404、409、422、500を区別する。
-- [ ] `error.code`、`details`、`requestId`を保持する。
-- [ ] 非JSON応答や不正なエラー応答を安全に扱う。
-- [ ] エラー変換の単体テストを追加する。
+- [x] 共通エラー形式を型定義する。
+- [x] 401、403、404、409、422、500を区別する。
+- [x] `error.code`、`details`、`requestId`を保持する。
+- [x] 非JSON応答や不正なエラー応答を安全に扱う。
+- [x] エラー変換の単体テストを追加する。
 
 ## 地域と依頼
 
 ### 08. 概算地域API接続
 
-想定コミット：`feat(location): connect location resolution API`
+コミット：`5877125 feat(location): connect location resolution API`
 
-- [ ] `POST /locations/resolve`へ緯度経度または登録地域を送る。
-- [ ] 取得失敗時は登録地域へフォールバックする。
-- [ ] 登録地域もない場合のAPIエラーを状態へ反映する。
-- [ ] 正確な緯度経度を永続化・ログ出力・公開表示しない。
-- [ ] 成功、拒否、失敗の接続テストを追加する。
+- [x] `POST /locations/resolve`へ緯度経度または登録地域を送る。
+- [x] 取得失敗時は登録地域へフォールバックする。
+- [x] 登録地域もない場合のAPIエラーを状態へ反映する。
+- [x] 正確な緯度経度を永続化・ログ出力・公開表示しない。
+- [x] 成功、拒否、失敗の接続テストを追加する。
 
-### 09. マスキングプレビューAPI接続
+### 09. マスキングプレビューAPI接続（実装・テスト済み、未コミット）
 
 想定コミット：`feat(requests): connect masking preview API`
 
-- [ ] `POST /requests/masking-preview`へ本文だけを送る。
-- [ ] マスキング後本文、検出種別、ルール版を保持する。
-- [ ] 未確認状態では構造化・公開へ進めない。
-- [ ] 401、422、通信失敗を状態へ反映する。
-- [ ] 接続テストを追加する。
+- [x] `POST /requests/masking-preview`へ本文だけを送る。
+- [x] マスキング後本文、検出種別、ルール版を保持する。
+- [x] 未確認状態では構造化・公開へ進めない。
+- [x] 401、422、通信失敗を状態へ反映する。
+- [x] 接続テストを追加する。
+- [ ] 対象差分のレビュー後、コミットする。
 
 ### 10. 依頼構造化API接続
 
@@ -293,14 +302,15 @@ FastAPI実装と`tetote/`からFastAPIへのAPI接続を、1コミットずつ�
 
 ## 応募とマッチ
 
-### 16. 応募作成API接続
+### 16. 応募作成API接続（実装・テスト済み、未コミット）
 
 想定コミット：`feat(applications): connect application creation API`
 
-- [ ] `POST /requests/{id}/applications`へ応募理由と対応可能日時だけを送る。
-- [ ] helper ID、応募日時、状態を送らない。
-- [ ] 自己応募、重複、期限切れ、募集終了、本人確認不足を反映する。
-- [ ] 接続テストを追加する。
+- [x] `POST /requests/{id}/applications`へ応募理由と対応可能日時だけを送る。
+- [x] helper ID、応募日時、状態を送らない。
+- [x] 自己応募、重複、期限切れ、募集終了、本人確認不足を反映する。
+- [x] 接続テストを追加する。
+- [ ] 対象差分のレビュー後、コミットする。
 
 ### 17. 応募辞退API接続
 
