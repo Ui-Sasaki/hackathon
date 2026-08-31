@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
+import json
+import re
+from typing import Any, Protocol, Sequence
 import uuid
 
 from app.auth import CurrentUser
@@ -15,6 +20,53 @@ from app.settings import settings
 RequestRecord = dict[str, Any]
 
 
+@dataclass(frozen=True)
+class RequestCursor:
+    created_at: datetime
+    request_id: str
+
+
+class InvalidCursor(ValueError):
+    """The cursor is malformed or no longer points at a request."""
+
+
+_CURSOR_TOKEN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _parse_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise InvalidCursor("cursor timestamp must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def encode_cursor(item: RequestRecord) -> str:
+    payload = {
+        "createdAt": _parse_timestamp(str(item["createdAt"])).isoformat(),
+        "id": str(item["id"]),
+    }
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_cursor(token: str) -> RequestCursor:
+    if not token or not _CURSOR_TOKEN.fullmatch(token):
+        raise InvalidCursor("invalid cursor token")
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        payload = json.loads(
+            base64.b64decode(padded, altchars=b"-_", validate=True).decode("utf-8")
+        )
+        if not isinstance(payload, dict) or set(payload) != {"createdAt", "id"}:
+            raise InvalidCursor("invalid cursor fields")
+        if not isinstance(payload["createdAt"], str) or not isinstance(payload["id"], str):
+            raise InvalidCursor("invalid cursor values")
+        return RequestCursor(_parse_timestamp(payload["createdAt"]), payload["id"])
+    except InvalidCursor:
+        raise
+    except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError) as exc:
+        raise InvalidCursor("invalid cursor token") from exc
+
 def _iso(value: Any) -> str | None:
     if value is None:
         return None
@@ -22,6 +74,57 @@ def _iso(value: Any) -> str | None:
         return value
     return value.isoformat().replace("+00:00", "Z")
 
+
+def _normalise_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _scheduled_datetime(item: RequestRecord) -> datetime | None:
+    value = item.get("scheduledAt")
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _normalise_datetime(value)
+    return _parse_timestamp(str(value))
+
+
+def _matches_list_filters(
+    item: RequestRecord,
+    *,
+    scheduled_from: datetime | None,
+    scheduled_to: datetime | None,
+    required_helpers: int | None,
+    max_distance_km: float | None,
+    verification_status: str | None,
+    blocked_requester_ids: Sequence[str],
+) -> bool:
+    scheduled_at = _scheduled_datetime(item)
+    if scheduled_from is not None and (
+        scheduled_at is None or scheduled_at < _normalise_datetime(scheduled_from)
+    ):
+        return False
+    if scheduled_to is not None and (
+        scheduled_at is None or scheduled_at > _normalise_datetime(scheduled_to)
+    ):
+        return False
+    if required_helpers is not None and item["requiredHelpers"] != required_helpers:
+        return False
+    if max_distance_km is not None and item["distanceKm"] > max_distance_km:
+        return False
+    if (
+        verification_status is not None
+        and item.get("_requesterVerificationStatus") != verification_status
+    ):
+        return False
+    return item["requesterId"] not in blocked_requester_ids
+
+
+def _public_record(item: RequestRecord) -> RequestRecord:
+    result = deepcopy(item)
+    result.pop("_requesterVerificationStatus", None)
+    return result
 
 def _row_to_record(row: Any) -> RequestRecord:
     return {
@@ -41,6 +144,7 @@ def _row_to_record(row: Any) -> RequestRecord:
         "status": row["status"],
         "expiresAt": _iso(row["expires_at"]),
         "verificationRequired": row["verification_required"],
+        "_requesterVerificationStatus": row["requester_verification_status"],
         "version": row["version"],
         "warnings": [],
         "createdAt": _iso(row["created_at"]),
@@ -50,7 +154,12 @@ def _row_to_record(row: Any) -> RequestRecord:
 
 class RequestRepository(Protocol):
     async def list(
-        self, actor: CurrentUser, *, category: str | None, area_code: str | None, limit: int
+        self, actor: CurrentUser, *, category: str | None, area_code: str | None,
+        limit: int, cursor: RequestCursor | None = None,
+        scheduled_from: datetime | None = None, scheduled_to: datetime | None = None,
+        required_helpers: int | None = None, max_distance_km: float | None = None,
+        verification_status: str | None = None,
+        blocked_requester_ids: Sequence[str] | None = None,
     ) -> list[RequestRecord]: ...
 
     async def get(self, actor: CurrentUser, request_id: str) -> RequestRecord | None: ...
@@ -114,23 +223,58 @@ class MemoryRequestRepository:
             "estimatedMinutes": minutes, "requiredHelpers": helpers, "status": "published",
             "version": version, "warnings": [], "createdAt": created_at, "updatedAt": created_at,
             "expiresAt": None, "verificationRequired": False,
+            "_requesterVerificationStatus": {
+                "usr_101": "approved", "usr_301": "unverified",
+            }.get(requester_id, "unverified"),
         }
 
     async def list(self, actor: CurrentUser, *, category: str | None,
-                   area_code: str | None, limit: int) -> list[RequestRecord]:
+                   area_code: str | None, limit: int,
+                   cursor: RequestCursor | None = None,
+                   scheduled_from: datetime | None = None,
+                   scheduled_to: datetime | None = None,
+                   required_helpers: int | None = None,
+                   max_distance_km: float | None = None,
+                   verification_status: str | None = None,
+                   blocked_requester_ids: Sequence[str] | None = None) -> list[RequestRecord]:
         del actor
+        blocked_requester_ids = blocked_requester_ids or ()
         items = [item for item in self._items.values() if item["status"] == "published"]
         if category is not None:
             items = [item for item in items if item["category"] == category]
         if area_code is not None:
             items = [item for item in items if item["areaCode"] == area_code]
-        items.sort(key=lambda item: (item["createdAt"], item["id"]), reverse=True)
-        return deepcopy(items[:limit])
+        items = [
+            item for item in items
+            if _matches_list_filters(
+                item,
+                scheduled_from=scheduled_from,
+                scheduled_to=scheduled_to,
+                required_helpers=required_helpers,
+                max_distance_km=max_distance_km,
+                verification_status=verification_status,
+                blocked_requester_ids=blocked_requester_ids,
+            )
+        ]
+        items.sort(
+            key=lambda item: (_parse_timestamp(item["createdAt"]), item["id"]),
+            reverse=True,
+        )
+        if cursor is not None:
+            marker = self._items.get(cursor.request_id)
+            if marker is None or _parse_timestamp(marker["createdAt"]) != cursor.created_at:
+                raise InvalidCursor("cursor request does not exist")
+            items = [
+                item for item in items
+                if (_parse_timestamp(item["createdAt"]), item["id"])
+                < (cursor.created_at, cursor.request_id)
+            ]
+        return [_public_record(item) for item in items[:limit]]
 
     async def get(self, actor: CurrentUser, request_id: str) -> RequestRecord | None:
         del actor
         item = self._items.get(request_id)
-        return deepcopy(item) if item else None
+        return _public_record(item) if item else None
 
     async def create(self, actor: CurrentUser, values: dict[str, Any]) -> RequestRecord:
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -140,9 +284,10 @@ class MemoryRequestRepository:
             "acceptedHelpers": 0, "status": "draft", "version": 1,
             "warnings": [], "createdAt": now, "updatedAt": now,
             "expiresAt": None, "verificationRequired": False,
+            "_requesterVerificationStatus": actor.verification_status,
         }
         self._items[item["id"]] = item
-        return deepcopy(item)
+        return _public_record(item)
 
     async def update(self, actor: CurrentUser, request_id: str, expected_version: int,
                      changes: dict[str, Any]) -> RequestRecord | None:
@@ -153,7 +298,7 @@ class MemoryRequestRepository:
         item.update(deepcopy(changes))
         item["version"] += 1
         item["updatedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        return deepcopy(item)
+        return _public_record(item)
 
     async def cancel(
         self, actor: CurrentUser, request_id: str, expected_version: int
@@ -208,22 +353,57 @@ class PostgresRequestRepository:
                r.status, r.version, r.expires_at, r.verification_required,
                r.created_at, r.updated_at,
                app.auth_subject_of(r.requester_id) as requester_auth_subject,
+               app.verification_status_of(r.requester_id) as requester_verification_status,
                (select count(*) from matches m where m.request_id = r.id) as accepted_helpers
           from requests r
     """
 
     async def list(self, actor: CurrentUser, *, category: str | None,
-                   area_code: str | None, limit: int) -> list[RequestRecord]:
+                   area_code: str | None, limit: int,
+                   cursor: RequestCursor | None = None,
+                   scheduled_from: datetime | None = None,
+                   scheduled_to: datetime | None = None,
+                   required_helpers: int | None = None,
+                   max_distance_km: float | None = None,
+                   verification_status: str | None = None,
+                   blocked_requester_ids: Sequence[str] | None = None) -> list[RequestRecord]:
         async with actor_connection(actor) as conn:
+            blocked_requester_ids = list(blocked_requester_ids or ())
+            cursor_id = None
+            if cursor is not None:
+                try:
+                    cursor_id = uuid.UUID(cursor.request_id)
+                except ValueError as exc:
+                    raise InvalidCursor("cursor id is not a UUID") from exc
+                marker = await conn.fetchrow(
+                    "select created_at from requests where id = $1", cursor_id
+                )
+                if marker is None or _parse_timestamp(_iso(marker["created_at"])) != cursor.created_at:
+                    raise InvalidCursor("cursor request does not exist")
             rows = await conn.fetch(
                 self._SELECT + """
                  where r.status = 'published'
                    and ($1::text is null or r.category_id = $1)
                    and ($2::text is null or r.area_code = $2)
-                 order by r.created_at desc, r.id desc limit $3
-                """, category, area_code, limit,
+                   and ($3::timestamptz is null or r.scheduled_at >= $3::timestamptz)
+                   and ($4::timestamptz is null or r.scheduled_at <= $4::timestamptz)
+                   and ($5::integer is null or r.required_helpers = $5::integer)
+                   and ($6::double precision is null or 1.0 <= $6::double precision)
+                   and ($7::verification_status is null
+                        or app.verification_status_of(r.requester_id) = $7::verification_status)
+                   and not app.is_blocked_pair(r.requester_id, app.current_actor())
+                   and not (app.auth_subject_of(r.requester_id) = any($8::text[]))
+                   and ($9::timestamptz is null
+                        or (r.created_at, r.id) < ($9::timestamptz, $10::uuid))
+                 order by r.created_at desc, r.id desc limit $11
+                """, category, area_code,
+                 _normalise_datetime(scheduled_from) if scheduled_from else None,
+                 _normalise_datetime(scheduled_to) if scheduled_to else None,
+                 required_helpers, max_distance_km, verification_status,
+                 blocked_requester_ids,
+                 cursor.created_at if cursor else None, cursor_id, limit,
             )
-        return [_row_to_record(row) for row in rows]
+        return [_public_record(_row_to_record(row)) for row in rows]
 
     async def get(self, actor: CurrentUser, request_id: str) -> RequestRecord | None:
         try:
@@ -232,7 +412,7 @@ class PostgresRequestRepository:
             return None
         async with actor_connection(actor) as conn:
             row = await conn.fetchrow(self._SELECT + " where r.id = $1", parsed_id)
-        return _row_to_record(row) if row else None
+        return _public_record(_row_to_record(row)) if row else None
 
     async def create(self, actor: CurrentUser, values: dict[str, Any]) -> RequestRecord:
         async with actor_connection(actor) as conn:
@@ -248,8 +428,12 @@ class PostgresRequestRepository:
                 values["areaCode"], datetime.fromisoformat(values["scheduledAt"]),
                 values["estimatedMinutes"], values["requiredHelpers"],
             )
-        return _row_to_record({**dict(row), "requester_auth_subject": actor.user_id,
-                               "accepted_helpers": 0})
+        return _public_record(_row_to_record({
+            **dict(row),
+            "requester_auth_subject": actor.user_id,
+            "requester_verification_status": actor.verification_status,
+            "accepted_helpers": 0,
+        }))
 
     async def update(self, actor: CurrentUser, request_id: str, expected_version: int,
                      changes: dict[str, Any]) -> RequestRecord | None:
@@ -263,7 +447,7 @@ class PostgresRequestRepository:
             if updated is None:
                 return None
             row = await conn.fetchrow(self._SELECT + " where r.id = $1", uuid.UUID(request_id))
-        return _row_to_record(row)
+        return _public_record(_row_to_record(row))
 
     async def cancel(
         self, actor: CurrentUser, request_id: str, expected_version: int

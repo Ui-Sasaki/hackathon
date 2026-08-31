@@ -38,6 +38,8 @@ from .main import (
     UserSettingsUpdateInput,
     VerificationInput,
     VerificationResponse,
+    RecommendedRequestItem,
+    RecommendedRequestListResponse,
 )
 
 __all__ = [name for name in globals() if not name.startswith("_")]

@@ -45,6 +45,17 @@ $$;
 revoke all on function app.auth_subject_of(uuid) from public;
 grant execute on function app.auth_subject_of(uuid) to tetote_app;
 
+-- 一覧の本人確認状態フィルタに必要な最小限の公開ヘルパー。users の行自体は
+-- 本人以外へ公開せず、依頼者の状態だけを検索条件として評価できるようにする。
+create or replace function app.verification_status_of(p_user_id uuid)
+returns verification_status language sql stable security definer
+set search_path = public, pg_temp as $$
+    select verification_status from users where id = p_user_id;
+$$;
+
+revoke all on function app.verification_status_of(uuid) from public;
+grant execute on function app.verification_status_of(uuid) to tetote_app;
+
 -- ---------------------------------------------------------------------------
 -- テスト・開発専用のリセット補助（#4）。
 --

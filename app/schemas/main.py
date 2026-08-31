@@ -99,7 +99,6 @@ class StructuredRequestDraft(ContractModel):
     missingFields: list[MissingFieldCode] = Field(max_length=20)
     warnings: list[ShortExtractedText] = Field(max_length=20)
 
-
 class AppliedMasking(ContractModel):
     detections: list[MaskingDetection]
     ruleVersion: str
@@ -112,6 +111,14 @@ class StructureMetadata(ContractModel):
     processedAt: datetime
 
 
+class VoiceRequestData(ContractModel):
+    task: str
+    location: str | None = None
+    duration: str | None = None
+    deadline: str | None = None
+    notes: str | None = None
+
+
 class StructuredRequestResponse(StructuredRequestDraft):
     masking: AppliedMasking
     status: Literal["draft"]
@@ -119,6 +126,7 @@ class StructuredRequestResponse(StructuredRequestDraft):
     autoPublished: Literal[False]
     additionalQuestion: str | None = None
     metadata: StructureMetadata
+    request: VoiceRequestData = Field(description="音声入力画面との互換用依頼データ")
 
 
 class RequestInput(ContractModel):
@@ -162,7 +170,7 @@ class ListOrigin(ContractModel):
 
 class RequestListResponse(ContractModel):
     items: list[RequestResponse]
-    nextCursor: str | None = Field(description="次ページなしの場合null。現行実装は常にnull")
+    nextCursor: str | None = Field(description="次ページなしの場合null")
     origin: ListOrigin
 
 
@@ -421,3 +429,12 @@ class ResetResponse(ContractModel):
 class AuthInput(ContractModel):
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
     password: str = Field(min_length=8, max_length=128)
+
+class RecommendedRequestItem(ContractModel):
+    request: RequestResponse
+    score: int = Field(ge=0, le=100, description="推薦総合スコア(0-100)")
+    reason: str = Field(description="ユーザーに提示する推薦理由")
+
+class RecommendedRequestListResponse(ContractModel):
+    items: list[RecommendedRequestItem]
+    nextCursor: str | None = Field(description="次ページなしの場合null")

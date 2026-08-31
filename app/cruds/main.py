@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+import uuid
 from typing import Any, Awaitable, Callable
 from uuid import UUID, uuid4
 
@@ -23,7 +24,9 @@ from app.auth import (
     SUPERTOKENS_ENABLED, CurrentUser, configure_user_creator, configure_user_lookup,
     cors_headers, get_current_user,
 )
-from app.repositories.requests import RequestRepository, get_request_repository
+from app.repositories.requests import (
+    InvalidCursor, RequestRepository, decode_cursor, encode_cursor, get_request_repository,
+)
 from app.repositories.applications import (
     ApplicationRepository, get_application_repository,
 )
@@ -59,6 +62,7 @@ from app.schemas import (
     SavedRequestListResponse,
     StructureInput, StructuredRequestResponse, VerificationInput, VerificationResponse,
     UserSettingsResponse, UserSettingsUpdateInput,
+    RecommendedRequestListResponse,
 )
 
 
@@ -116,6 +120,7 @@ ERROR_MESSAGES = {
     "MATCH_NOT_FOUND": "マッチが見つかりません",
     "APPLICATION_NOT_FOUND": "応募が見つかりません",
     "REQUEST_STATE_CONFLICT": "依頼の状態が更新されているため処理できません",
+    "INVALID_CURSOR": "カーソルが無効です",
     "VALIDATION_ERROR": "入力内容を確認してください",
     "REGION_SELECTION_REQUIRED": "地域を選択してください",
     "INTERNAL_SERVER_ERROR": "サーバー内部でエラーが発生しました",
@@ -369,7 +374,6 @@ async def application_repository_dependency() -> ApplicationRepository:
     """Resolve the application repository without a test-time threadpool hop."""
     return get_application_repository()
 
-
 async def user_settings_repository_dependency() -> UserSettingsRepository:
     return get_user_settings_repository()
 
@@ -458,7 +462,7 @@ def reset_store() -> None:
             "emailVerified": True,
         },
         "usr_301": {
-            "id": "usr_301", "displayName": "鈴木 雪", "role": "requester",
+            "id": "usr_301", "displayName": "鈴木 雪", "role": "member",
             "status": "active", "emailVerified": True,
             "verificationStatus": "unverified", "areaCode": "AREA-001",
         },
@@ -694,6 +698,16 @@ async def structure_request(
     masking_metrics["submitted"] += 1
     return {
         **result,
+        "request": {
+            "task": masking["maskedText"],
+            "location": result.get("approximateArea"),
+            "duration": (
+                str(result["estimatedMinutes"])
+                if result.get("estimatedMinutes") is not None else None
+            ),
+            "deadline": result.get("scheduledAt"),
+            "notes": None,
+        },
         "masking": {
             "detections": masking["detections"],
             "ruleVersion": masking["ruleVersion"],
@@ -716,17 +730,171 @@ async def request_or_404(
 ) -> dict:
     return await require_request(repository, current_user, request_id)
 
+def calculate_recommendation_score(
+    request_item: dict[str, Any],
+    helper_profile: dict[str, Any],
+    distance_km_val: float | None,
+) -> tuple[int, str]:
+    """支援者と依頼の相性を100点満点で採点し、推薦理由を生成する"""
+    score = 0
+    reasons = []
 
-@app.get("/requests", response_model=RequestListResponse, tags=["Requests"], summary="公開依頼を検索", description="カテゴリ・概算地域で絞り込み、現在地または登録地域に近い順で返す。limit既定20、最大100。Repository内ではcreatedAt降順・ID降順。公開中のみを対象とし、ブロック関係の依頼は除外する。nextCursorは次ページがない場合nullで、現行実装は常にnull。", responses=api_errors(401, 422, 500))
+    # 1. 距離スコア (最大40点)
+    if distance_km_val is not None:
+        if distance_km_val <= 1.0:
+            score += 40
+            reasons.append("現在地からとても近い")
+        elif distance_km_val <= 3.0:
+            score += 30
+            reasons.append("現在地から近い")
+        elif distance_km_val <= 5.0:
+            score += 20
+    else:
+        # 位置情報が取れない場合は登録エリア一致を評価
+        if request_item.get("areaCode") == helper_profile.get("areaCode"):
+            score += 20
+            reasons.append("登録エリア内")
+
+    # 2. スキル・カテゴリ一致 (最大30点)
+    category = request_item.get("category", "")
+    skill_tags = helper_profile.get("skillTags", [])
+    if category and category in skill_tags:
+        score += 30
+        reasons.append(f"あなたの得意な「{category}」")
+
+    # 3. 信頼性・実績ボーナス (最大15点)
+    achievement_count = helper_profile.get("achievementCount", 0)
+    risk_level = request_item.get("riskLevel", "low")
+    if risk_level == "medium" and achievement_count >= 5:
+        score += 15
+        reasons.append("あなたの豊富な実績が活かせる")
+    elif risk_level == "low":
+        score += 10
+
+    # 4. 緊急度・時間スコア (最大15点)
+    try:
+        scheduled_at = datetime.fromisoformat(request_item["scheduledAt"].replace("Z", "+00:00"))
+        hours_until = (scheduled_at - datetime.now(timezone.utc)).total_seconds() / 3600
+        if 0 < hours_until <= 24:
+            score += 15
+            reasons.append("急募で助けを必要としている")
+        elif 0 < hours_until <= 48:
+            score += 10
+        else:
+            score += 5
+    except (KeyError, ValueError):
+        pass
+
+    # 推薦理由の自然言語化
+    if score >= 70 and len(reasons) >= 2:
+        reason_text = f"{reasons[0]}、{reasons[1]}おすすめの依頼です。"
+    elif reasons:
+        reason_text = f"{reasons[0]}依頼です。"
+    else:
+        # 新規ユーザー・条件不一致時のフォールバック
+        reason_text = "新着の支援募集です。"
+
+    return min(score, 100), reason_text
+
+@app.get("/requests/recommended", response_model=RecommendedRequestListResponse, tags=["Requests"], summary="パーソナライズされた依頼推薦", description="支援者のプロフィールに基づき、応募可能な依頼をスコアリングして推薦順に返す。")
+async def get_recommended_requests(
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+    consentGranted: bool = False,
+    locationFailure: str | None = Query(default=None, pattern="^(denied|timeout|unsupported|unavailable)$"),
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+):
+    # 1. ユーザー情報と位置情報の取得
+    helper_profile = users_store.get(current_user.user_id, {})
+    is_verified = helper_profile.get("verificationStatus") == "approved"
+
+    try:
+        location = LocationResolveInput(
+            consentGranted=consentGranted, latitude=latitude, longitude=longitude, failureReason=locationFailure
+        )
+    except ValidationError:
+        raise HTTPException(422, detail={"code": "VALIDATION_ERROR"}) from None
+
+    # 位置情報から距離計算の基準を取得
+    origin_area_code, _source = resolve_location(location, current_user)
+
+    # 2. ブロック関係の取得
+    blocked_requester_ids = sorted(
+        {second for first, second in blocks if first == current_user.user_id} |
+        {first for first, second in blocks if second == current_user.user_id}
+    )
+
+    # 3. 候補データの抽出（推薦母集団として多めに取得）
+    candidates = await repository.list(
+        current_user,
+        category=None,
+        area_code=None,
+        limit=100,
+        blocked_requester_ids=blocked_requester_ids
+    )
+
+    scored_items = []
+    for item in candidates:
+        # === 必須除外フィルター（完了要件の適用） ===
+        # 自分の依頼を除外
+        if item["requesterId"] == current_user.user_id:
+            continue
+        # 募集終了、停止、期限切れの除外 (公開中の 'published' 以外は弾く)
+        if item["status"] != "published":
+            continue
+        # 本人確認条件を満たさない依頼を除外（リスクMedium以上は確認済み必須とする業務ルール）
+        if item.get("riskLevel") == "medium" and not is_verified:
+            continue
+
+        # === スコアリングと推薦理由の生成 ===
+        dist_km = None
+        if latitude is not None and longitude is not None and item.get("areaCode") in REGIONS:
+            dist_km = distance_km(latitude, longitude, REGIONS[item["areaCode"]])
+
+        score, reason = calculate_recommendation_score(item, helper_profile, dist_km)
+
+        # 戻り値オブジェクトの構築
+        scored_items.append({
+            "request": item,
+            "score": score,
+            "reason": reason
+        })
+
+    # 4. ソートとページング
+    # スコアの降順、同点の場合は作成日時の新しい順に並び替え
+    scored_items.sort(key=lambda x: (x["score"], x["request"]["createdAt"]), reverse=True)
+
+    page = scored_items[:limit]
+    has_more = len(scored_items) > limit
+
+    # モックとしての簡易的な次ページ判定（実運用では末尾要素のスコアやIDをエンコードして使用）
+    next_cursor = "next_page_available" if has_more else None
+
+    return {
+        "items": page,
+        "nextCursor": next_cursor
+    }
+
+@app.get("/requests", response_model=RequestListResponse, tags=["Requests"], summary="公開依頼を検索", description="カテゴリ・日時・必要人数・概算距離・本人確認状態で絞り込み、カーソルページングで返す。現在地または登録地域による並び替え元もoriginで返す。", responses=api_errors(401, 422, 500))
 async def list_requests(
     category: str | None = None,
     areaCode: str | None = None,
+    scheduledFrom: datetime | None = None,
+    scheduledTo: datetime | None = None,
+    requiredHelpers: int | None = Query(default=None, ge=1, le=5),
+    maxDistanceKm: float | None = Query(default=None, ge=0),
+    verificationStatus: str | None = Query(
+        default=None, pattern="^(unverified|pending|approved|rejected|expired)$"
+    ),
     latitude: float | None = Query(default=None, ge=-90, le=90),
     longitude: float | None = Query(default=None, ge=-180, le=180),
     consentGranted: bool = False,
     locationFailure: str | None = Query(
         default=None, pattern="^(denied|timeout|unsupported|unavailable)$"
     ),
+    cursor: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
@@ -744,26 +912,55 @@ async def list_requests(
     except ValidationError:
         raise HTTPException(422, detail={"code": "VALIDATION_ERROR"}) from None
     origin_area_code, source = resolve_location(location, current_user, areaCode)
-    items = await repository.list(
-        current_user, category=category, area_code=areaCode, limit=limit,
+    try:
+        request_cursor = decode_cursor(cursor) if cursor is not None else None
+    except InvalidCursor as exc:
+        raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+    blocked_requester_ids = sorted(
+        {
+            second_user_id
+            for first_user_id, second_user_id in blocks
+            if first_user_id == current_user.user_id
+        }
+        | {
+            first_user_id
+            for first_user_id, second_user_id in blocks
+            if second_user_id == current_user.user_id
+        }
     )
     dismissed_ids = await dismissal_repository.list_ids(current_user)
-    items = [
-        item for item in items
-        if item["id"] not in dismissed_ids
-        and not is_blocked_pair(current_user.user_id, item["requesterId"])
-    ]
+    try:
+        items = await repository.list(
+            current_user,
+            category=category,
+            area_code=areaCode,
+            limit=limit + 1,
+            cursor=request_cursor,
+            scheduled_from=scheduledFrom,
+            scheduled_to=scheduledTo,
+            required_helpers=requiredHelpers,
+            max_distance_km=maxDistanceKm,
+            verification_status=verificationStatus,
+            blocked_requester_ids=blocked_requester_ids,
+        )
+    except InvalidCursor as exc:
+        raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+    items = [item for item in items if item["id"] not in dismissed_ids]
+    has_more = len(items) > limit
+    page = items[:limit]
+    cursor_item = page[-1] if page else None
     if latitude is not None and longitude is not None:
-        items.sort(
+        page.sort(
             key=lambda item: distance_km(
                 latitude, longitude, REGIONS.get(item["areaCode"], REGIONS["AREA-001"])
             )
         )
     else:
-        items.sort(key=lambda item: item["areaCode"] != origin_area_code)
+        page.sort(key=lambda item: item["areaCode"] != origin_area_code)
+    next_cursor = encode_cursor(cursor_item) if has_more and cursor_item else None
     return {
-        "items": items,
-        "nextCursor": None,
+        "items": page,
+        "nextCursor": next_cursor,
         "origin": {"areaCode": origin_area_code, "source": source},
     }
 

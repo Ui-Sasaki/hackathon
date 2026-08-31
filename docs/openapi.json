@@ -1352,6 +1352,61 @@
         "title": "ProfileUpdateInput",
         "type": "object"
       },
+      "RecommendedRequestItem": {
+        "properties": {
+          "reason": {
+            "description": "ユーザーに提示する推薦理由",
+            "title": "Reason",
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/RequestResponse"
+          },
+          "score": {
+            "description": "推薦総合スコア(0-100)",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "request",
+          "score",
+          "reason"
+        ],
+        "title": "RecommendedRequestItem",
+        "type": "object"
+      },
+      "RecommendedRequestListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendedRequestItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "次ページなしの場合null",
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "RecommendedRequestListResponse",
+        "type": "object"
+      },
       "ReportInput": {
         "properties": {
           "description": {
@@ -1575,7 +1630,7 @@
                 "type": "null"
               }
             ],
-            "description": "次ページなしの場合null。現行実装は常にnull",
+            "description": "次ページなしの場合null",
             "title": "Nextcursor"
           },
           "origin": {
@@ -2114,6 +2169,10 @@
             "title": "Missingfields",
             "type": "array"
           },
+          "request": {
+            "$ref": "#/components/schemas/VoiceRequestData",
+            "description": "音声入力画面との互換用依頼データ"
+          },
           "requiredHelpers": {
             "anyOf": [
               {
@@ -2200,7 +2259,8 @@
           "status",
           "requiresConfirmation",
           "autoPublished",
-          "metadata"
+          "metadata",
+          "request"
         ],
         "title": "StructuredRequestResponse",
         "type": "object"
@@ -2384,6 +2444,63 @@
           "createdAt"
         ],
         "title": "VerificationResponse",
+        "type": "object"
+      },
+      "VoiceRequestData": {
+        "properties": {
+          "deadline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "VoiceRequestData",
         "type": "object"
       }
     },
@@ -4322,7 +4439,7 @@
     },
     "/requests": {
       "get": {
-        "description": "カテゴリ・概算地域で絞り込み、現在地または登録地域に近い順で返す。limit既定20、最大100。Repository内ではcreatedAt降順・ID降順。公開中のみを対象とし、ブロック関係の依頼は除外する。nextCursorは次ページがない場合nullで、現行実装は常にnull。",
+        "description": "カテゴリ・日時・必要人数・概算距離・本人確認状態で絞り込み、カーソルページングで返す。現在地または登録地域による並び替え元もoriginで返す。",
         "operationId": "list_requests_requests_get",
         "parameters": [
           {
@@ -4355,6 +4472,92 @@
                 }
               ],
               "title": "Areacode"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scheduledFrom",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scheduledfrom"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scheduledTo",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scheduledto"
+            }
+          },
+          {
+            "in": "query",
+            "name": "requiredHelpers",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Requiredhelpers"
+            }
+          },
+          {
+            "in": "query",
+            "name": "maxDistanceKm",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Maxdistancekm"
+            }
+          },
+          {
+            "in": "query",
+            "name": "verificationStatus",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(unverified|pending|approved|rejected|expired)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Verificationstatus"
             }
           },
           {
@@ -4418,6 +4621,22 @@
                 }
               ],
               "title": "Locationfailure"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {
@@ -4649,6 +4868,120 @@
           }
         ],
         "summary": "LLM送信前のマスキング結果を確認",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/requests/recommended": {
+      "get": {
+        "description": "支援者のプロフィールに基づき、応募可能な依頼をスコアリングして推薦順に返す。",
+        "operationId": "get_recommended_requests_requests_recommended_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": -90,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Latitude"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 180,
+                  "minimum": -180,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Longitude"
+            }
+          },
+          {
+            "in": "query",
+            "name": "consentGranted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Consentgranted",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "locationFailure",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(denied|timeout|unsupported|unavailable)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Locationfailure"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendedRequestListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "パーソナライズされた依頼推薦",
         "tags": [
           "Requests"
         ]

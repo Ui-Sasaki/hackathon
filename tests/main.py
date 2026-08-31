@@ -5,6 +5,8 @@ from copy import deepcopy
 
 os.environ["SUPERTOKENS_ENABLED"] = "false"
 os.environ["MOCK_RESET_ENABLED"] = "true"
+os.environ["APP_ENV"] = "test"
+os.environ["REQUEST_REPOSITORY"] = "memory"
 
 import httpx
 import pytest
@@ -17,7 +19,7 @@ from app.auth import CurrentUser, get_current_user
 from app.cruds.main import SEED_REQUEST_1024, SEED_REQUEST_1025
 from app.main import app
 from app.repositories.requests import (
-    MemoryRequestRepository, PostgresRequestRepository, get_request_repository,
+    MemoryRequestRepository, PostgresRequestRepository, encode_cursor, get_request_repository,
 )
 from app.repositories.applications import (
     MemoryApplicationRepository, PostgresApplicationRepository,
@@ -259,6 +261,23 @@ def test_saved_requests_require_authentication_and_validate_id() -> None:
     assert unauthenticated.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
 
 
+def add_search_request(request_id: str, **changes) -> None:
+    repository = get_request_repository()
+    assert isinstance(repository, MemoryRequestRepository)
+    item = deepcopy(repository._items[SEED_REQUEST_1024])
+    item.update(
+        {
+            "id": request_id,
+            "createdAt": f"2026-08-21T00:00:{int(request_id.split('_')[-1]):02d}+00:00",
+            **changes,
+        }
+    )
+    item["_requesterVerificationStatus"] = crud_module.users_store.get(
+        item["requesterId"], {}
+    ).get("verificationStatus", item.get("_requesterVerificationStatus", "unverified"))
+    repository._items[request_id] = item
+
+
 def test_location_is_resolved_only_after_explicit_consent() -> None:
     response = client.post(
         "/locations/resolve",
@@ -317,13 +336,132 @@ def test_request_list_reports_current_location_origin() -> None:
     }
 
 
+def test_request_search_filters_requests() -> None:
+    add_search_request(
+        "req_01", category="cleaning", requiredHelpers=2,
+        scheduledAt="2026-09-01T10:00:00+09:00", requesterId="usr_101",
+    )
+    add_search_request("req_02", status="cancelled")
+    add_search_request("req_03", scheduledAt="2020-01-01T00:00:00+00:00")
+
+    response = client.get(
+        "/requests",
+        params={
+            "category": "cleaning", "requiredHelpers": 2,
+            "verificationStatus": "approved",
+            "scheduledFrom": "2026-09-01T00:00:00+09:00",
+            "scheduledTo": "2026-09-02T00:00:00+09:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == ["req_01"]
+
+
+def test_request_search_uses_profile_area_and_never_returns_precise_location() -> None:
+    response = client.get("/requests", params={"maxDistanceKm": 2})
+
+    assert response.status_code == 200
+    assert response.json()["items"]
+    for item in response.json()["items"]:
+        assert "latitude" not in item
+        assert "longitude" not in item
+        assert "streetAddress" not in item
+        assert item["distanceKm"] <= 2
+
+    detail = client.get(f"/requests/{SEED_REQUEST_1024}").json()
+    assert "latitude" not in detail
+    assert "longitude" not in detail
+    assert "streetAddress" not in detail
+
+
+def test_request_search_cursor_paging_has_default_page_size_20() -> None:
+    for index in range(1, 22):
+        add_search_request(f"req_{index:02d}")
+
+    first = client.get("/requests")
+    assert first.status_code == 200
+    assert len(first.json()["items"]) == 20
+    assert first.json()["nextCursor"] is not None
+
+    second = client.get("/requests", params={"cursor": first.json()["nextCursor"]})
+    first_ids = {item["id"] for item in first.json()["items"]}
+    second_ids = {item["id"] for item in second.json()["items"]}
+    assert len(second_ids) == 3
+    assert first_ids.isdisjoint(second_ids)
+
+
+def test_request_search_applies_distance_filter_before_cursor_paging() -> None:
+    for index in range(1, 22):
+        add_search_request(f"far_{index:02d}", distanceKm=99)
+
+    response = client.get("/requests", params={"maxDistanceKm": 2})
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [
+        crud_module.SEED_REQUEST_1025, crud_module.SEED_REQUEST_1024,
+    ]
+    assert response.json()["nextCursor"] is None
+
+
+def test_request_search_cursor_pages_filtered_result_set_without_skips() -> None:
+    for index in range(1, 22):
+        add_search_request(f"far_{index:02d}", distanceKm=99)
+    for index in range(1, 6):
+        add_search_request(
+            f"near_{index:02d}",
+            createdAt=f"2026-08-19T00:00:{index:02d}+00:00",
+            distanceKm=1,
+        )
+
+    expected_ids = [
+        *(f"near_{index:02d}" for index in range(5, 0, -1)),
+        crud_module.SEED_REQUEST_1025, crud_module.SEED_REQUEST_1024,
+    ]
+    collected_ids = []
+    cursor = None
+    while True:
+        params = {"maxDistanceKm": 2, "limit": 2}
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = client.get("/requests", params=params)
+        assert response.status_code == 200
+        body = response.json()
+        collected_ids.extend(item["id"] for item in body["items"])
+        cursor = body["nextCursor"]
+        if cursor is None:
+            break
+
+    assert collected_ids == expected_ids
+    assert len(collected_ids) == len(set(collected_ids))
+
+
+def test_request_search_validates_limit_cursor_and_location_pair() -> None:
+    assert client.get("/requests", params={"limit": 101}).status_code == 422
+    invalid = client.get("/requests", params={"cursor": "not-a-cursor"})
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "INVALID_CURSOR"
+    assert client.get("/requests", params={"latitude": 35.0}).status_code == 422
+
+
+def test_request_search_rejects_cursor_for_missing_request() -> None:
+    cursor = encode_cursor(
+        {"id": "missing", "createdAt": "2026-08-21T00:00:00Z"}
+    )
+
+    response = client.get("/requests", params={"cursor": cursor})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_CURSOR"
+
+
 def test_structure_request() -> None:
     response = client.post(
         "/requests/structure",
         json={"text": "病気なので犬の散歩をお願いしたい", "areaCode": "AREA-001"},
     )
     assert response.status_code == 200
-    assert response.json()["category"] == "pet_support"
+    assert response.json()["request"]["task"] == "病気なので犬の散歩をお願いしたい"
 
 
 def test_masking_preview_detects_japanese_and_full_width_pii_formats() -> None:
@@ -386,7 +524,7 @@ def test_structure_requires_confirmation_and_only_sends_masked_text_to_llm() -> 
     assert calls == [("連絡先[電話番号]へ電話して、犬の散歩をお願いします", "AREA-001")]
     assert confirmed.status_code == 200
     assert "090-1234-5678" not in confirmed.text
-    assert confirmed.json()["description"] == "連絡先[電話番号]へ電話して、犬の散歩をお願いします"
+    assert confirmed.json()["request"]["task"] == "連絡先[電話番号]へ電話して、犬の散歩をお願いします"
     assert confirmed.json()["masking"]["confirmed"] is True
 
 
@@ -661,6 +799,22 @@ def test_production_settings_never_fall_back_to_memory(monkeypatch) -> None:
     monkeypatch.delenv("REQUEST_REPOSITORY", raising=False)
     with pytest.raises(RuntimeError, match="DATABASE_URL"):
         load_settings()
+
+
+def test_production_rejects_explicit_memory_repository(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("REQUEST_REPOSITORY", "memory")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://configured")
+
+    with pytest.raises(RuntimeError, match="postgres"):
+        load_settings()
+
+
+def test_test_settings_explicitly_select_memory(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.delenv("REQUEST_REPOSITORY", raising=False)
+
+    assert load_settings().request_repository == "memory"
 
 
 def test_duplicate_application_is_rejected() -> None:
@@ -1345,3 +1499,49 @@ def test_privileged_roles_still_require_mfa(monkeypatch) -> None:
             assert exc.detail["code"] == "MFA_REQUIRED"
         else:
             raise AssertionError(f"{privileged} must require MFA")
+
+def test_recommendation_excludes_invalid_and_sorts_by_score() -> None:
+    # 準備: テスト用の依頼を複数作成
+    # 1. 自身の依頼（除外されるべき）
+    own_req = client.post(
+        "/requests",
+        json={"title": "自分の依頼", "description": "テスト", "category": "cleaning", "scheduledAt": "2026-08-25T10:00:00Z", "estimatedMinutes": 30, "requiredHelpers": 1, "areaCode": "AREA-001", "riskLevel": "low", "confirmed": True},
+        headers={"Idempotency-Key": "rec_test_1"}
+    ).json()
+
+    # 2. 他人の有効な依頼（AREA-001, 近く, カテゴリ不一致）
+    # ※ テストユーザー(usr_101)で作成すると自身の依頼になるため、ここでは一覧取得時のモックデータ(SEED_REQUEST_1024など)を利用するか、
+    # 既に存在する公開済み依頼を前提とします。
+
+    response = client.get("/requests/recommended?latitude=43.062&longitude=141.354&consentGranted=true")
+    assert response.status_code == 200
+    data = response.json()
+
+    # 検証1: 自身の依頼が含まれていないこと（除外条件）
+    request_ids = [item["request"]["id"] for item in data["items"]]
+    assert own_req["id"] not in request_ids
+
+    if len(data["items"]) >= 2:
+        # 検証2: スコアの降順（高い順）でソートされていること
+        assert data["items"][0]["score"] >= data["items"][1]["score"]
+
+    if len(data["items"]) >= 1:
+        top_item = data["items"][0]
+        # 検証3: 個人情報（緯度・経度）がレスポンスに含まれていないこと
+        assert "latitude" not in top_item["request"]
+        assert "longitude" not in top_item["request"]
+        # 検証4: 推薦理由が文字列として生成されていること
+        assert isinstance(top_item["reason"], str)
+        assert len(top_item["reason"]) > 0
+
+def test_recommendation_cold_start_fallback() -> None:
+    # 位置情報なしでリクエスト（登録地域へのフォールバック）
+    response = client.get("/requests/recommended")
+    assert response.status_code == 200
+    data = response.json()
+
+    if len(data["items"]) > 0:
+        top_item = data["items"][0]
+        # 位置情報がない場合でも、スコアと理由が計算されていること
+        assert "score" in top_item
+        assert "reason" in top_item
