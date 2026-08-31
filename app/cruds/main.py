@@ -832,7 +832,7 @@ async def get_recommended_requests(
 
     page = scored_items[:limit]
     has_more = len(scored_items) > limit
-    
+
     # モックとしての簡易的な次ページ判定（実運用では末尾要素のスコアやIDをエンコードして使用）
     next_cursor = "next_page_available" if has_more else None
 
