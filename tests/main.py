@@ -31,6 +31,10 @@ from app.repositories.request_dismissals import (
     MemoryRequestDismissalRepository, RequestDismissalRepository,
     get_request_dismissal_repository,
 )
+from app.repositories.saved_requests import (
+    MemorySavedRequestRepository, SavedRequestRepository,
+    get_saved_request_repository,
+)
 from app.settings import load_settings
 
 
@@ -201,6 +205,58 @@ def test_request_dismissal_repository_contract() -> None:
     assert required <= set(dir(MemoryRequestDismissalRepository))
     repository: RequestDismissalRepository = get_request_dismissal_repository()
     assert required <= set(dir(repository))
+
+
+def test_saved_requests_are_idempotent_and_scoped_to_user() -> None:
+    assert client.get("/saved-requests").json() == {"items": []}
+    for _ in range(2):
+        assert client.post(f"/saved-requests/{SEED_REQUEST_1024}").status_code == 204
+    assert [
+        item["id"] for item in client.get("/saved-requests").json()["items"]
+    ] == [SEED_REQUEST_1024]
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    assert client.get("/saved-requests").json() == {"items": []}
+
+
+def test_remove_saved_request_is_idempotent() -> None:
+    assert client.post(f"/saved-requests/{SEED_REQUEST_1024}").status_code == 204
+    for _ in range(2):
+        assert client.delete(f"/saved-requests/{SEED_REQUEST_1024}").status_code == 204
+    assert client.get("/saved-requests").json() == {"items": []}
+
+
+def test_saved_requests_hide_missing_blocked_and_cancelled_requests() -> None:
+    assert client.post("/saved-requests/missing").status_code == 404
+    assert client.post(f"/saved-requests/{SEED_REQUEST_1025}").status_code == 204
+    assert client.post(f"/users/usr_301/block", json={"blocked": True}).status_code == 201
+    assert client.get("/saved-requests").json() == {"items": []}
+
+    assert client.post(f"/users/usr_301/block", json={"blocked": False}).status_code == 201
+    repository = get_request_repository()
+    asyncio.run(repository.set_status(REQUESTER, SEED_REQUEST_1025, "cancelled"))
+    assert client.get("/saved-requests").json() == {"items": []}
+
+
+def test_saved_request_repository_contract() -> None:
+    required = {"list_ids", "save", "remove", "reset"}
+    assert required <= set(dir(MemorySavedRequestRepository))
+    repository: SavedRequestRepository = get_saved_request_repository()
+    assert required <= set(dir(repository))
+
+
+def test_saved_requests_require_authentication_and_validate_id() -> None:
+    invalid = client.post(f"/saved-requests/{'x' * 101}")
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    app.dependency_overrides.pop(get_current_user)
+    unauthenticated = client.get("/saved-requests")
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
 
 
 def test_location_is_resolved_only_after_explicit_consent() -> None:

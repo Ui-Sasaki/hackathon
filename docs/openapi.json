@@ -1918,6 +1918,22 @@
         "title": "ReviewResponse",
         "type": "object"
       },
+      "SavedRequestListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RequestResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SavedRequestListResponse",
+        "type": "object"
+      },
       "SelectionInput": {
         "additionalProperties": false,
         "properties": {
@@ -5617,6 +5633,277 @@
         "summary": "依頼を自分の一覧から非表示",
         "tags": [
           "Requests"
+        ]
+      }
+    },
+    "/saved-requests": {
+      "get": {
+        "description": "セッション本人が保存した公開中かつ閲覧可能な依頼だけを返す。",
+        "operationId": "list_saved_requests_saved_requests_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "保存した依頼を一覧",
+        "tags": [
+          "Saved requests"
+        ]
+      }
+    },
+    "/saved-requests/{request_id}": {
+      "delete": {
+        "description": "閲覧可能な公開依頼をセッション本人の保存一覧から冪等に削除する。",
+        "operationId": "remove_saved_request_saved_requests__request_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "依頼の保存を解除",
+        "tags": [
+          "Saved requests"
+        ]
+      },
+      "post": {
+        "description": "閲覧可能な公開依頼をセッション本人の保存一覧へ冪等に追加する。",
+        "operationId": "save_request_saved_requests__request_id__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "依頼を保存",
+        "tags": [
+          "Saved requests"
         ]
       }
     },

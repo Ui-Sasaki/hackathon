@@ -10,7 +10,7 @@ import re
 from typing import Any, Awaitable, Callable
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
@@ -30,6 +30,9 @@ from app.repositories.applications import (
 from app.repositories.structure_audits import structure_audit_repository
 from app.repositories.request_dismissals import (
     RequestDismissalRepository, get_request_dismissal_repository,
+)
+from app.repositories.saved_requests import (
+    SavedRequestRepository, get_saved_request_repository,
 )
 from app.repositories.user_settings import (
     UserSettingsRepository, get_user_settings_repository,
@@ -53,6 +56,7 @@ from app.schemas import (
     ProfileResponse, ProfileUpdateInput,
     ReportInput, ReportResponse, RequestInput, RequestListResponse, RequestResponse,
     RequestUpdateInput, ResetResponse, ReviewInput, ReviewResponse, SelectionInput,
+    SavedRequestListResponse,
     StructureInput, StructuredRequestResponse, VerificationInput, VerificationResponse,
     UserSettingsResponse, UserSettingsUpdateInput,
 )
@@ -374,6 +378,10 @@ async def request_dismissal_repository_dependency() -> RequestDismissalRepositor
     return get_request_dismissal_repository()
 
 
+async def saved_request_repository_dependency() -> SavedRequestRepository:
+    return get_saved_request_repository()
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -579,6 +587,9 @@ async def reset_mock(
     request_dismissal_repository: RequestDismissalRepository = Depends(
         request_dismissal_repository_dependency
     ),
+    saved_request_repository: SavedRequestRepository = Depends(
+        saved_request_repository_dependency
+    ),
 ):
     reset_store()
     await repository.reset()
@@ -586,6 +597,7 @@ async def reset_mock(
     await structure_audit_repository.reset()
     await user_settings_repository.reset()
     await request_dismissal_repository.reset()
+    await saved_request_repository.reset()
     return {"reset": True}
 
 
@@ -786,6 +798,65 @@ async def require_dismissible_request(
         or is_blocked_pair(current_user.user_id, item["requesterId"])
     ):
         raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
+
+
+async def require_public_request(
+    request_id: str, current_user: CurrentUser, repository: RequestRepository,
+) -> dict:
+    item = await request_or_404(repository, current_user, request_id)
+    if (
+        item["status"] != "published"
+        or is_blocked_pair(current_user.user_id, item["requesterId"])
+    ):
+        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
+    return item
+
+
+@app.get("/saved-requests", response_model=SavedRequestListResponse, tags=["Saved requests"], summary="保存した依頼を一覧", description="セッション本人が保存した公開中かつ閲覧可能な依頼だけを返す。", responses=api_errors(401, 500))
+async def list_saved_requests(
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    saved_repository: SavedRequestRepository = Depends(
+        saved_request_repository_dependency
+    ),
+):
+    items = []
+    for request_id in await saved_repository.list_ids(current_user):
+        item = await repository.get(current_user, request_id)
+        if (
+            item is not None
+            and item["status"] == "published"
+            and not is_blocked_pair(current_user.user_id, item["requesterId"])
+        ):
+            items.append(item)
+    items.sort(key=lambda item: (item["createdAt"], item["id"]), reverse=True)
+    return {"items": items}
+
+
+@app.post("/saved-requests/{request_id}", status_code=204, tags=["Saved requests"], summary="依頼を保存", description="閲覧可能な公開依頼をセッション本人の保存一覧へ冪等に追加する。", responses=api_errors(401, 404, 422, 500))
+async def save_request(
+    request_id: str = Path(min_length=1, max_length=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    saved_repository: SavedRequestRepository = Depends(
+        saved_request_repository_dependency
+    ),
+) -> None:
+    await require_public_request(request_id, current_user, repository)
+    await saved_repository.save(current_user, request_id)
+
+
+@app.delete("/saved-requests/{request_id}", status_code=204, tags=["Saved requests"], summary="依頼の保存を解除", description="閲覧可能な公開依頼をセッション本人の保存一覧から冪等に削除する。", responses=api_errors(401, 404, 422, 500))
+async def remove_saved_request(
+    request_id: str = Path(min_length=1, max_length=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    saved_repository: SavedRequestRepository = Depends(
+        saved_request_repository_dependency
+    ),
+) -> None:
+    await require_public_request(request_id, current_user, repository)
+    await saved_repository.remove(current_user, request_id)
 
 
 @app.post("/requests/{request_id}/dismiss", status_code=204, tags=["Requests"], summary="依頼を自分の一覧から非表示", description="セッション本人の非表示関係を冪等に保存する。他利用者の一覧には影響しない。", responses=api_errors(401, 404, 500))
