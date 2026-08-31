@@ -5,8 +5,8 @@ FastAPI実装と`tetote/`からFastAPIへのAPI接続を、1コミットずつ�
 ## 現在の進捗
 
 - 完了・コミット済み：01〜08（共通APIクライアント、anti-CSRF、共通エラー変換、概算地域APIまで）。
-- 実装・テスト済み／未コミット：09（マスキングプレビューAPI接続）、16（応募作成API接続）。レビュー後のコミット待ち。
-- 次の未着手項目：10（依頼構造化API接続）。
+- 応募・マッチ担当の完了・コミット済み：16〜20（17は16のコミットへ同梱、19はPostgres引き継ぎあり）。
+- 応募・マッチ担当の次の未着手項目：21（メッセージ一覧API接続）。
 - 2026-08-31検証：`tetote/`のテストは49件成功、バックエンドは80件成功。
 - TypeScript全体検査：`animated-icon.module.css`と`global.css`の既存型宣言不足により未完了。TODO 16の追加コードに起因するエラーは検出されていない。
 
@@ -306,49 +306,49 @@ FastAPI実装と`tetote/`からFastAPIへのAPI接続を、1コミットずつ�
 
 ## 応募とマッチ
 
-### 16. 応募作成API接続（実装・テスト済み、未コミット）
+### 16. 応募作成API接続（完了）
 
-想定コミット：`feat(applications): connect application creation API`
+コミット：`d6ae754 feat(applications): connect application creation API`
 
 - [X] `POST /requests/{id}/applications`へ応募理由と対応可能日時だけを送る。
 - [X] helper ID、応募日時、状態を送らない。
 - [X] 自己応募、重複、期限切れ、募集終了、本人確認不足を反映する。
 - [X] 接続テストを追加する。
-- [ ] 対象差分のレビュー後、コミットする。
+- [X] 対象差分のレビュー後、コミットする。
 
-### 17. 応募辞退API接続
+### 17. 応募辞退API接続（完了、TODO 16へ同梱）
 
-想定コミット：`feat(applications): connect application withdrawal API`
+コミット：`d6ae754 feat(applications): connect application creation API`
 
-- [ ] `POST /applications/{id}/withdraw`へ接続する。
-- [ ] 成功後に応募状態をサーバーレスポンスで更新する。
-- [ ] 403、404、409、重複辞退をテストする。
+- [X] `POST /applications/{id}/withdraw`へ接続する。
+- [X] 成功後に応募状態をサーバーレスポンスで更新する。
+- [X] 403、404、409、重複辞退をテストする。
 
-### 18. 応募者一覧API接続
+### 18. 応募者一覧API接続（完了）
 
-想定コミット：`feat(applications): connect applicant list API`
+コミット：`94f8dac feat(applications): connect applicant list API`
 
-- [ ] `GET /requests/{id}/applications`へ接続する。
-- [ ] 依頼所有者以外の403を扱う。
-- [ ] ブロックされた利用者をAPI結果に従って除外する。
-- [ ] loading、empty、errorをテストする。
+- [X] `GET /requests/{id}/applications`へ接続する。
+- [X] 依頼所有者以外の403を扱う。
+- [X] ブロックされた利用者をAPI結果に従って除外する。
+- [X] loading、empty、errorをテストする。
 
-### 19. 応募者選択API接続
+### 19. 応募者選択API接続（完了、Postgres引き継ぎあり）
 
-想定コミット：`feat(applications): connect applicant selection API`
+コミット：`1d048f1 feat(applications): connect applicant selection API`
 
-- [ ] `POST /applications/{id}/select`へ`expectedVersion`を送る。
-- [ ] 成功レスポンスのマッチIDとversionを保持する。
-- [ ] 403、404、409をテストする。
+- [X] `POST /applications/{id}/select`へ`expectedVersion`を送る。
+- [X] 成功レスポンスのマッチIDとversionを保持する。
+- [X] 403、404、409をテストする。
 
-### 20. マッチ詳細API接続
+### 20. マッチ詳細API接続（完了）
 
-想定コミット：`feat(matches): connect match detail API`
+コミット：`64bd39e feat(matches): connect match detail API`
 
-- [ ] `GET /matches/{id}`へ接続する。
-- [ ] 当事者以外の403と存在を伏せる404を扱う。
-- [ ] マッチ状態とversionを保持する。
-- [ ] 接続テストを追加する。
+- [X] `GET /matches/{id}`へ接続する。
+- [X] 当事者以外の403と存在を伏せる404を扱う。
+- [X] マッチ状態とversionを保持する。
+- [X] 接続テストを追加する。
 
 ## メッセージ
 
