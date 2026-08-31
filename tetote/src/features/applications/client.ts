@@ -1,5 +1,6 @@
 import { apiClient, type ApiClient } from "../../api/client";
 import { ApiError } from "../../api/errors";
+import type { Match } from "../matches/client";
 
 const applicationErrorMessages: Record<string, string> = {
   SELF_APPLICATION_NOT_ALLOWED: "自分の依頼には応募できません。",
@@ -111,21 +112,6 @@ export async function listApplicants(
     return { status: "error", requestId, items: [], error };
   }
 }
-
-export type Match = {
-  id: string;
-  requestId: string;
-  requesterId: string;
-  helperId: string;
-  status: "matched" | "in_progress" | "completion_pending" | "completed" | "disputed";
-  requesterConfirmed: boolean;
-  helperConfirmed: boolean;
-  matchedAt: string;
-  completedAt: string | null;
-  disputeReason: string | null;
-  disputedAt: string | null;
-  version: number;
-};
 
 const pendingSelections = new WeakMap<ApiClient, Map<string, Promise<Match>>>();
 

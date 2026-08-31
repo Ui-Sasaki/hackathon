@@ -867,6 +867,13 @@ async def select_application(
 async def get_match(match_id: str, current_user: CurrentUser = Depends(get_current_user)):
     match = match_or_404(match_id)
     ensure_match_participant(match, current_user.user_id)
+    other_user_id = (
+        match["helperId"]
+        if match["requesterId"] == current_user.user_id
+        else match["requesterId"]
+    )
+    if is_blocked_pair(current_user.user_id, other_user_id):
+        raise HTTPException(404, detail={"code": "MATCH_NOT_FOUND"})
     return match
 
 

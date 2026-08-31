@@ -1001,6 +1001,44 @@ def create_match() -> str:
     return response.json()["id"]
 
 
+def test_match_detail_is_available_only_to_participants() -> None:
+    match_id = create_match()
+    requester_response = client.get(f"/matches/{match_id}")
+    assert requester_response.status_code == 200
+    assert requester_response.json()["id"] == match_id
+    assert requester_response.json()["status"] == "matched"
+    assert requester_response.json()["version"] == 1
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    assert client.get(f"/matches/{match_id}").status_code == 200
+
+    async def outsider_user() -> CurrentUser:
+        return CurrentUser(
+            user_id="usr_outsider", role="member", status="active",
+            email_verified=True, verification_status="approved",
+        )
+
+    app.dependency_overrides[get_current_user] = outsider_user
+    forbidden = client.get(f"/matches/{match_id}")
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"]["code"] == "ROLE_FORBIDDEN"
+
+
+def test_match_detail_hides_missing_and_blocked_matches() -> None:
+    missing = client.get("/matches/missing")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "MATCH_NOT_FOUND"
+
+    match_id = create_match()
+    assert client.post(f"/users/{HELPER.user_id}/block", json={"blocked": True}).status_code == 201
+    blocked = client.get(f"/matches/{match_id}")
+    assert blocked.status_code == 404
+    assert blocked.json()["error"]["code"] == "MATCH_NOT_FOUND"
+
+
 def test_complete_match_needs_both_parties_and_tolerates_repeat() -> None:
     async def helper_user() -> CurrentUser:
         return HELPER
