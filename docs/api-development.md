@@ -54,6 +54,18 @@ OSの通知権限自体を付与・解除するものではない。
 合意後に追加する。`tetote/src/shared/SettingsScreen.tsx` は初回表示時にGETを行い、
 各操作をPATCHした成功レスポンスで表示状態を確定できる。
 
+### 依頼カードの非表示
+
+`POST /requests/{request_id}/dismiss` は認証済み本人の一覧から依頼を非表示にし、
+`DELETE /requests/{request_id}/dismiss` は非表示を解除する。どちらも冪等で成功時は
+204を返す。`GET /requests` は本人が非表示にした依頼だけを除外し、他利用者の一覧へ
+影響しない。存在しない依頼、公開中でない依頼、ブロック関係など存在を開示できない
+依頼への操作は404となる。
+
+現在はMemory Repositoryを使用する。Postgres実装、migration、RLSはSupabase担当との
+合意後に追加する。`tetote/src/context/RequestsContext.tsx` はスキップ操作の成功後に
+対象を画面状態から除外し、再取得後はAPI一覧を正本として表示できる。
+
 依頼CRUDはMemory/Postgres Repositoryに対応する。プロフィール、位置解決、応募、
 マッチ、チャット、完了、レビュー、AI実績、本人確認、通報、ブロックのAPI経路と
 状態・認可検査は実装済みだが、依頼以外の保存、AI生成、本人確認審査は開発用

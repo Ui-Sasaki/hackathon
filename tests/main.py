@@ -14,7 +14,7 @@ from starlette.requests import Request
 import app.auth as auth_module
 import app.cruds.main as crud_module
 from app.auth import CurrentUser, get_current_user
-from app.cruds.main import SEED_REQUEST_1024
+from app.cruds.main import SEED_REQUEST_1024, SEED_REQUEST_1025
 from app.main import app
 from app.repositories.requests import (
     MemoryRequestRepository, PostgresRequestRepository, get_request_repository,
@@ -26,6 +26,10 @@ from app.repositories.applications import (
 from app.repositories.user_settings import (
     MemoryUserSettingsRepository, UserSettingsRepository,
     get_user_settings_repository,
+)
+from app.repositories.request_dismissals import (
+    MemoryRequestDismissalRepository, RequestDismissalRepository,
+    get_request_dismissal_repository,
 )
 from app.settings import load_settings
 
@@ -157,6 +161,46 @@ def test_list_requests() -> None:
     response = client.get("/requests", params={"areaCode": "AREA-001"})
     assert response.status_code == 200
     assert len(response.json()["items"]) == 2
+
+
+def test_dismiss_request_is_idempotent_and_scoped_to_user() -> None:
+    for _ in range(2):
+        assert client.post(f"/requests/{SEED_REQUEST_1024}/dismiss").status_code == 204
+    requester_ids = {item["id"] for item in client.get("/requests").json()["items"]}
+    assert SEED_REQUEST_1024 not in requester_ids
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    helper_ids = {
+        item["id"]
+        for item in client.get("/requests", params={"areaCode": "AREA-001"}).json()["items"]
+    }
+    assert SEED_REQUEST_1024 in helper_ids
+
+
+def test_restore_dismissed_request_is_idempotent() -> None:
+    assert client.post(f"/requests/{SEED_REQUEST_1024}/dismiss").status_code == 204
+    for _ in range(2):
+        assert client.delete(f"/requests/{SEED_REQUEST_1024}/dismiss").status_code == 204
+    ids = {item["id"] for item in client.get("/requests").json()["items"]}
+    assert SEED_REQUEST_1024 in ids
+
+
+def test_dismiss_hides_unavailable_request_existence() -> None:
+    assert client.post("/requests/missing/dismiss").status_code == 404
+    assert client.post(f"/users/usr_301/block", json={"blocked": True}).status_code == 201
+    blocked = client.post(f"/requests/{SEED_REQUEST_1025}/dismiss")
+    assert blocked.status_code == 404
+    assert blocked.json()["error"]["code"] == "REQUEST_NOT_FOUND"
+
+
+def test_request_dismissal_repository_contract() -> None:
+    required = {"list_ids", "dismiss", "restore", "reset"}
+    assert required <= set(dir(MemoryRequestDismissalRepository))
+    repository: RequestDismissalRepository = get_request_dismissal_repository()
+    assert required <= set(dir(repository))
 
 
 def test_location_is_resolved_only_after_explicit_consent() -> None:

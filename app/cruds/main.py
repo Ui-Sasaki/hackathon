@@ -28,6 +28,9 @@ from app.repositories.applications import (
     ApplicationRepository, get_application_repository,
 )
 from app.repositories.structure_audits import structure_audit_repository
+from app.repositories.request_dismissals import (
+    RequestDismissalRepository, get_request_dismissal_repository,
+)
 from app.repositories.user_settings import (
     UserSettingsRepository, get_user_settings_repository,
 )
@@ -367,6 +370,10 @@ async def user_settings_repository_dependency() -> UserSettingsRepository:
     return get_user_settings_repository()
 
 
+async def request_dismissal_repository_dependency() -> RequestDismissalRepository:
+    return get_request_dismissal_repository()
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -569,12 +576,16 @@ async def reset_mock(
     user_settings_repository: UserSettingsRepository = Depends(
         user_settings_repository_dependency
     ),
+    request_dismissal_repository: RequestDismissalRepository = Depends(
+        request_dismissal_repository_dependency
+    ),
 ):
     reset_store()
     await repository.reset()
     await application_repository.reset()
     await structure_audit_repository.reset()
     await user_settings_repository.reset()
+    await request_dismissal_repository.reset()
     return {"reset": True}
 
 
@@ -707,6 +718,9 @@ async def list_requests(
     limit: int = Query(default=20, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
+    dismissal_repository: RequestDismissalRepository = Depends(
+        request_dismissal_repository_dependency
+    ),
 ):
     try:
         location = LocationResolveInput(
@@ -721,9 +735,11 @@ async def list_requests(
     items = await repository.list(
         current_user, category=category, area_code=areaCode, limit=limit,
     )
+    dismissed_ids = await dismissal_repository.list_ids(current_user)
     items = [
         item for item in items
-        if not is_blocked_pair(current_user.user_id, item["requesterId"])
+        if item["id"] not in dismissed_ids
+        and not is_blocked_pair(current_user.user_id, item["requesterId"])
     ]
     if latitude is not None and longitude is not None:
         items.sort(
@@ -759,6 +775,43 @@ async def create_request(
     })
     idempotency_store[cache_key] = item
     return item
+
+
+async def require_dismissible_request(
+    request_id: str, current_user: CurrentUser, repository: RequestRepository,
+) -> None:
+    item = await request_or_404(repository, current_user, request_id)
+    if (
+        item["status"] != "published"
+        or is_blocked_pair(current_user.user_id, item["requesterId"])
+    ):
+        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
+
+
+@app.post("/requests/{request_id}/dismiss", status_code=204, tags=["Requests"], summary="依頼を自分の一覧から非表示", description="セッション本人の非表示関係を冪等に保存する。他利用者の一覧には影響しない。", responses=api_errors(401, 404, 500))
+async def dismiss_request(
+    request_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    dismissal_repository: RequestDismissalRepository = Depends(
+        request_dismissal_repository_dependency
+    ),
+) -> None:
+    await require_dismissible_request(request_id, current_user, repository)
+    await dismissal_repository.dismiss(current_user, request_id)
+
+
+@app.delete("/requests/{request_id}/dismiss", status_code=204, tags=["Requests"], summary="依頼の非表示を解除", description="セッション本人の非表示関係を冪等に解除する。", responses=api_errors(401, 404, 500))
+async def restore_dismissed_request(
+    request_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    dismissal_repository: RequestDismissalRepository = Depends(
+        request_dismissal_repository_dependency
+    ),
+) -> None:
+    await require_dismissible_request(request_id, current_user, repository)
+    await dismissal_repository.restore(current_user, request_id)
 
 
 # #20: このエンドポイントは元々認証を要求せず、依頼の状態も検査していなかった。
