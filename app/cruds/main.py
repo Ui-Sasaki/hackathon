@@ -8,8 +8,11 @@ import math
 import os
 import re
 import uuid
+from google import genai
+from google.genai import types
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
+from pydantic import BaseModel, Field
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -47,6 +50,7 @@ from app.schemas import (
     ReportInput, ReportResponse, RequestInput, RequestListResponse, RequestResponse,
     RequestUpdateInput, ResetResponse, ReviewInput, ReviewResponse, SelectionInput,
     StructureInput, StructuredRequestResponse, VerificationInput, VerificationResponse,
+    RecommendedRequestListResponse,
 )
 
 
@@ -177,18 +181,69 @@ def mask_request_text(text: str) -> dict[str, Any]:
 async def default_structure_llm_client(
     masked_text: str, _area_code: str | None
 ) -> dict[str, Any]:
-    is_dog = "犬" in masked_text or "散歩" in masked_text
-    return {
-        "title": "犬の散歩をお願いしたい" if is_dog else "地域の手助けをお願いしたい",
-        "description": masked_text,
-        "category": "pet_support" if is_dog else "other",
-        "scheduledAt": "2026-08-19T17:00:00+09:00",
-        "estimatedMinutes": 30,
-        "requiredHelpers": 1,
-        "riskLevel": "medium" if is_dog else "low",
-        "missingFields": ["犬の大きさ"] if is_dog and "小型" not in masked_text else [],
-        "warnings": ["犬の性格とリードの状態を確認してください"] if is_dog else [],
+    api_key = os.environ.get("GEMINI_API_KEY")
+
+    # APIキーがない場合のフロントエンド開発用フェイクデータ
+    if not api_key:
+        is_complete = "時間" in masked_text and "場所" in masked_text
+        return {
+            "complete": is_complete,
+            "question": None if is_complete else "どこで、どのくらいの時間お願いしたいですか？",
+            "request": {
+                "task": masked_text,
+                "location": "板橋区" if "板橋" in masked_text else None,
+                "duration": None,
+                "deadline": None,
+                "notes": "これはAPIキー未設定時のモックデータです。"
+            }
+        }
+
+    client = genai.Client(api_key=api_key)
+
+    prompt = f"""
+以下の依頼テキストから必要な情報を抽出し、JSON形式で出力してください。
+
+【依頼テキスト】
+{masked_text}
+
+【判定ルール】
+1. task, location, duration, deadline の4つの基本情報がすべて読み取れるか確認してください。
+2. すべて揃っている場合は complete: true とし、question: null にしてください。
+3. 1つでも不足している場合は complete: false とし、不足情報をユーザーに自然な日本語で優しく尋ねる質問を question に設定してください。
+4. その他の補足情報や注意事項は notes にまとめてください。
+"""
+
+    # 出力形式を完全に固定するスキーマ定義
+    response_schema = {
+        "type": "OBJECT",
+        "properties": {
+            "complete": {"type": "BOOLEAN"},
+            "question": {"type": "STRING", "nullable": True},
+            "request": {
+                "type": "OBJECT",
+                "properties": {
+                    "task": {"type": "STRING", "nullable": True},
+                    "location": {"type": "STRING", "nullable": True},
+                    "duration": {"type": "STRING", "nullable": True},
+                    "deadline": {"type": "STRING", "nullable": True},
+                    "notes": {"type": "STRING", "nullable": True}
+                }
+            }
+        },
+        "required": ["complete", "question", "request"]
     }
+
+    response = await client.aio.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=response_schema,
+            temperature=0.0,
+        ),
+    )
+
+    return json.loads(response.text)
 
 
 StructureLLMClient = Callable[[str, str | None], Awaitable[dict[str, Any]]]
@@ -639,6 +694,152 @@ async def request_or_404(
 ) -> dict:
     return await require_request(repository, current_user, request_id)
 
+def calculate_recommendation_score(
+    request_item: dict[str, Any],
+    helper_profile: dict[str, Any],
+    distance_km_val: float | None,
+) -> tuple[int, str]:
+    """支援者と依頼の相性を100点満点で採点し、推薦理由を生成する"""
+    score = 0
+    reasons = []
+
+    # 1. 距離スコア (最大40点)
+    if distance_km_val is not None:
+        if distance_km_val <= 1.0:
+            score += 40
+            reasons.append("現在地からとても近い")
+        elif distance_km_val <= 3.0:
+            score += 30
+            reasons.append("現在地から近い")
+        elif distance_km_val <= 5.0:
+            score += 20
+    else:
+        # 位置情報が取れない場合は登録エリア一致を評価
+        if request_item.get("areaCode") == helper_profile.get("areaCode"):
+            score += 20
+            reasons.append("登録エリア内")
+
+    # 2. スキル・カテゴリ一致 (最大30点)
+    category = request_item.get("category", "")
+    skill_tags = helper_profile.get("skillTags", [])
+    if category and category in skill_tags:
+        score += 30
+        reasons.append(f"あなたの得意な「{category}」")
+
+    # 3. 信頼性・実績ボーナス (最大15点)
+    achievement_count = helper_profile.get("achievementCount", 0)
+    risk_level = request_item.get("riskLevel", "low")
+    if risk_level == "medium" and achievement_count >= 5:
+        score += 15
+        reasons.append("あなたの豊富な実績が活かせる")
+    elif risk_level == "low":
+        score += 10
+
+    # 4. 緊急度・時間スコア (最大15点)
+    try:
+        scheduled_at = datetime.fromisoformat(request_item["scheduledAt"].replace("Z", "+00:00"))
+        hours_until = (scheduled_at - datetime.now(timezone.utc)).total_seconds() / 3600
+        if 0 < hours_until <= 24:
+            score += 15
+            reasons.append("急募で助けを必要としている")
+        elif 0 < hours_until <= 48:
+            score += 10
+        else:
+            score += 5
+    except (KeyError, ValueError):
+        pass
+
+    # 推薦理由の自然言語化
+    if score >= 70 and len(reasons) >= 2:
+        reason_text = f"{reasons[0]}、{reasons[1]}おすすめの依頼です。"
+    elif reasons:
+        reason_text = f"{reasons[0]}依頼です。"
+    else:
+        # 新規ユーザー・条件不一致時のフォールバック
+        reason_text = "新着の支援募集です。"
+
+    return min(score, 100), reason_text
+
+@app.get("/requests/recommended", response_model=RecommendedRequestListResponse, tags=["Requests"], summary="パーソナライズされた依頼推薦", description="支援者のプロフィールに基づき、応募可能な依頼をスコアリングして推薦順に返す。")
+async def get_recommended_requests(
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+    consentGranted: bool = False,
+    locationFailure: str | None = Query(default=None, pattern="^(denied|timeout|unsupported|unavailable)$"),
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+):
+    # 1. ユーザー情報と位置情報の取得
+    helper_profile = users_store.get(current_user.user_id, {})
+    is_verified = helper_profile.get("verificationStatus") == "approved"
+
+    try:
+        location = LocationResolveInput(
+            consentGranted=consentGranted, latitude=latitude, longitude=longitude, failureReason=locationFailure
+        )
+    except ValidationError:
+        raise HTTPException(422, detail={"code": "VALIDATION_ERROR"}) from None
+
+    # 位置情報から距離計算の基準を取得
+    origin_area_code, _source = resolve_location(location, current_user)
+
+    # 2. ブロック関係の取得
+    blocked_requester_ids = sorted(
+        {second for first, second in blocks if first == current_user.user_id} |
+        {first for first, second in blocks if second == current_user.user_id}
+    )
+
+    # 3. 候補データの抽出（推薦母集団として多めに取得）
+    candidates = await repository.list(
+        current_user,
+        category=None,
+        area_code=None,
+        limit=100,
+        blocked_requester_ids=blocked_requester_ids
+    )
+
+    scored_items = []
+    for item in candidates:
+        # === 必須除外フィルター（完了要件の適用） ===
+        # 自分の依頼を除外
+        if item["requesterId"] == current_user.user_id:
+            continue
+        # 募集終了、停止、期限切れの除外 (公開中の 'published' 以外は弾く)
+        if item["status"] != "published":
+            continue
+        # 本人確認条件を満たさない依頼を除外（リスクMedium以上は確認済み必須とする業務ルール）
+        if item.get("riskLevel") == "medium" and not is_verified:
+            continue
+
+        # === スコアリングと推薦理由の生成 ===
+        dist_km = None
+        if latitude is not None and longitude is not None and item.get("areaCode") in REGIONS:
+            dist_km = distance_km(latitude, longitude, REGIONS[item["areaCode"]])
+
+        score, reason = calculate_recommendation_score(item, helper_profile, dist_km)
+
+        # 戻り値オブジェクトの構築
+        scored_items.append({
+            "request": item,
+            "score": score,
+            "reason": reason
+        })
+
+    # 4. ソートとページング
+    # スコアの降順、同点の場合は作成日時の新しい順に並び替え
+    scored_items.sort(key=lambda x: (x["score"], x["request"]["createdAt"]), reverse=True)
+
+    page = scored_items[:limit]
+    has_more = len(scored_items) > limit
+
+    # モックとしての簡易的な次ページ判定（実運用では末尾要素のスコアやIDをエンコードして使用）
+    next_cursor = "next_page_available" if has_more else None
+
+    return {
+        "items": page,
+        "nextCursor": next_cursor
+    }
 
 @app.get("/requests", response_model=RequestListResponse, tags=["Requests"], summary="公開依頼を検索", description="カテゴリ・日時・必要人数・概算距離・本人確認状態で絞り込み、カーソルページングで返す。現在地または登録地域による並び替え元もoriginで返す。", responses=api_errors(401, 422, 500))
 async def list_requests(

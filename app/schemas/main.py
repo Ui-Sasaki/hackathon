@@ -83,16 +83,21 @@ class AppliedMasking(ContractModel):
     confirmed: bool
 
 
+# フロントエンドの request オブジェクトに相当
+class VoiceRequestData(ContractModel):
+    task: str | None = Field(None, description="依頼内容")
+    location: str | None = Field(None, description="場所")
+    duration: str | None = Field(None, description="所要時間")
+    deadline: str | None = Field(None, description="期限・希望日時")
+    notes: str | None = Field(None, description="補足事項")
+
+# フロントエンドの VoiceRequestResponse に相当（+ マスキング情報）
 class StructuredRequestResponse(ContractModel):
-    title: str = Field(max_length=100)
-    description: str = Field(max_length=3000)
-    category: str = Field(max_length=100)
-    scheduledAt: datetime = Field(description="ISO 8601日時")
-    estimatedMinutes: int = Field(ge=10, le=240)
-    requiredHelpers: int = Field(ge=1, le=5)
-    riskLevel: Literal["low", "medium", "high", "prohibited"]
-    missingFields: list[str]
-    warnings: list[str]
+    complete: bool = Field(..., description="必要な情報が全て揃っているか")
+    question: str | None = Field(None, description="不足している情報について尋ねる質問文")
+    request: VoiceRequestData
+
+    # 既存のマスキング確認用フィールド
     masking: AppliedMasking
     requiresConfirmation: bool = True
 
@@ -343,3 +348,12 @@ class ResetResponse(ContractModel):
 class AuthInput(ContractModel):
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
     password: str = Field(min_length=8, max_length=128)
+
+class RecommendedRequestItem(ContractModel):
+    request: RequestResponse
+    score: int = Field(ge=0, le=100, description="推薦総合スコア(0-100)")
+    reason: str = Field(description="ユーザーに提示する推薦理由")
+
+class RecommendedRequestListResponse(ContractModel):
+    items: list[RecommendedRequestItem]
+    nextCursor: str | None = Field(description="次ページなしの場合null")

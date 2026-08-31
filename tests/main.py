@@ -312,7 +312,7 @@ def test_structure_request() -> None:
         json={"text": "病気なので犬の散歩をお願いしたい", "areaCode": "AREA-001"},
     )
     assert response.status_code == 200
-    assert response.json()["category"] == "pet_support"
+    assert response.json()["request"]["task"] == "病気なので犬の散歩をお願いしたい"
 
 
 def test_masking_preview_detects_japanese_and_full_width_pii_formats() -> None:
@@ -375,7 +375,7 @@ def test_structure_requires_confirmation_and_only_sends_masked_text_to_llm() -> 
     assert calls == [("連絡先[電話番号]へ電話して、犬の散歩をお願いします", "AREA-001")]
     assert confirmed.status_code == 200
     assert "090-1234-5678" not in confirmed.text
-    assert confirmed.json()["description"] == "連絡先[電話番号]へ電話して、犬の散歩をお願いします"
+    assert confirmed.json()["request"]["task"] == "連絡先[電話番号]へ電話して、犬の散歩をお願いします"
     assert confirmed.json()["masking"]["confirmed"] is True
 
 
@@ -1177,3 +1177,49 @@ def test_privileged_roles_still_require_mfa(monkeypatch) -> None:
             assert exc.detail["code"] == "MFA_REQUIRED"
         else:
             raise AssertionError(f"{privileged} must require MFA")
+
+def test_recommendation_excludes_invalid_and_sorts_by_score() -> None:
+    # 準備: テスト用の依頼を複数作成
+    # 1. 自身の依頼（除外されるべき）
+    own_req = client.post(
+        "/requests",
+        json={"title": "自分の依頼", "description": "テスト", "category": "cleaning", "scheduledAt": "2026-08-25T10:00:00Z", "estimatedMinutes": 30, "requiredHelpers": 1, "areaCode": "AREA-001", "riskLevel": "low", "confirmed": True},
+        headers={"Idempotency-Key": "rec_test_1"}
+    ).json()
+
+    # 2. 他人の有効な依頼（AREA-001, 近く, カテゴリ不一致）
+    # ※ テストユーザー(usr_101)で作成すると自身の依頼になるため、ここでは一覧取得時のモックデータ(SEED_REQUEST_1024など)を利用するか、
+    # 既に存在する公開済み依頼を前提とします。
+
+    response = client.get("/requests/recommended?latitude=43.062&longitude=141.354&consentGranted=true")
+    assert response.status_code == 200
+    data = response.json()
+
+    # 検証1: 自身の依頼が含まれていないこと（除外条件）
+    request_ids = [item["request"]["id"] for item in data["items"]]
+    assert own_req["id"] not in request_ids
+
+    if len(data["items"]) >= 2:
+        # 検証2: スコアの降順（高い順）でソートされていること
+        assert data["items"][0]["score"] >= data["items"][1]["score"]
+
+    if len(data["items"]) >= 1:
+        top_item = data["items"][0]
+        # 検証3: 個人情報（緯度・経度）がレスポンスに含まれていないこと
+        assert "latitude" not in top_item["request"]
+        assert "longitude" not in top_item["request"]
+        # 検証4: 推薦理由が文字列として生成されていること
+        assert isinstance(top_item["reason"], str)
+        assert len(top_item["reason"]) > 0
+
+def test_recommendation_cold_start_fallback() -> None:
+    # 位置情報なしでリクエスト（登録地域へのフォールバック）
+    response = client.get("/requests/recommended")
+    assert response.status_code == 200
+    data = response.json()
+
+    if len(data["items"]) > 0:
+        top_item = data["items"][0]
+        # 位置情報がない場合でも、スコアと理由が計算されていること
+        assert "score" in top_item
+        assert "reason" in top_item
