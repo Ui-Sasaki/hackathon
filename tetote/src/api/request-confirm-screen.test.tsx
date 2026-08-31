@@ -1,7 +1,7 @@
 import TestRenderer, { act, type ReactTestInstance } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import RequestConfirmScreen from "./request-confirm";
+import RequestConfirmScreen from "../app/help/request-confirm";
 
 const mocks = vi.hoisted(() => ({
   structure: vi.fn(),
@@ -36,8 +36,8 @@ vi.mock("expo-router", () => ({
   useRouter: () => ({ back: vi.fn() }),
 }));
 vi.mock("@expo/vector-icons", () => ({ Ionicons: () => null }));
-vi.mock("../../context/FontSizeContext", () => ({ useFontSize: () => ({ scale: 1 }) }));
-vi.mock("../../api/request-masking", () => {
+vi.mock("../context/FontSizeContext", () => ({ useFontSize: () => ({ scale: 1 }) }));
+vi.mock("./request-masking", () => {
   const preview = {
     maskedText: "電話番号[電話番号]を伏せて犬の散歩をお願いします",
     detections: [{ type: "phone", placeholder: "[電話番号]", count: 1 }],
@@ -57,8 +57,8 @@ vi.mock("../../api/request-masking", () => {
     canProceedAfterMasking: (state: { status?: string } | null) => state?.status === "confirmed",
   };
 });
-vi.mock("../../api/request-structuring", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../api/request-structuring")>();
+vi.mock("./request-structuring", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./request-structuring")>();
   return { ...actual, structureConfirmedRequest: mocks.structure };
 });
 
