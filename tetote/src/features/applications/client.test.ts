@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { ApiClient } from "../../api/client";
-import { ApiError } from "../../api/errors";
+import { ApiError, ApiNetworkError } from "../../api/errors";
 import {
   applicationErrorMessage,
+  applicantListLoadingState,
   createApplication,
+  listApplicants,
   withdrawalErrorMessage,
   withdrawApplication,
 } from "./client";
@@ -188,5 +190,107 @@ describe("TODO 17: application withdrawal API", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     resolveResponse?.(response(200, application));
     await expect(first).resolves.toEqual(application);
+  });
+});
+
+describe("TODO 18: applicant list API", () => {
+  const applicant = {
+    id: "application-1",
+    requestId: "request/with spaces",
+    helperId: "helper-from-session",
+    message: "対応できます",
+    availableAt: "2026-09-01T10:00:00+09:00",
+    status: "applied" as const,
+    createdAt: "2026-08-27T01:00:00Z",
+    updatedAt: null,
+    helper: {
+      id: "helper-from-session",
+      displayName: "応募者",
+      verificationStatus: "approved" as const,
+      universityVerified: true,
+      skillTags: ["犬の散歩"],
+      achievementCount: 3,
+    },
+  };
+
+  it("provides a loading state before the request starts", () => {
+    expect(applicantListLoadingState("request-1")).toEqual({
+      status: "loading",
+      requestId: "request-1",
+      items: [],
+      error: null,
+    });
+  });
+
+  it("loads the server-filtered applicants without adding client filters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response(200, { items: [applicant] }));
+    const client = new ApiClient({ baseUrl: "https://api.example.test", fetch: fetchMock });
+
+    await expect(listApplicants(applicant.requestId, client)).resolves.toEqual({
+      status: "ready",
+      requestId: applicant.requestId,
+      items: [applicant],
+      error: null,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.example.test/requests/request%2Fwith%20spaces/applications",
+    );
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("GET");
+  });
+
+  it("represents an empty API result explicitly", async () => {
+    const client = new ApiClient({
+      baseUrl: "https://api.example.test",
+      fetch: vi.fn().mockResolvedValue(response(200, { items: [] })),
+    });
+
+    await expect(listApplicants("request-1", client)).resolves.toEqual({
+      status: "empty",
+      requestId: "request-1",
+      items: [],
+      error: null,
+    });
+  });
+
+  it.each([
+    [403, "ROLE_FORBIDDEN"],
+    [404, "REQUEST_NOT_FOUND"],
+  ])("keeps status %i and code %s in retryable error state", async (status, code) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response(status, {
+        error: { code, message: "取得できません", details: {}, requestId: "trace-list" },
+      }))
+      .mockResolvedValueOnce(response(200, { items: [applicant] }));
+    const client = new ApiClient({ baseUrl: "https://api.example.test", fetch: fetchMock });
+
+    const failed = await listApplicants("request-1", client);
+    expect(failed).toMatchObject({
+      status: "error",
+      requestId: "request-1",
+      items: [],
+      error: { status, code, requestId: "trace-list" },
+    });
+    await expect(listApplicants("request-1", client)).resolves.toMatchObject({
+      status: "ready",
+      items: [applicant],
+    });
+  });
+
+  it("keeps a network failure in retryable error state", async () => {
+    const networkError = new TypeError("Failed to fetch");
+    const client = new ApiClient({
+      baseUrl: "https://api.example.test",
+      fetch: vi.fn().mockRejectedValue(networkError),
+    });
+
+    const failed = await listApplicants("request-1", client);
+    expect(failed).toMatchObject({
+      status: "error",
+      requestId: "request-1",
+      items: [],
+      error: { cause: networkError },
+    });
+    expect(failed.error).toBeInstanceOf(ApiNetworkError);
   });
 });

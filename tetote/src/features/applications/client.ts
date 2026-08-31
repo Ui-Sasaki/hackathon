@@ -55,6 +55,44 @@ export type Application = {
   updatedAt: string | null;
 };
 
+export type Applicant = Application & {
+  helper: {
+    id: string;
+    displayName: string;
+    verificationStatus: "unverified" | "pending" | "approved" | "rejected" | "expired";
+    universityVerified: boolean;
+    skillTags: string[];
+    achievementCount: number;
+  };
+};
+
+export type ApplicantListState =
+  | { status: "loading"; requestId: string; items: Applicant[]; error: null }
+  | { status: "ready"; requestId: string; items: Applicant[]; error: null }
+  | { status: "empty"; requestId: string; items: []; error: null }
+  | { status: "error"; requestId: string; items: []; error: unknown };
+
+export function applicantListLoadingState(requestId: string): ApplicantListState {
+  return { status: "loading", requestId, items: [], error: null };
+}
+
+export async function listApplicants(
+  requestId: string,
+  client: ApiClient = apiClient,
+): Promise<ApplicantListState> {
+  try {
+    const response = await client.get<{ items: Applicant[] }>(
+      `/requests/${encodeURIComponent(requestId)}/applications`,
+    );
+    if (response.items.length === 0) {
+      return { status: "empty", requestId, items: [], error: null };
+    }
+    return { status: "ready", requestId, items: response.items, error: null };
+  } catch (error) {
+    return { status: "error", requestId, items: [], error };
+  }
+}
+
 export function createApplication(
   requestId: string,
   input: CreateApplicationInput,
