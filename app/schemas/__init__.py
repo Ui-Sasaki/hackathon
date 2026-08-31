@@ -33,6 +33,8 @@ from .main import (
     StructureInput,
     StructuredRequestDraft,
     StructuredRequestResponse,
+    UserSettingsResponse,
+    UserSettingsUpdateInput,
     VerificationInput,
     VerificationResponse,
 )

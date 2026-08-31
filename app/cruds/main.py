@@ -28,6 +28,9 @@ from app.repositories.applications import (
     ApplicationRepository, get_application_repository,
 )
 from app.repositories.structure_audits import structure_audit_repository
+from app.repositories.user_settings import (
+    UserSettingsRepository, get_user_settings_repository,
+)
 from app.services.applications import (
     create_application as create_application_service,
     select_application as select_application_service,
@@ -48,6 +51,7 @@ from app.schemas import (
     ReportInput, ReportResponse, RequestInput, RequestListResponse, RequestResponse,
     RequestUpdateInput, ResetResponse, ReviewInput, ReviewResponse, SelectionInput,
     StructureInput, StructuredRequestResponse, VerificationInput, VerificationResponse,
+    UserSettingsResponse, UserSettingsUpdateInput,
 )
 
 
@@ -359,6 +363,10 @@ async def application_repository_dependency() -> ApplicationRepository:
     return get_application_repository()
 
 
+async def user_settings_repository_dependency() -> UserSettingsRepository:
+    return get_user_settings_repository()
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -558,11 +566,15 @@ async def reset_mock(
     application_repository: ApplicationRepository = Depends(
         application_repository_dependency
     ),
+    user_settings_repository: UserSettingsRepository = Depends(
+        user_settings_repository_dependency
+    ),
 ):
     reset_store()
     await repository.reset()
     await application_repository.reset()
     await structure_audit_repository.reset()
+    await user_settings_repository.reset()
     return {"reset": True}
 
 
@@ -590,6 +602,26 @@ async def update_profile(
     profile.update(changes)
     profile["updatedAt"] = now_iso()
     return profile
+
+
+@app.get("/settings", response_model=UserSettingsResponse, tags=["Settings"], summary="自分の利用者設定を取得", description="Cookieセッション本人の通知、位置情報利用、文字サイズ設定だけを返す。通知設定はブラウザ・OSの通知権限を変更しない。", responses=api_errors(401, 500))
+async def get_user_settings(
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: UserSettingsRepository = Depends(user_settings_repository_dependency),
+):
+    return await repository.get(current_user)
+
+
+@app.patch("/settings", response_model=UserSettingsResponse, tags=["Settings"], summary="自分の利用者設定を部分更新", description="指定した項目だけを更新する。locationEnabled=falseの場合、クライアントはブラウザ位置情報の取得を開始しない。notificationsEnabledはアプリ内の希望設定であり、ブラウザ・OS権限とは別に扱う。", responses=api_errors(401, 422, 500))
+async def update_user_settings(
+    body: UserSettingsUpdateInput,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: UserSettingsRepository = Depends(user_settings_repository_dependency),
+):
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(422, detail={"code": "NO_CHANGES"})
+    return await repository.update(current_user, changes)
 
 
 @app.post("/locations/resolve", response_model=LocationResolveResponse, tags=["Locations"], summary="現在地を概算地域へ変換", description="同意済み座標を概算地域へ変換する。座標は保存も返却もしない。取得失敗時は登録地域へフォールバックする。", responses=api_errors(401, 422, 500))

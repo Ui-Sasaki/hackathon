@@ -42,6 +42,18 @@ SDKが設定する `anti-csrf` ヘッダーも必要である。`userId`、`requ
 
 ## 実装状況
 
+### 利用者設定
+
+`GET /settings` と `PATCH /settings` は、認証済み本人の `notificationsEnabled`、
+`locationEnabled`、`fontSize`（`small`、`medium`、`large`）を取得・部分更新する。
+未指定項目は維持される。`locationEnabled: false` の間、画面はブラウザ位置情報の
+取得を開始しない。`notificationsEnabled` はアプリ内の通知希望であり、ブラウザや
+OSの通知権限自体を付与・解除するものではない。
+
+現在はMemory Repositoryを使用する。Postgres実装、migration、RLSはSupabase担当との
+合意後に追加する。`tetote/src/shared/SettingsScreen.tsx` は初回表示時にGETを行い、
+各操作をPATCHした成功レスポンスで表示状態を確定できる。
+
 依頼CRUDはMemory/Postgres Repositoryに対応する。プロフィール、位置解決、応募、
 マッチ、チャット、完了、レビュー、AI実績、本人確認、通報、ブロックのAPI経路と
 状態・認可検査は実装済みだが、依頼以外の保存、AI生成、本人確認審査は開発用

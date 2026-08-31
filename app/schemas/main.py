@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 LocationFailure = Literal["denied", "timeout", "unsupported", "unavailable"]
 RequestStatus = Literal["draft", "pending_review", "published", "matching", "matched", "in_progress", "completion_pending", "completed", "rejected", "cancelled", "expired", "suspended", "disputed"]
@@ -225,6 +225,19 @@ class ProfileResponse(ContractModel):
     message: str | None = None
     status: Literal["active", "suspended"]
     updatedAt: datetime | None = None
+
+
+class UserSettingsUpdateInput(ContractModel):
+    model_config = ConfigDict(extra="forbid")
+    notificationsEnabled: StrictBool | None = None
+    locationEnabled: StrictBool | None = None
+    fontSize: Literal["small", "medium", "large"] | None = None
+
+
+class UserSettingsResponse(ContractModel):
+    notificationsEnabled: bool
+    locationEnabled: bool
+    fontSize: Literal["small", "medium", "large"]
 
 
 class ApplicationInput(ContractModel):

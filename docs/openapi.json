@@ -807,6 +807,11 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
           }
         },
         "required": [
@@ -818,7 +823,8 @@
           "requesterConfirmed",
           "helperConfirmed",
           "matchedAt",
-          "completedAt"
+          "completedAt",
+          "version"
         ],
         "title": "MatchResponse",
         "type": "object"
@@ -1913,19 +1919,15 @@
         "type": "object"
       },
       "SelectionInput": {
+        "additionalProperties": false,
         "properties": {
           "expectedVersion": {
             "minimum": 1.0,
             "title": "Expectedversion",
             "type": "integer"
-          },
-          "requestId": {
-            "title": "Requestid",
-            "type": "string"
           }
         },
         "required": [
-          "requestId",
           "expectedVersion"
         ],
         "title": "SelectionInput",
@@ -2185,6 +2187,79 @@
           "metadata"
         ],
         "title": "StructuredRequestResponse",
+        "type": "object"
+      },
+      "UserSettingsResponse": {
+        "properties": {
+          "fontSize": {
+            "enum": [
+              "small",
+              "medium",
+              "large"
+            ],
+            "title": "Fontsize",
+            "type": "string"
+          },
+          "locationEnabled": {
+            "title": "Locationenabled",
+            "type": "boolean"
+          },
+          "notificationsEnabled": {
+            "title": "Notificationsenabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notificationsEnabled",
+          "locationEnabled",
+          "fontSize"
+        ],
+        "title": "UserSettingsResponse",
+        "type": "object"
+      },
+      "UserSettingsUpdateInput": {
+        "additionalProperties": false,
+        "properties": {
+          "fontSize": {
+            "anyOf": [
+              {
+                "enum": [
+                  "small",
+                  "medium",
+                  "large"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fontsize"
+          },
+          "locationEnabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locationenabled"
+          },
+          "notificationsEnabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notificationsenabled"
+          }
+        },
+        "title": "UserSettingsUpdateInput",
         "type": "object"
       },
       "ValidationError": {
@@ -5354,6 +5429,158 @@
         "summary": "公開依頼へ応募",
         "tags": [
           "Applications"
+        ]
+      }
+    },
+    "/settings": {
+      "get": {
+        "description": "Cookieセッション本人の通知、位置情報利用、文字サイズ設定だけを返す。通知設定はブラウザ・OSの通知権限を変更しない。",
+        "operationId": "get_user_settings_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "自分の利用者設定を取得",
+        "tags": [
+          "Settings"
+        ]
+      },
+      "patch": {
+        "description": "指定した項目だけを更新する。locationEnabled=falseの場合、クライアントはブラウザ位置情報の取得を開始しない。notificationsEnabledはアプリ内の希望設定であり、ブラウザ・OS権限とは別に扱う。",
+        "operationId": "update_user_settings_settings_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserSettingsUpdateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "自分の利用者設定を部分更新",
+        "tags": [
+          "Settings"
         ]
       }
     },

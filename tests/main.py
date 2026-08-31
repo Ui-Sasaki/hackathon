@@ -23,6 +23,10 @@ from app.repositories.applications import (
     MemoryApplicationRepository, PostgresApplicationRepository,
     get_application_repository,
 )
+from app.repositories.user_settings import (
+    MemoryUserSettingsRepository, UserSettingsRepository,
+    get_user_settings_repository,
+)
 from app.settings import load_settings
 
 
@@ -102,6 +106,51 @@ def test_health() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_user_settings_defaults_and_partial_update_are_scoped_to_user() -> None:
+    assert client.get("/settings").json() == {
+        "notificationsEnabled": True,
+        "locationEnabled": True,
+        "fontSize": "medium",
+    }
+    updated = client.patch("/settings", json={"fontSize": "large"})
+    assert updated.status_code == 200
+    assert updated.json() == {
+        "notificationsEnabled": True,
+        "locationEnabled": True,
+        "fontSize": "large",
+    }
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    assert client.get("/settings").json()["fontSize"] == "medium"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"fontSize": "extra-large"}, {"locationEnabled": "yes"}, {"unknown": True}],
+)
+def test_user_settings_reject_invalid_updates(payload: dict) -> None:
+    response = client.patch("/settings", json=payload)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] in {"NO_CHANGES", "VALIDATION_ERROR"}
+
+
+def test_user_settings_require_authentication() -> None:
+    app.dependency_overrides.pop(get_current_user)
+    response = client.get("/settings")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
+
+
+def test_user_settings_repository_contract() -> None:
+    required: set[str] = {"get", "update", "reset"}
+    assert required <= set(dir(MemoryUserSettingsRepository))
+    repository: UserSettingsRepository = get_user_settings_repository()
+    assert required <= set(dir(repository))
 
 
 def test_list_requests() -> None:
