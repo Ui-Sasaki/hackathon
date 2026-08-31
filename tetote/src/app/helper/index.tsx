@@ -686,6 +686,15 @@ const swipeLeft =
                             </Pressable>
 
                             <Pressable
+                              onPress={() =>
+                                router.push({
+                                  pathname: "/helper/request",
+                                  params: {
+                                    requestId: String(request.id),
+                                    title: request.title,
+                                  },
+                                })
+                              }
                               style={({
                                 pressed,
                               }) => [

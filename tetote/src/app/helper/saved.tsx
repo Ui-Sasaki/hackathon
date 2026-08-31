@@ -108,6 +108,15 @@ export default function SavedScreen() {
                     </View>
 
                     <Pressable
+                      onPress={() =>
+                        router.push({
+                          pathname: "/helper/request",
+                          params: {
+                            requestId: String(request.id),
+                            title: request.title,
+                          },
+                        })
+                      }
                       style={({ pressed }) => [
                         styles.acceptButton,
                         pressed && styles.pressed,
