@@ -12,8 +12,8 @@ FastAPI実装と`tetote/`からFastAPIへのAPI接続を、1コミットずつ�
 
 ## 共通ルール
 
-- [x] 作業前に`git status --short`で既存変更を確認する。
-- [x] 既存の未コミット変更を上書きしない。
+- [X] 作業前に`git status --short`で既存変更を確認する。
+- [X] 既存の未コミット変更を上書きしない。
 - [ ] 各項目の実装後、対象差分だけを提示してレビューを待つ。
 - [ ] 承認後に対象差分だけをコミットする。
 - [ ] 認証・認可、入力検証、個人情報、秘密情報、状態遷移への影響を確認する。
@@ -150,41 +150,41 @@ FastAPI実装と`tetote/`からFastAPIへのAPI接続を、1コミットずつ�
 
 コミット：`c9ac036 fix(auth): restore authenticated user resolution`
 
-- [x] DBレコードから`CurrentUser`を生成する。
-- [x] 開発用モック認証を復旧する。
-- [x] 未登録・利用停止ユーザーを403で拒否する。
-- [x] メール確認、本人確認、MFA状態を反映する。
-- [x] 認証テストを成功させる。
+- [X] DBレコードから`CurrentUser`を生成する。
+- [X] 開発用モック認証を復旧する。
+- [X] 未登録・利用停止ユーザーを403で拒否する。
+- [X] メール確認、本人確認、MFA状態を反映する。
+- [X] 認証テストを成功させる。
 
 ### 02. 高危険度通報による依頼停止
 
 コミット：`b317543 fix(reports): suspend requests reported as high risk`
 
-- [x] UUID参照エラーを修正する。
-- [x] 通報者をセッションから決定する。
-- [x] 高危険度依頼を`suspended`へ遷移させる。
-- [x] 通報と監査イベントをテストする。
+- [X] UUID参照エラーを修正する。
+- [X] 通報者をセッションから決定する。
+- [X] 高危険度依頼を`suspended`へ遷移させる。
+- [X] 通報と監査イベントをテストする。
 
 ### 03. 検証済み依頼構造化Service
 
 コミット：`ce1db84 feat(requests): add validated request structuring service`
 
-- [x] Provider、応答検証、監査Repositoryを分離する。
-- [x] タイムアウトと最大2回の再試行を実装する。
-- [x] JSON SchemaとPydanticで検証する。
-- [x] 本文・個人情報を監査Repositoryへ保存しない。
-- [x] 自動公開せず、追加質問を1問だけ返す。
-- [x] 関連テストを成功させる。
+- [X] Provider、応答検証、監査Repositoryを分離する。
+- [X] タイムアウトと最大2回の再試行を実装する。
+- [X] JSON SchemaとPydanticで検証する。
+- [X] 本文・個人情報を監査Repositoryへ保存しない。
+- [X] 自動公開せず、追加質問を1問だけ返す。
+- [X] 関連テストを成功させる。
 
 ### 04. プロフィールAPI接続
 
 コミット：`064bdd4 feat(frontend): persist editable onboarding profile fields`
 
-- [x] オンボーディングと共通プロフィールをFastAPIへ接続する。
-- [x] API連携済みフィールドだけを送信する。
-- [x] 認証・入力検証・通信エラーを分類する。
-- [x] loading・saving・error状態を反映する。
-- [x] 接続テストを成功させる。
+- [X] オンボーディングと共通プロフィールをFastAPIへ接続する。
+- [X] API連携済みフィールドだけを送信する。
+- [X] 認証・入力検証・通信エラーを分類する。
+- [X] loading・saving・error状態を反映する。
+- [X] 接続テストを成功させる。
 
 ## 共通接続基盤
 
@@ -192,32 +192,32 @@ FastAPI実装と`tetote/`からFastAPIへのAPI接続を、1コミットずつ�
 
 コミット：`7d7c52c feat(api-client): add FastAPI client foundation`
 
-- [x] `EXPO_PUBLIC_API_URL`からベースURLを取得する。
-- [x] Cookieセッションを全リクエストへ適用する。
-- [x] JSONの送受信と共通ヘッダーを実装する。
-- [x] タイムアウトとネットワークエラーを型で表現する。
-- [x] ユーザーID、ロール、actor ID、送信日時を自動付与しない。
-- [x] APIクライアント単体テストを追加する。
-- [x] `npm test -- --run`を成功させる。
+- [X] `EXPO_PUBLIC_API_URL`からベースURLを取得する。
+- [X] Cookieセッションを全リクエストへ適用する。
+- [X] JSONの送受信と共通ヘッダーを実装する。
+- [X] タイムアウトとネットワークエラーを型で表現する。
+- [X] ユーザーID、ロール、actor ID、送信日時を自動付与しない。
+- [X] APIクライアント単体テストを追加する。
+- [X] `npm test -- --run`を成功させる。
 
 ### 06. anti-CSRFと更新リクエスト
 
 コミット：`dcaa2f3 feat(api-client): support authenticated mutations`
 
-- [x] SuperTokens SDKのanti-CSRF処理を更新リクエストへ適用する。
-- [x] Cookieやトークンをログへ出さない。
-- [x] GETと更新系の認証動作をテストする。
-- [x] セッション期限切れを認証エラーへ変換する。
+- [X] SuperTokens SDKのanti-CSRF処理を更新リクエストへ適用する。
+- [X] Cookieやトークンをログへ出さない。
+- [X] GETと更新系の認証動作をテストする。
+- [X] セッション期限切れを認証エラーへ変換する。
 
 ### 07. APIエラーの共通変換
 
 コミット：`707f822 feat(api-client): map FastAPI errors`
 
-- [x] 共通エラー形式を型定義する。
-- [x] 401、403、404、409、422、500を区別する。
-- [x] `error.code`、`details`、`requestId`を保持する。
-- [x] 非JSON応答や不正なエラー応答を安全に扱う。
-- [x] エラー変換の単体テストを追加する。
+- [X] 共通エラー形式を型定義する。
+- [X] 401、403、404、409、422、500を区別する。
+- [X] `error.code`、`details`、`requestId`を保持する。
+- [X] 非JSON応答や不正なエラー応答を安全に扱う。
+- [X] エラー変換の単体テストを追加する。
 
 ## 地域と依頼
 
@@ -225,21 +225,25 @@ FastAPI実装と`tetote/`からFastAPIへのAPI接続を、1コミットずつ�
 
 コミット：`5877125 feat(location): connect location resolution API`
 
-- [x] `POST /locations/resolve`へ緯度経度または登録地域を送る。
-- [x] 取得失敗時は登録地域へフォールバックする。
-- [x] 登録地域もない場合のAPIエラーを状態へ反映する。
-- [x] 正確な緯度経度を永続化・ログ出力・公開表示しない。
-- [x] 成功、拒否、失敗の接続テストを追加する。
+- [X] `POST /locations/resolve`へ緯度経度または登録地域を送る。
+- [X] 取得失敗時は登録地域へフォールバックする。
+- [X] 登録地域もない場合のAPIエラーを状態へ反映する。
+- [X] 正確な緯度経度を永続化・ログ出力・公開表示しない。
+- [X] 成功、拒否、失敗の接続テストを追加する。
+
+
+
+
 
 ### 09. マスキングプレビューAPI接続（実装・テスト済み、未コミット）
 
 想定コミット：`feat(requests): connect masking preview API`
 
-- [x] `POST /requests/masking-preview`へ本文だけを送る。
-- [x] マスキング後本文、検出種別、ルール版を保持する。
-- [x] 未確認状態では構造化・公開へ進めない。
-- [x] 401、422、通信失敗を状態へ反映する。
-- [x] 接続テストを追加する。
+- [X] `POST /requests/masking-preview`へ本文だけを送る。
+- [X] マスキング後本文、検出種別、ルール版を保持する。
+- [X] 未確認状態では構造化・公開へ進めない。
+- [X] 401、422、通信失敗を状態へ反映する。
+- [X] 接続テストを追加する。
 - [ ] 対象差分のレビュー後、コミットする。
 
 ### 10. 依頼構造化API接続
@@ -306,10 +310,10 @@ FastAPI実装と`tetote/`からFastAPIへのAPI接続を、1コミットずつ�
 
 想定コミット：`feat(applications): connect application creation API`
 
-- [x] `POST /requests/{id}/applications`へ応募理由と対応可能日時だけを送る。
-- [x] helper ID、応募日時、状態を送らない。
-- [x] 自己応募、重複、期限切れ、募集終了、本人確認不足を反映する。
-- [x] 接続テストを追加する。
+- [X] `POST /requests/{id}/applications`へ応募理由と対応可能日時だけを送る。
+- [X] helper ID、応募日時、状態を送らない。
+- [X] 自己応募、重複、期限切れ、募集終了、本人確認不足を反映する。
+- [X] 接続テストを追加する。
 - [ ] 対象差分のレビュー後、コミットする。
 
 ### 17. 応募辞退API接続
