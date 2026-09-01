@@ -96,7 +96,7 @@ export default function SavedScreen() {
                     </Text>
 
                     <Text style={styles.personText}>
-                      {request.gender} {request.age}
+                      {request.meta}
                     </Text>
                   </View>
 
@@ -112,8 +112,9 @@ export default function SavedScreen() {
                         router.push({
                           pathname: "/helper/request",
                           params: {
-                            requestId: String(request.id),
+                            requestId: request.id,
                             title: request.title,
+                            description: request.description,
                           },
                         })
                       }

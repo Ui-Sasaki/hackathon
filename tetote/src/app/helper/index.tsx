@@ -37,6 +37,9 @@ const styles = createStyles(scale);
 
   const {
     requests,
+    status,
+    errorMessage,
+    reload,
     dismissRequest,
     toggleSavedRequest,
     isRequestSaved,
@@ -108,7 +111,7 @@ const styles = createStyles(scale);
   };
 
   const dismissCard = (
-    id: number,
+    id: string,
     direction: "left" | "right" = "right"
   ) => {
     const targetX =
@@ -475,7 +478,40 @@ const swipeLeft =
           </Pressable>
         </View>
 
-        {visibleRequests.length > 0 ? (
+        {status === "loading" ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>
+              依頼を読み込んでいます...
+            </Text>
+          </View>
+        ) : status === "error" ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>
+              {errorMessage ??
+                "依頼を読み込めませんでした"}
+            </Text>
+
+            <Pressable
+              onPress={reload}
+              style={({ pressed }) => [
+                styles.reloadButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Ionicons
+                name="refresh"
+                size={18}
+                color="#FFFFFF"
+              />
+
+              <Text
+                style={styles.reloadButtonText}
+              >
+                もう一度読み込む
+              </Text>
+            </Pressable>
+          </View>
+        ) : visibleRequests.length > 0 ? (
           <View style={styles.stack}>
             {[...visibleRequests]
               .reverse()
@@ -653,10 +689,7 @@ const swipeLeft =
                                   styles.personText
                                 }
                               >
-                                {
-                                  request.gender
-                                }{" "}
-                                {request.age}
+                                {request.meta}
                               </Text>
                             </View>
                           </View>
@@ -667,6 +700,16 @@ const swipeLeft =
                             }
                           >
                             <Pressable
+                              onPress={() =>
+                                router.push({
+                                  pathname: "/helper/request",
+                                  params: {
+                                    requestId: request.id,
+                                    title: request.title,
+                                    description: request.description,
+                                  },
+                                })
+                              }
                               style={({
                                 pressed,
                               }) => [
@@ -690,8 +733,9 @@ const swipeLeft =
                                 router.push({
                                   pathname: "/helper/request",
                                   params: {
-                                    requestId: String(request.id),
+                                    requestId: request.id,
                                     title: request.title,
+                                    description: request.description,
                                   },
                                 })
                               }
@@ -1323,6 +1367,24 @@ const createStyles = (scale: number) =>
       alignItems: "center",
       justifyContent: "center",
       marginBottom: 18,
+    },
+
+    reloadButton: {
+      marginTop: 14,
+      height: 44,
+      paddingHorizontal: 22,
+      borderRadius: 999,
+      backgroundColor: "#159326",
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+    },
+
+    reloadButtonText: {
+      color: "#FFFFFF",
+      fontSize: 14 * scale,
+      fontWeight: "800",
     },
 
     emptyTitle: {
