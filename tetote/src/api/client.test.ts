@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiClient } from "./client";
+import { ApiClient, warmUpApi } from "./client";
 import { getApiBaseUrl } from "./config";
 import { ApiAuthenticationError, ApiError, ApiNetworkError, ApiTimeoutError } from "./errors";
 
@@ -64,7 +64,7 @@ describe("TODO 05: API client foundation", () => {
       }),
     );
     const client = new ApiClient({ baseUrl: "https://api.example.test", fetch: fetchMock, timeoutMs: 25 });
-    const request = client.get("/requests");
+    const request = client.get("/requests", { retries: 0 });
     const expectation = expect(request).rejects.toBeInstanceOf(ApiTimeoutError);
     await vi.advanceTimersByTimeAsync(25);
     await expectation;
@@ -141,5 +141,83 @@ describe("TODO 07: FastAPI error mapping", () => {
       message: "通信処理に失敗しました",
       requestId: null,
     });
+  });
+});
+
+
+describe("コールドスタートへの耐性", () => {
+  function client(fetchMock: ReturnType<typeof vi.fn>) {
+    return new ApiClient({ baseUrl: "http://api.test", fetch: fetchMock as never });
+  }
+
+  function ok(body: unknown = { ok: true }) {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  it("取得系は通信に失敗しても再試行する", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(ok({ status: "ok" }));
+
+    const result = await client(fetchMock).get("/health", { retryDelayMs: 0 });
+
+    expect(result).toEqual({ status: "ok" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("再試行の回数には上限がある", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+
+    await expect(
+      client(fetchMock).get("/health", { retries: 2, retryDelayMs: 0 }),
+    ).rejects.toBeInstanceOf(ApiNetworkError);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("作成系は再送しない", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+
+    await expect(
+      client(fetchMock).post("/requests", { title: "テスト" }, { retryDelayMs: 0 }),
+    ).rejects.toBeInstanceOf(ApiNetworkError);
+    // 二重登録を避けるため、1回で諦める。
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("応答が返ってきた失敗は再試行しない", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: "AUTHENTICATION_REQUIRED", message: "x" } }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      client(fetchMock).get("/profile", { retryDelayMs: 0 }),
+    ).rejects.toBeInstanceOf(ApiError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("サーバーを起こせたかを返す", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(ok({ status: "ok" }));
+
+    await expect(
+      warmUpApi(client(fetchMock), { retryDelayMs: 0 }),
+    ).resolves.toBe(true);
+  });
+
+  it("起こせなくても例外にしない", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+
+    await expect(
+      warmUpApi(client(fetchMock), { retryDelayMs: 0 }),
+    ).resolves.toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import SuperTokens from "supertokens-web-js";
+import { getApiBaseUrl } from "../api/config";
 import EmailPassword, {
   signIn as superTokensSignIn,
   signUp as superTokensSignUp,
@@ -42,10 +43,8 @@ export interface AuthClient {
   updateProfile(update: ProfileUpdate): Promise<AuthProfile>;
 }
 
-const apiDomain = (process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:8000").replace(
-  /\/$/,
-  "",
-);
+// 接続先の定義を1箇所に集める。認証だけ別のURLを向く事故を防ぐ。
+const apiDomain = getApiBaseUrl();
 
 let initialized = false;
 

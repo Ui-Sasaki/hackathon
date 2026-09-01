@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npx expo export --platform web",
+  "buildCommand": "node scripts/check-api-url.js && npx expo export --platform web",
   "outputDirectory": "dist",
   "cleanUrls": true,
   "framework": null

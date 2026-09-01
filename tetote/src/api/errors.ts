@@ -5,6 +5,17 @@ export class ApiNetworkError extends Error {
   }
 }
 
+/**
+ * APIの接続先が設定されていない状態。通信障害と原因が違うため型で区別する。
+ * 既存の通信エラー判定を壊さないよう ApiNetworkError を継承する。
+ */
+export class ApiConfigurationError extends ApiNetworkError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ApiConfigurationError";
+  }
+}
+
 export class ApiTimeoutError extends ApiNetworkError {
   constructor(message = "APIへの接続がタイムアウトしました", options?: ErrorOptions) {
     super(message, options);
