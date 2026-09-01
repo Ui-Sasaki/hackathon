@@ -334,8 +334,9 @@ class AchievementVisibilityInput(ContractModel):
 
 
 class VerificationInput(ContractModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"method": "student_card", "uploadId": "4f1c0f0e-0f1e-4f4a-9b2a-2f1d3c4b5a60"}]})
     method: Literal["university_email", "student_card"]
-    storageObjectKey: str | None = Field(None, max_length=300, description="学生証方式のみ。非公開ストレージのキー")
+    uploadId: str | None = Field(None, min_length=1, max_length=100, description="学生証方式のみ。用途 verification_document のアップロード識別子。ストレージ内部キーは受け取らない")
 
 
 class VerificationResponse(ContractModel):
