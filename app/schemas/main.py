@@ -1,9 +1,9 @@
 """Public API contracts used by runtime validation and OpenAPI."""
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 LocationFailure = Literal["denied", "timeout", "unsupported", "unavailable"]
 RequestStatus = Literal["draft", "pending_review", "published", "matching", "matched", "in_progress", "completion_pending", "completed", "rejected", "cancelled", "expired", "suspended", "disputed"]
@@ -77,29 +77,56 @@ class MaskingConfirmationResponse(ContractModel):
     message: str
 
 
+ShortExtractedText = Annotated[str, Field(min_length=1, max_length=200)]
+MissingFieldCode = Literal[
+    "title", "description", "category", "scheduledAt", "estimatedMinutes",
+    "approximateArea", "requiredHelpers", "itemsToBring", "details",
+]
+
+
+class StructuredRequestDraft(ContractModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=2000)
+    category: str = Field(min_length=1, max_length=50)
+    scheduledAt: datetime | None = Field(default=None, description="ISO 8601日時")
+    estimatedMinutes: int | None = Field(default=None, ge=10, le=240)
+    approximateArea: str | None = Field(default=None, max_length=100)
+    requiredHelpers: int | None = Field(default=None, ge=1, le=5)
+    itemsToBring: list[ShortExtractedText] = Field(max_length=20)
+    riskLevel: Literal["low", "medium", "high", "prohibited"]
+    riskCandidates: list[ShortExtractedText] = Field(max_length=20)
+    missingFields: list[MissingFieldCode] = Field(max_length=20)
+    warnings: list[ShortExtractedText] = Field(max_length=20)
+
 class AppliedMasking(ContractModel):
     detections: list[MaskingDetection]
     ruleVersion: str
     confirmed: bool
 
 
-# フロントエンドの request オブジェクトに相当
+class StructureMetadata(ContractModel):
+    modelName: str
+    promptVersion: str
+    processedAt: datetime
+
+
 class VoiceRequestData(ContractModel):
-    task: str | None = Field(None, description="依頼内容")
-    location: str | None = Field(None, description="場所")
-    duration: str | None = Field(None, description="所要時間")
-    deadline: str | None = Field(None, description="期限・希望日時")
-    notes: str | None = Field(None, description="補足事項")
+    task: str
+    location: str | None = None
+    duration: str | None = None
+    deadline: str | None = None
+    notes: str | None = None
 
-# フロントエンドの VoiceRequestResponse に相当（+ マスキング情報）
-class StructuredRequestResponse(ContractModel):
-    complete: bool = Field(..., description="必要な情報が全て揃っているか")
-    question: str | None = Field(None, description="不足している情報について尋ねる質問文")
-    request: VoiceRequestData
 
-    # 既存のマスキング確認用フィールド
+class StructuredRequestResponse(StructuredRequestDraft):
     masking: AppliedMasking
-    requiresConfirmation: bool = True
+    status: Literal["draft"]
+    requiresConfirmation: Literal[True]
+    autoPublished: Literal[False]
+    additionalQuestion: str | None = None
+    metadata: StructureMetadata
+    request: VoiceRequestData = Field(description="音声入力画面との互換用依頼データ")
 
 
 class RequestInput(ContractModel):
@@ -147,6 +174,10 @@ class RequestListResponse(ContractModel):
     origin: ListOrigin
 
 
+class SavedRequestListResponse(ContractModel):
+    items: list[RequestResponse]
+
+
 class RequestUpdateInput(ContractModel):
     title: str | None = Field(None, min_length=1, max_length=100)
     description: str | None = Field(None, min_length=1, max_length=2000)
@@ -159,6 +190,29 @@ class RequestUpdateInput(ContractModel):
 class ProfileUpdateInput(ContractModel):
     displayName: str | None = Field(None, min_length=1, max_length=50)
     areaCode: str | None = Field(None, min_length=1, max_length=30)
+    region: str | None = Field(None, min_length=1, max_length=20)
+    age: str | None = Field(None, min_length=1, max_length=30)
+    notes: str | None = Field(None, max_length=500)
+    helperType: Literal["student", "worker"] | None = None
+    university: str | None = Field(None, min_length=1, max_length=100)
+    faculty: str | None = Field(None, min_length=1, max_length=100)
+    schoolYear: str | None = Field(None, min_length=1, max_length=30)
+    occupation: str | None = Field(None, min_length=1, max_length=100)
+    industry: str | None = Field(None, max_length=100)
+    workplace: str | None = Field(None, max_length=100)
+    gender: str | None = Field(None, max_length=30)
+    interest: str | None = Field(None, max_length=200)
+    message: str | None = Field(None, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_helper_details(self) -> "ProfileUpdateInput":
+        if self.helperType == "student" and not all(
+            (self.university, self.faculty, self.schoolYear)
+        ):
+            raise ValueError("student helper details are required")
+        if self.helperType == "worker" and not self.occupation:
+            raise ValueError("worker occupation is required")
+        return self
 
 
 class ProfileResponse(ContractModel):
@@ -168,8 +222,34 @@ class ProfileResponse(ContractModel):
     emailVerified: bool
     verificationStatus: VerificationStatus
     areaCode: str | None = None
+    region: str | None = None
+    age: str | None = None
+    notes: str | None = None
+    helperType: Literal["student", "worker"] | None = None
+    university: str | None = None
+    faculty: str | None = None
+    schoolYear: str | None = None
+    occupation: str | None = None
+    industry: str | None = None
+    workplace: str | None = None
+    gender: str | None = None
+    interest: str | None = None
+    message: str | None = None
     status: Literal["active", "suspended"]
     updatedAt: datetime | None = None
+
+
+class UserSettingsUpdateInput(ContractModel):
+    model_config = ConfigDict(extra="forbid")
+    notificationsEnabled: StrictBool | None = None
+    locationEnabled: StrictBool | None = None
+    fontSize: Literal["small", "medium", "large"] | None = None
+
+
+class UserSettingsResponse(ContractModel):
+    notificationsEnabled: bool
+    locationEnabled: bool
+    fontSize: Literal["small", "medium", "large"]
 
 
 class ApplicationInput(ContractModel):
@@ -207,7 +287,7 @@ class ApplicationListResponse(ContractModel):
 
 
 class SelectionInput(ContractModel):
-    requestId: str
+    model_config = ConfigDict(extra="forbid")
     expectedVersion: int = Field(ge=1)
 
 
@@ -223,6 +303,7 @@ class MatchResponse(ContractModel):
     completedAt: datetime | None
     disputeReason: str | None = None
     disputedAt: datetime | None = None
+    version: int = Field(ge=1)
 
 
 class MessageInput(ContractModel):

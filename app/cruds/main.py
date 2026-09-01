@@ -8,18 +8,16 @@ import math
 import os
 import re
 import uuid
-from google import genai
-from google.genai import types
 from typing import Any, Awaitable, Callable
-from uuid import uuid4
-from pydantic import BaseModel, Field
+from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
+import httpx
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.auth import (
@@ -32,11 +30,23 @@ from app.repositories.requests import (
 from app.repositories.applications import (
     ApplicationRepository, get_application_repository,
 )
+from app.repositories.structure_audits import structure_audit_repository
+from app.repositories.request_dismissals import (
+    RequestDismissalRepository, get_request_dismissal_repository,
+)
+from app.repositories.saved_requests import (
+    SavedRequestRepository, get_saved_request_repository,
+)
+from app.repositories.user_settings import (
+    UserSettingsRepository, get_user_settings_repository,
+)
 from app.services.applications import (
     create_application as create_application_service,
+    select_application as select_application_service,
     withdraw_application as withdraw_application_service,
 )
 from app.services.requests import cancel_owned_request, require_request, update_owned_request
+from app.services import request_structuring
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
@@ -49,7 +59,9 @@ from app.schemas import (
     ProfileResponse, ProfileUpdateInput,
     ReportInput, ReportResponse, RequestInput, RequestListResponse, RequestResponse,
     RequestUpdateInput, ResetResponse, ReviewInput, ReviewResponse, SelectionInput,
+    SavedRequestListResponse,
     StructureInput, StructuredRequestResponse, VerificationInput, VerificationResponse,
+    UserSettingsResponse, UserSettingsUpdateInput,
     RecommendedRequestListResponse,
 )
 
@@ -135,6 +147,8 @@ def api_errors(*statuses: int) -> dict[int, dict[str, Any]]:
         409: ("REQUEST_STATE_CONFLICT", "依頼の状態が更新されているため処理できません"),
         422: ("VALIDATION_ERROR", "入力内容を確認してください"),
         500: ("INTERNAL_SERVER_ERROR", "サーバー内部でエラーが発生しました"),
+        502: ("STRUCTURE_INVALID_RESPONSE", "構造化サービスの応答を検証できません"),
+        503: ("STRUCTURE_SERVICE_UNAVAILABLE", "構造化サービスを利用できません"),
     }
     return {
         status: {
@@ -181,78 +195,30 @@ def mask_request_text(text: str) -> dict[str, Any]:
 async def default_structure_llm_client(
     masked_text: str, _area_code: str | None
 ) -> dict[str, Any]:
-    api_key = os.environ.get("GEMINI_API_KEY")
-
-    # APIキーがない場合のフロントエンド開発用フェイクデータ
-    if not api_key:
-        is_complete = "時間" in masked_text and "場所" in masked_text
-        return {
-            "complete": is_complete,
-            "question": None if is_complete else "どこで、どのくらいの時間お願いしたいですか？",
-            "request": {
-                "task": masked_text,
-                "location": "板橋区" if "板橋" in masked_text else None,
-                "duration": None,
-                "deadline": None,
-                "notes": "これはAPIキー未設定時のモックデータです。"
-            }
-        }
-
-    client = genai.Client(api_key=api_key)
-
-    prompt = f"""
-以下の依頼テキストから必要な情報を抽出し、JSON形式で出力してください。
-
-【依頼テキスト】
-{masked_text}
-
-【判定ルール】
-1. task, location, duration, deadline の4つの基本情報がすべて読み取れるか確認してください。
-2. すべて揃っている場合は complete: true とし、question: null にしてください。
-3. 1つでも不足している場合は complete: false とし、不足情報をユーザーに自然な日本語で優しく尋ねる質問を question に設定してください。
-4. その他の補足情報や注意事項は notes にまとめてください。
-"""
-
-    # 出力形式を完全に固定するスキーマ定義
-    response_schema = {
-        "type": "OBJECT",
-        "properties": {
-            "complete": {"type": "BOOLEAN"},
-            "question": {"type": "STRING", "nullable": True},
-            "request": {
-                "type": "OBJECT",
-                "properties": {
-                    "task": {"type": "STRING", "nullable": True},
-                    "location": {"type": "STRING", "nullable": True},
-                    "duration": {"type": "STRING", "nullable": True},
-                    "deadline": {"type": "STRING", "nullable": True},
-                    "notes": {"type": "STRING", "nullable": True}
-                }
-            }
-        },
-        "required": ["complete", "question", "request"]
-    }
-
-    response = await client.aio.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=response_schema,
-            temperature=0.0,
-        ),
+    return await request_structuring.LocalStructureProvider().structure(
+        masked_text, _area_code
     )
-
-    return json.loads(response.text)
 
 
 StructureLLMClient = Callable[[str, str | None], Awaitable[dict[str, Any]]]
-structure_llm_client: StructureLLMClient = default_structure_llm_client
+class CallableStructureProvider:
+    model = "configured-structure-client"
+
+    def __init__(self, client: StructureLLMClient) -> None:
+        self.client = client
+
+    async def structure(self, text: str, area_code: str | None) -> dict[str, Any]:
+        return await self.client(text, area_code)
+
+
+structure_provider: request_structuring.StructureProvider = (
+    request_structuring.configured_provider()
+)
 
 
 def configure_structure_llm_client(client: StructureLLMClient) -> None:
-    global structure_llm_client
-    structure_llm_client = client
+    global structure_provider
+    structure_provider = CallableStructureProvider(client)
 
 REGIONS = {
     "AREA-001": {"label": "大学周辺", "latitude": 43.062, "longitude": 141.354},
@@ -407,6 +373,18 @@ async def request_repository_dependency() -> RequestRepository:
 async def application_repository_dependency() -> ApplicationRepository:
     """Resolve the application repository without a test-time threadpool hop."""
     return get_application_repository()
+
+async def user_settings_repository_dependency() -> UserSettingsRepository:
+    return get_user_settings_repository()
+
+
+async def request_dismissal_repository_dependency() -> RequestDismissalRepository:
+    return get_request_dismissal_repository()
+
+
+async def saved_request_repository_dependency() -> SavedRequestRepository:
+    return get_saved_request_repository()
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -607,10 +585,23 @@ async def reset_mock(
     application_repository: ApplicationRepository = Depends(
         application_repository_dependency
     ),
+    user_settings_repository: UserSettingsRepository = Depends(
+        user_settings_repository_dependency
+    ),
+    request_dismissal_repository: RequestDismissalRepository = Depends(
+        request_dismissal_repository_dependency
+    ),
+    saved_request_repository: SavedRequestRepository = Depends(
+        saved_request_repository_dependency
+    ),
 ):
     reset_store()
     await repository.reset()
     await application_repository.reset()
+    await structure_audit_repository.reset()
+    await user_settings_repository.reset()
+    await request_dismissal_repository.reset()
+    await saved_request_repository.reset()
     return {"reset": True}
 
 
@@ -619,18 +610,45 @@ async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
     return users_store[current_user.user_id]
 
 
-@app.patch("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを更新", description="表示名または概算地域を更新する。ユーザーID、ロール、本人確認状態は入力できない。", responses=api_errors(401, 403, 422, 500))
+@app.patch("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを更新", description="既存プロフィール画面の編集項目を更新する。ユーザーID、ロール、本人確認状態は入力できない。端末ローカルの画像URIは受け付けない。", responses=api_errors(401, 403, 422, 500))
 async def update_profile(
     body: ProfileUpdateInput,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    changes = body.model_dump(exclude_none=True)
+    changes = body.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(422, detail={"code": "NO_CHANGES"})
     profile = users_store[current_user.user_id]
+    candidate = {**profile, **changes}
+    if candidate.get("helperType") == "student" and not all(
+        candidate.get(field) for field in ("university", "faculty", "schoolYear")
+    ):
+        raise HTTPException(422, detail={"code": "STUDENT_PROFILE_INCOMPLETE"})
+    if candidate.get("helperType") == "worker" and not candidate.get("occupation"):
+        raise HTTPException(422, detail={"code": "WORKER_PROFILE_INCOMPLETE"})
     profile.update(changes)
     profile["updatedAt"] = now_iso()
     return profile
+
+
+@app.get("/settings", response_model=UserSettingsResponse, tags=["Settings"], summary="自分の利用者設定を取得", description="Cookieセッション本人の通知、位置情報利用、文字サイズ設定だけを返す。通知設定はブラウザ・OSの通知権限を変更しない。", responses=api_errors(401, 500))
+async def get_user_settings(
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: UserSettingsRepository = Depends(user_settings_repository_dependency),
+):
+    return await repository.get(current_user)
+
+
+@app.patch("/settings", response_model=UserSettingsResponse, tags=["Settings"], summary="自分の利用者設定を部分更新", description="指定した項目だけを更新する。locationEnabled=falseの場合、クライアントはブラウザ位置情報の取得を開始しない。notificationsEnabledはアプリ内の希望設定であり、ブラウザ・OS権限とは別に扱う。", responses=api_errors(401, 422, 500))
+async def update_user_settings(
+    body: UserSettingsUpdateInput,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: UserSettingsRepository = Depends(user_settings_repository_dependency),
+):
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(422, detail={"code": "NO_CHANGES"})
+    return await repository.update(current_user, changes)
 
 
 @app.post("/locations/resolve", response_model=LocationResolveResponse, tags=["Locations"], summary="現在地を概算地域へ変換", description="同意済み座標を概算地域へ変換する。座標は保存も返却もしない。取得失敗時は登録地域へフォールバックする。", responses=api_errors(401, 422, 500))
@@ -647,7 +665,7 @@ async def resolve_browser_location(
     }
 
 
-@app.post("/requests/structure", response_model=StructuredRequestResponse | MaskingConfirmationResponse, tags=["Requests"], summary="依頼文を構造化", description="自由記述を依頼候補へ構造化する開発用AIモック。個人情報をマスクし、検出時は確認を求める。結果は自動公開されない。", responses=api_errors(401, 422, 500))
+@app.post("/requests/structure", response_model=StructuredRequestResponse | MaskingConfirmationResponse, tags=["Requests"], summary="依頼文を構造化", description="自由記述を検証済みの確認用下書きへ構造化する。個人情報をマスクし、検出時は確認を求める。結果は自動公開されない。", responses=api_errors(401, 422, 500, 502, 503))
 async def structure_request(
     body: StructureInput,
     _current_user: CurrentUser = Depends(get_current_user),
@@ -664,19 +682,37 @@ async def structure_request(
     if any(word in masking["maskedText"] for word in ["電気工事", "医療行為", "介護", "送迎"]):
         raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
     try:
-        result = await structure_llm_client(masking["maskedText"], body.areaCode)
+        result = await request_structuring.structure_request(
+            masking["maskedText"], body.areaCode, structure_provider,
+            structure_audit_repository,
+        )
+    except httpx.TimeoutException:
+        logger.warning("Request structure provider timed out")
+        raise HTTPException(503, detail={"code": "STRUCTURE_SERVICE_TIMEOUT"})
+    except (httpx.HTTPStatusError, request_structuring.InvalidStructureResponse):
+        logger.warning("Request structure provider returned an invalid response")
+        raise HTTPException(502, detail={"code": "STRUCTURE_INVALID_RESPONSE"})
     except Exception:
         logger.warning("Request structure service failed after masking")
         raise HTTPException(503, detail={"code": "STRUCTURE_SERVICE_UNAVAILABLE"})
     masking_metrics["submitted"] += 1
     return {
         **result,
+        "request": {
+            "task": masking["maskedText"],
+            "location": result.get("approximateArea"),
+            "duration": (
+                str(result["estimatedMinutes"])
+                if result.get("estimatedMinutes") is not None else None
+            ),
+            "deadline": result.get("scheduledAt"),
+            "notes": None,
+        },
         "masking": {
             "detections": masking["detections"],
             "ruleVersion": masking["ruleVersion"],
             "confirmed": body.maskingConfirmed,
         },
-        "requiresConfirmation": True,
     }
 
 
@@ -862,6 +898,9 @@ async def list_requests(
     limit: int = Query(default=20, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
+    dismissal_repository: RequestDismissalRepository = Depends(
+        request_dismissal_repository_dependency
+    ),
 ):
     try:
         location = LocationResolveInput(
@@ -889,6 +928,7 @@ async def list_requests(
             if second_user_id == current_user.user_id
         }
     )
+    dismissed_ids = await dismissal_repository.list_ids(current_user)
     try:
         items = await repository.list(
             current_user,
@@ -905,6 +945,7 @@ async def list_requests(
         )
     except InvalidCursor as exc:
         raise HTTPException(422, detail={"code": "INVALID_CURSOR"}) from exc
+    items = [item for item in items if item["id"] not in dismissed_ids]
     has_more = len(items) > limit
     page = items[:limit]
     cursor_item = page[-1] if page else None
@@ -943,6 +984,102 @@ async def create_request(
     })
     idempotency_store[cache_key] = item
     return item
+
+
+async def require_dismissible_request(
+    request_id: str, current_user: CurrentUser, repository: RequestRepository,
+) -> None:
+    item = await request_or_404(repository, current_user, request_id)
+    if (
+        item["status"] != "published"
+        or is_blocked_pair(current_user.user_id, item["requesterId"])
+    ):
+        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
+
+
+async def require_public_request(
+    request_id: str, current_user: CurrentUser, repository: RequestRepository,
+) -> dict:
+    item = await request_or_404(repository, current_user, request_id)
+    if (
+        item["status"] != "published"
+        or is_blocked_pair(current_user.user_id, item["requesterId"])
+    ):
+        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
+    return item
+
+
+@app.get("/saved-requests", response_model=SavedRequestListResponse, tags=["Saved requests"], summary="保存した依頼を一覧", description="セッション本人が保存した公開中かつ閲覧可能な依頼だけを返す。", responses=api_errors(401, 500))
+async def list_saved_requests(
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    saved_repository: SavedRequestRepository = Depends(
+        saved_request_repository_dependency
+    ),
+):
+    items = []
+    for request_id in await saved_repository.list_ids(current_user):
+        item = await repository.get(current_user, request_id)
+        if (
+            item is not None
+            and item["status"] == "published"
+            and not is_blocked_pair(current_user.user_id, item["requesterId"])
+        ):
+            items.append(item)
+    items.sort(key=lambda item: (item["createdAt"], item["id"]), reverse=True)
+    return {"items": items}
+
+
+@app.post("/saved-requests/{request_id}", status_code=204, tags=["Saved requests"], summary="依頼を保存", description="閲覧可能な公開依頼をセッション本人の保存一覧へ冪等に追加する。", responses=api_errors(401, 404, 422, 500))
+async def save_request(
+    request_id: str = Path(min_length=1, max_length=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    saved_repository: SavedRequestRepository = Depends(
+        saved_request_repository_dependency
+    ),
+) -> None:
+    await require_public_request(request_id, current_user, repository)
+    await saved_repository.save(current_user, request_id)
+
+
+@app.delete("/saved-requests/{request_id}", status_code=204, tags=["Saved requests"], summary="依頼の保存を解除", description="閲覧可能な公開依頼をセッション本人の保存一覧から冪等に削除する。", responses=api_errors(401, 404, 422, 500))
+async def remove_saved_request(
+    request_id: str = Path(min_length=1, max_length=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    saved_repository: SavedRequestRepository = Depends(
+        saved_request_repository_dependency
+    ),
+) -> None:
+    await require_public_request(request_id, current_user, repository)
+    await saved_repository.remove(current_user, request_id)
+
+
+@app.post("/requests/{request_id}/dismiss", status_code=204, tags=["Requests"], summary="依頼を自分の一覧から非表示", description="セッション本人の非表示関係を冪等に保存する。他利用者の一覧には影響しない。", responses=api_errors(401, 404, 500))
+async def dismiss_request(
+    request_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    dismissal_repository: RequestDismissalRepository = Depends(
+        request_dismissal_repository_dependency
+    ),
+) -> None:
+    await require_dismissible_request(request_id, current_user, repository)
+    await dismissal_repository.dismiss(current_user, request_id)
+
+
+@app.delete("/requests/{request_id}/dismiss", status_code=204, tags=["Requests"], summary="依頼の非表示を解除", description="セッション本人の非表示関係を冪等に解除する。", responses=api_errors(401, 404, 500))
+async def restore_dismissed_request(
+    request_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    dismissal_repository: RequestDismissalRepository = Depends(
+        request_dismissal_repository_dependency
+    ),
+) -> None:
+    await require_dismissible_request(request_id, current_user, repository)
+    await dismissal_repository.restore(current_user, request_id)
 
 
 # #20: このエンドポイントは元々認証を要求せず、依頼の状態も検査していなかった。
@@ -1041,38 +1178,27 @@ async def select_application(
     body: SelectionInput,
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
+    application_repository: ApplicationRepository = Depends(
+        application_repository_dependency
+    ),
 ):
-    application = applications.get(application_id)
-    if not application:
-        raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
-    if application["requestId"] != body.requestId:
-        raise HTTPException(409, detail={"code": "APPLICATION_REQUEST_MISMATCH"})
-    request_item = await request_or_404(repository, current_user, body.requestId)
-    if request_item["requesterId"] != current_user.user_id:
-        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
-    if request_item["version"] != body.expectedVersion:
-        raise HTTPException(409, detail={
-            "code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"],
-        })
-    if application["status"] != "applied":
-        raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
-    if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
-        raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
-    capacity_reached = request_item["acceptedHelpers"] + 1 >= request_item["requiredHelpers"]
-    new_status = "matched" if capacity_reached else "matching"
-    updated = await repository.set_status(
-        current_user, request_item["id"], new_status,
-        expected_version=request_item["version"],
+    existing = await application_repository.get(current_user, application_id)
+    blocked = existing is not None and is_blocked_pair(
+        current_user.user_id, existing["helperId"]
     )
-    if not updated:
-        raise HTTPException(409, detail={
-            "code": "REQUEST_STATE_CONFLICT", "currentVersion": request_item["version"],
-        })
-    application["status"] = "selected"
-    if capacity_reached:
-        for other in applications.values():
-            if other["requestId"] == request_item["id"] and other["status"] == "applied":
-                other["status"] = "not_selected"
+    application, request_item = await select_application_service(
+        application_repository,
+        repository,
+        current_user,
+        application_id,
+        body.expectedVersion,
+        blocked=blocked,
+        helper_verified=(
+            existing is not None
+            and users_store.get(existing["helperId"], {}).get("verificationStatus")
+            == "approved"
+        ),
+    )
     match = {
         "id": new_id("match"),
         "requestId": request_item["id"],
@@ -1083,6 +1209,7 @@ async def select_application(
         "helperConfirmed": False,
         "matchedAt": now_iso(),
         "completedAt": None,
+        "version": 1,
     }
     matches[match["id"]] = match
     messages[match["id"]] = []
@@ -1093,6 +1220,13 @@ async def select_application(
 async def get_match(match_id: str, current_user: CurrentUser = Depends(get_current_user)):
     match = match_or_404(match_id)
     ensure_match_participant(match, current_user.user_id)
+    other_user_id = (
+        match["helperId"]
+        if match["requesterId"] == current_user.user_id
+        else match["requesterId"]
+    )
+    if is_blocked_pair(current_user.user_id, other_user_id):
+        raise HTTPException(404, detail={"code": "MATCH_NOT_FOUND"})
     return match
 
 
@@ -1308,7 +1442,7 @@ async def create_report(
     )
     if item["severity"] == "high" and body.targetType == "request":
         try:
-            target_id = uuid.UUID(body.targetId)
+            target_id = UUID(body.targetId)
         except ValueError:
             target_id = None
         if target_id is not None:
