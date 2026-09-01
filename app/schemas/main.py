@@ -10,6 +10,9 @@ RequestStatus = Literal["draft", "pending_review", "published", "matching", "mat
 ApplicationStatus = Literal["applied", "selected", "accepted", "completed", "not_selected", "withdrawn", "cancelled"]
 MatchStatus = Literal["matched", "in_progress", "completion_pending", "completed", "disputed"]
 VerificationStatus = Literal["unverified", "pending", "approved", "rejected", "expired"]
+RiskLevel = Literal["low", "medium", "high", "prohibited"]
+SafetyDecision = Literal["publish", "publish_with_warning", "pending_review", "rejected"]
+SafetyLLMStatus = Literal["ok", "skipped_fixed_rule", "skipped_not_configured", "unavailable", "invalid_output"]
 
 
 class ContractModel(BaseModel):
@@ -91,6 +94,22 @@ class VoiceRequestData(ContractModel):
     deadline: str | None = Field(None, description="期限・希望日時")
     notes: str | None = Field(None, description="補足事項")
 
+class SafetyAssessment(ContractModel):
+    """固定ルールとLLMを併用した危険度判定の結果と、その判定根拠。"""
+
+    riskLevel: RiskLevel = Field(description="固定ルールとLLMのうち強い方を採用した最終危険度")
+    decision: SafetyDecision = Field(description="公開可否の決定")
+    reasonCodes: list[str] = Field(default_factory=list, description="判定理由のコード")
+    messages: list[str] = Field(default_factory=list, description="利用者向けの安全なメッセージ")
+    matchedRules: list[str] = Field(default_factory=list, description="一致した固定ルールのコード")
+    ruleVersion: str = Field(description="固定ルールの版")
+    promptVersion: str = Field(description="LLMプロンプトの版")
+    model: str | None = Field(None, description="判定に使ったモデル名")
+    llmLevel: RiskLevel | None = Field(None, description="LLM単独の判定。固定ルールを緩める用途には使わない")
+    llmStatus: SafetyLLMStatus = Field(description="LLM判定の実行結果")
+    evaluatedAt: str = Field(description="判定日時（ISO 8601、UTC）")
+
+
 # フロントエンドの VoiceRequestResponse に相当（+ マスキング情報）
 class StructuredRequestResponse(ContractModel):
     complete: bool = Field(..., description="必要な情報が全て揃っているか")
@@ -100,6 +119,7 @@ class StructuredRequestResponse(ContractModel):
     # 既存のマスキング確認用フィールド
     masking: AppliedMasking
     requiresConfirmation: bool = True
+    safety: SafetyAssessment = Field(description="公開前の危険度判定結果")
 
 
 class RequestInput(ContractModel):
