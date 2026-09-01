@@ -60,7 +60,6 @@ export default function HelperLayout() {
       screenOptions={{
         headerShown: false,
         tabBarShowLabel: false,
-
         tabBarStyle: {
           height: 84,
           backgroundColor: "#1F572A",
@@ -73,7 +72,6 @@ export default function HelperLayout() {
         },
       }}
     >
-      {/* 求人 */}
       <Tabs.Screen
         name="index"
         options={{
@@ -88,7 +86,6 @@ export default function HelperLayout() {
         }}
       />
 
-      {/* トーク */}
       <Tabs.Screen
         name="chats"
         options={{
@@ -107,7 +104,6 @@ export default function HelperLayout() {
         }}
       />
 
-      {/* キャラクター */}
       <Tabs.Screen
         name="character"
         options={{
@@ -122,7 +118,6 @@ export default function HelperLayout() {
         }}
       />
 
-      {/* プロフィール */}
       <Tabs.Screen
         name="profile"
         options={{
@@ -138,13 +133,19 @@ export default function HelperLayout() {
       />
 
       <Tabs.Screen
-  name="settings"
-  options={{
-    href: null,
-  }}
-/>
+        name="chat"
+        options={{
+          href: null,
+        }}
+      />
 
-      {/* HIDDEN SCREENS */}
+      <Tabs.Screen
+        name="settings"
+        options={{
+          href: null,
+        }}
+      />
+
       <Tabs.Screen
         name="saved"
         options={{

@@ -96,7 +96,7 @@ class StructuredRequestResponse(ContractModel):
     complete: bool = Field(..., description="必要な情報が全て揃っているか")
     question: str | None = Field(None, description="不足している情報について尋ねる質問文")
     request: VoiceRequestData
-    
+
     # 既存のマスキング確認用フィールド
     masking: AppliedMasking
     requiresConfirmation: bool = True

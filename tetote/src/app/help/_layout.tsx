@@ -38,7 +38,6 @@ export default function HelpLayout() {
       screenOptions={{
         headerShown: false,
         tabBarShowLabel: false,
-
         tabBarStyle: {
           height: 82,
           backgroundColor: "#E6AA47",
@@ -88,6 +87,13 @@ export default function HelpLayout() {
       />
 
       <Tabs.Screen
+        name="chat"
+        options={{
+          href: null,
+        }}
+      />
+
+      <Tabs.Screen
         name="character"
         options={{
           href: null,
@@ -116,28 +122,26 @@ export default function HelpLayout() {
       />
 
       <Tabs.Screen
-  name="request-manual"
-  options={{
-    href: null,
-  }}
-/>
+        name="request-manual"
+        options={{
+          href: null,
+        }}
+      />
 
-<Tabs.Screen
-  name="request-voice"
-  options={{
-    href: null,
-  }}
-/>
-<Tabs.Screen
-  name="request-confirm"
-  options={{
-    href: null,
-  }}
-/>
+      <Tabs.Screen
+        name="request-voice"
+        options={{
+          href: null,
+        }}
+      />
 
-
+      <Tabs.Screen
+        name="request-confirm"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
-
   );
 }
 

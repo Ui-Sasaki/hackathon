@@ -182,7 +182,7 @@ async def default_structure_llm_client(
     masked_text: str, _area_code: str | None
 ) -> dict[str, Any]:
     api_key = os.environ.get("GEMINI_API_KEY")
-    
+
     # APIキーがない場合のフロントエンド開発用フェイクデータ
     if not api_key:
         is_complete = "時間" in masked_text and "場所" in masked_text
@@ -199,7 +199,7 @@ async def default_structure_llm_client(
         }
 
     client = genai.Client(api_key=api_key)
-    
+
     prompt = f"""
 以下の依頼テキストから必要な情報を抽出し、JSON形式で出力してください。
 
@@ -212,7 +212,7 @@ async def default_structure_llm_client(
 3. 1つでも不足している場合は complete: false とし、不足情報をユーザーに自然な日本語で優しく尋ねる質問を question に設定してください。
 4. その他の補足情報や注意事項は notes にまとめてください。
 """
-    
+
     # 出力形式を完全に固定するスキーマ定義
     response_schema = {
         "type": "OBJECT",
@@ -242,7 +242,7 @@ async def default_structure_llm_client(
             temperature=0.0,
         ),
     )
-    
+
     return json.loads(response.text)
 
 
@@ -832,7 +832,7 @@ async def get_recommended_requests(
 
     page = scored_items[:limit]
     has_more = len(scored_items) > limit
-    
+
     # モックとしての簡易的な次ページ判定（実運用では末尾要素のスコアやIDをエンコードして使用）
     next_cursor = "next_page_available" if has_more else None
 
