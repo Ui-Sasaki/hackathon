@@ -40,6 +40,7 @@ from app.services.requests import cancel_owned_request, require_request, update_
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
+from app.settings import reject_unsafe_in_production, settings
 from app.schemas import (
     AchievementInput, AchievementResponse, AchievementVisibilityInput,
     ApplicationInput, ApplicationListResponse, ApplicationResponse,
@@ -593,13 +594,18 @@ MOCK_RESET_ENABLED = os.getenv("MOCK_RESET_ENABLED", "false").lower() in {
     "1", "true", "yes", "on",
 }
 
+# 全データを初期状態へ戻す操作なので、本番では有効化させない。
+reject_unsafe_in_production(
+    "MOCK_RESET_ENABLED", MOCK_RESET_ENABLED, settings.environment
+)
+
 
 async def require_mock_environment() -> None:
     if not MOCK_RESET_ENABLED:
         raise HTTPException(404, detail={"code": "NOT_FOUND"})
 
 
-@app.post("/_mock/reset", response_model=ResetResponse, tags=["Development mock"], summary="開発用モックデータを初期化", description="非本番かつMOCK_RESET_ENABLED=trueの場合だけ、認証済み利用者が実行できる。全モックデータを初期状態へ戻す。", responses=api_errors(401, 404, 500))
+@app.post("/_mock/reset", response_model=ResetResponse, tags=["Development mock"], summary="開発用モックデータを初期化", description="MOCK_RESET_ENABLED=trueの非本番環境だけで、認証済み利用者が実行できる。本番ではこの設定自体が起動時に拒否される。全モックデータを初期状態へ戻す。", responses=api_errors(401, 404, 500))
 async def reset_mock(
     _: None = Depends(require_mock_environment),
     current_user: CurrentUser = Depends(get_current_user),
