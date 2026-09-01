@@ -10,6 +10,7 @@ RequestStatus = Literal["draft", "pending_review", "published", "matching", "mat
 ApplicationStatus = Literal["applied", "selected", "accepted", "completed", "not_selected", "withdrawn", "cancelled"]
 MatchStatus = Literal["matched", "in_progress", "completion_pending", "completed", "disputed"]
 VerificationStatus = Literal["unverified", "pending", "approved", "rejected", "expired"]
+UploadPurpose = Literal["profile_image", "verification_document"]
 
 
 class ContractModel(BaseModel):
@@ -169,7 +170,40 @@ class ProfileResponse(ContractModel):
     verificationStatus: VerificationStatus
     areaCode: str | None = None
     status: Literal["active", "suspended"]
+    imageUrl: str | None = Field(None, description="プロフィール画像の表示用URL。未設定ならnull")
     updatedAt: datetime | None = None
+
+
+class UploadSessionInput(ContractModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"purpose": "profile_image", "contentType": "image/jpeg", "byteSize": 240000, "fileName": "photo.jpg"}]})
+    purpose: UploadPurpose = Field(description="画像の用途")
+    contentType: str = Field(min_length=1, max_length=100, description="申告するMIME type。対応外は415。受信時に実体と突き合わせる")
+    byteSize: int = Field(ge=1, description="申告するファイルサイズ。上限超過は413")
+    fileName: str | None = Field(None, max_length=200, description="拡張子の突き合わせだけに使う。保存はしない")
+
+
+class UploadSessionResponse(ContractModel):
+    uploadId: str = Field(description="アップロードの識別子。ストレージ内部キーではない")
+    uploadUrl: str = Field(description="本文を送る先。期限付きで、この利用者だけが使える")
+    expiresAt: str = Field(description="アップロードの期限（ISO 8601、UTC）")
+    maxBytes: int = Field(description="受け付ける最大バイト数")
+
+
+class UploadedContentResponse(ContractModel):
+    uploadId: str
+    status: Literal["stored"]
+    contentType: Literal["image/jpeg", "image/png"]
+    byteSize: int = Field(description="メタデータ除去後のバイト数")
+
+
+class ProfileImageInput(ContractModel):
+    uploadId: str = Field(min_length=1, max_length=100, description="本文の送信を終えたアップロードの識別子")
+
+
+class ProfileImageResponse(ContractModel):
+    imageId: str
+    imageUrl: str = Field(description="表示用の推測できないURL。ストレージ内部キーは含まない")
+    updatedAt: datetime
 
 
 class ApplicationInput(ContractModel):

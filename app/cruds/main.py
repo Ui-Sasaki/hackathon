@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
@@ -37,6 +37,10 @@ from app.services.applications import (
     withdraw_application as withdraw_application_service,
 )
 from app.services.requests import cancel_owned_request, require_request, update_owned_request
+from app.services import images
+from app.repositories.uploads import (
+    MemoryUploadRepository, UploadRepository, get_upload_repository,
+)
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
@@ -50,6 +54,8 @@ from app.schemas import (
     ReportInput, ReportResponse, RequestInput, RequestListResponse, RequestResponse,
     RequestUpdateInput, ResetResponse, ReviewInput, ReviewResponse, SelectionInput,
     StructureInput, StructuredRequestResponse, VerificationInput, VerificationResponse,
+    ProfileImageInput, ProfileImageResponse, UploadSessionInput, UploadSessionResponse,
+    UploadedContentResponse,
     RecommendedRequestListResponse,
 )
 
@@ -120,6 +126,8 @@ STATUS_ERROR_CODES = {
     403: "ROLE_FORBIDDEN",
     404: "NOT_FOUND",
     409: "STATE_CONFLICT",
+    413: "IMAGE_TOO_LARGE",
+    415: "UNSUPPORTED_MEDIA_TYPE",
     422: "VALIDATION_ERROR",
     500: "INTERNAL_SERVER_ERROR",
 }
@@ -133,6 +141,8 @@ def api_errors(*statuses: int) -> dict[int, dict[str, Any]]:
         403: ("ROLE_FORBIDDEN", "この操作を行う権限がありません"),
         404: ("REQUEST_NOT_FOUND", "対象が見つかりません"),
         409: ("REQUEST_STATE_CONFLICT", "依頼の状態が更新されているため処理できません"),
+        413: ("IMAGE_TOO_LARGE", "ファイルが大きすぎます"),
+        415: ("UNSUPPORTED_MEDIA_TYPE", "対応していない形式です"),
         422: ("VALIDATION_ERROR", "入力内容を確認してください"),
         500: ("INTERNAL_SERVER_ERROR", "サーバー内部でエラーが発生しました"),
     }
@@ -611,6 +621,7 @@ async def reset_mock(
     reset_store()
     await repository.reset()
     await application_repository.reset()
+    await get_upload_repository().reset()
     return {"reset": True}
 
 
@@ -631,6 +642,157 @@ async def update_profile(
     profile.update(changes)
     profile["updatedAt"] = now_iso()
     return profile
+
+
+def upload_repository_dependency() -> UploadRepository:
+    return get_upload_repository()
+
+
+def image_error(error: images.ImageValidationError) -> HTTPException:
+    return HTTPException(
+        error.status, detail={"code": error.code, "message": error.message}
+    )
+
+
+def profile_image_url(view_token: str) -> str:
+    return f"/profile/images/{view_token}"
+
+
+async def owned_stored_upload(
+    repository: UploadRepository, upload_id: str, current_user: CurrentUser,
+    purpose: str,
+) -> dict:
+    """本人の、本文送信済みで期限内のアップロードだけを通す。"""
+    session = await repository.get_session(upload_id)
+    # 他人のアップロードは存在を伏せる。IDの総当たりで有無を知られないようにする。
+    if session is None or session["ownerId"] != current_user.user_id:
+        raise HTTPException(404, detail={"code": "UPLOAD_NOT_FOUND"})
+    if session["purpose"] != purpose:
+        raise HTTPException(422, detail={"code": "UPLOAD_PURPOSE_MISMATCH"})
+    if session["status"] == "consumed":
+        raise HTTPException(409, detail={"code": "UPLOAD_ALREADY_USED"})
+    if session["status"] != "stored":
+        raise HTTPException(409, detail={"code": "UPLOAD_CONTENT_MISSING"})
+    if upload_expired(session):
+        raise HTTPException(409, detail={"code": "UPLOAD_EXPIRED"})
+    return session
+
+
+def upload_expired(session: dict) -> bool:
+    expires_at = datetime.fromisoformat(session["expiresAt"].replace("Z", "+00:00"))
+    return expires_at <= datetime.now(timezone.utc)
+
+
+@app.post("/uploads", response_model=UploadSessionResponse, status_code=201, tags=["Uploads"], summary="画像アップロードを開始", description="申告されたMIME type、拡張子、サイズを検証し、期限付きのアップロード先を発行する。ストレージ内部キーは返さない。", responses=api_errors(401, 413, 415, 422, 500))
+async def create_upload_session(
+    body: UploadSessionInput,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: UploadRepository = Depends(upload_repository_dependency),
+):
+    try:
+        images.validate_declaration(body.contentType, body.byteSize, body.fileName)
+    except images.ImageValidationError as error:
+        raise image_error(error)
+    # 開始のたびに、期限切れの未確定アップロードを回収する。
+    await repository.purge_expired()
+    session = await repository.create_session(
+        current_user.user_id, body.purpose, body.contentType, body.byteSize
+    )
+    return {
+        "uploadId": session["id"],
+        "uploadUrl": f"/uploads/{session['id']}/content",
+        "expiresAt": session["expiresAt"],
+        "maxBytes": images.MAX_IMAGE_BYTES,
+    }
+
+
+@app.put("/uploads/{upload_id}/content", response_model=UploadedContentResponse, tags=["Uploads"], summary="画像の本文を送信", description="バイト列の実体から形式を判定し、申告と一致しない画像を拒否する。保存前にメタデータを除去する。", responses=api_errors(401, 404, 409, 413, 415, 422, 500))
+async def upload_content(
+    upload_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: UploadRepository = Depends(upload_repository_dependency),
+):
+    session = await repository.get_session(upload_id)
+    if session is None or session["ownerId"] != current_user.user_id:
+        raise HTTPException(404, detail={"code": "UPLOAD_NOT_FOUND"})
+    if session["status"] != "pending":
+        raise HTTPException(409, detail={"code": "UPLOAD_ALREADY_COMPLETED"})
+    if upload_expired(session):
+        raise HTTPException(409, detail={"code": "UPLOAD_EXPIRED"})
+    try:
+        sanitized, content_type = images.sanitize_image(
+            await request.body(), session["contentType"]
+        )
+    except images.ImageValidationError as error:
+        raise image_error(error)
+    stored = await repository.attach_content(upload_id, sanitized, content_type)
+    return {
+        "uploadId": stored["id"],
+        "status": "stored",
+        "contentType": stored["contentType"],
+        "byteSize": stored["byteSize"],
+    }
+
+
+@app.put("/profile/image", response_model=ProfileImageResponse, tags=["Profile"], summary="プロフィール画像を確定", description="検証済みのアップロードを自分のプロフィール画像として確定する。確定に失敗した場合、既存の画像は残る。", responses=api_errors(401, 404, 409, 422, 500))
+async def set_profile_image(
+    body: ProfileImageInput,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: UploadRepository = Depends(upload_repository_dependency),
+):
+    await owned_stored_upload(
+        repository, body.uploadId, current_user, "profile_image"
+    )
+    image = await repository.promote_to_image(body.uploadId, current_user.user_id)
+    if image is None:
+        raise HTTPException(409, detail={"code": "UPLOAD_CONTENT_MISSING"})
+    profile = users_store[current_user.user_id]
+    # 新しい画像を確定できてから、古い画像を消す。差し替え失敗で無画像にしない。
+    previous_image_id = profile.get("imageId")
+    profile["imageId"] = image["id"]
+    profile["imageUrl"] = profile_image_url(image["viewToken"])
+    profile["updatedAt"] = now_iso()
+    if previous_image_id:
+        await repository.delete_image(previous_image_id)
+    return {
+        "imageId": image["id"],
+        "imageUrl": profile["imageUrl"],
+        "updatedAt": profile["updatedAt"],
+    }
+
+
+@app.delete("/profile/image", status_code=204, tags=["Profile"], summary="プロフィール画像を削除", description="自分のプロフィール画像を削除する。設定していない場合は404。", responses=api_errors(401, 404, 500))
+async def delete_profile_image(
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: UploadRepository = Depends(upload_repository_dependency),
+):
+    profile = users_store[current_user.user_id]
+    image_id = profile.get("imageId")
+    if not image_id:
+        raise HTTPException(404, detail={"code": "PROFILE_IMAGE_NOT_FOUND"})
+    await repository.delete_image(image_id)
+    profile["imageId"] = None
+    profile["imageUrl"] = None
+    profile["updatedAt"] = now_iso()
+    return Response(status_code=204)
+
+
+@app.get("/profile/images/{image_token}", tags=["Profile"], summary="プロフィール画像を取得", description="推測できない参照子で画像を返す。認証済み利用者だけが取得でき、キャッシュへ残さない。", responses=api_errors(401, 404, 500))
+async def get_profile_image(
+    image_token: str,
+    _current_user: CurrentUser = Depends(get_current_user),
+    repository: UploadRepository = Depends(upload_repository_dependency),
+):
+    image = await repository.find_image_by_token(image_token)
+    # 本人確認書類はこの経路では出さない。プロフィール画像だけを配信する。
+    if image is None or image["purpose"] != "profile_image":
+        raise HTTPException(404, detail={"code": "PROFILE_IMAGE_NOT_FOUND"})
+    return Response(
+        content=image["data"],
+        media_type=image["contentType"],
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @app.post("/locations/resolve", response_model=LocationResolveResponse, tags=["Locations"], summary="現在地を概算地域へ変換", description="同意済み座標を概算地域へ変換する。座標は保存も返却もしない。取得失敗時は登録地域へフォールバックする。", responses=api_errors(401, 422, 500))

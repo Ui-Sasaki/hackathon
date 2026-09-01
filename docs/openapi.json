@@ -924,6 +924,47 @@
         "title": "MessageResponse",
         "type": "object"
       },
+      "ProfileImageInput": {
+        "properties": {
+          "uploadId": {
+            "description": "本文の送信を終えたアップロードの識別子",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Uploadid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId"
+        ],
+        "title": "ProfileImageInput",
+        "type": "object"
+      },
+      "ProfileImageResponse": {
+        "properties": {
+          "imageId": {
+            "title": "Imageid",
+            "type": "string"
+          },
+          "imageUrl": {
+            "description": "表示用の推測できないURL。ストレージ内部キーは含まない",
+            "title": "Imageurl",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "imageId",
+          "imageUrl",
+          "updatedAt"
+        ],
+        "title": "ProfileImageResponse",
+        "type": "object"
+      },
       "ProfileResponse": {
         "properties": {
           "areaCode": {
@@ -949,6 +990,18 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "imageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "プロフィール画像の表示用URL。未設定ならnull",
+            "title": "Imageurl"
           },
           "role": {
             "enum": [
@@ -1761,6 +1814,126 @@
           "masking"
         ],
         "title": "StructuredRequestResponse",
+        "type": "object"
+      },
+      "UploadSessionInput": {
+        "examples": [
+          {
+            "byteSize": 240000,
+            "contentType": "image/jpeg",
+            "fileName": "photo.jpg",
+            "purpose": "profile_image"
+          }
+        ],
+        "properties": {
+          "byteSize": {
+            "description": "申告するファイルサイズ。上限超過は413",
+            "minimum": 1.0,
+            "title": "Bytesize",
+            "type": "integer"
+          },
+          "contentType": {
+            "description": "申告するMIME type。対応外は415。受信時に実体と突き合わせる",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Contenttype",
+            "type": "string"
+          },
+          "fileName": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "拡張子の突き合わせだけに使う。保存はしない",
+            "title": "Filename"
+          },
+          "purpose": {
+            "description": "画像の用途",
+            "enum": [
+              "profile_image",
+              "verification_document"
+            ],
+            "title": "Purpose",
+            "type": "string"
+          }
+        },
+        "required": [
+          "purpose",
+          "contentType",
+          "byteSize"
+        ],
+        "title": "UploadSessionInput",
+        "type": "object"
+      },
+      "UploadSessionResponse": {
+        "properties": {
+          "expiresAt": {
+            "description": "アップロードの期限（ISO 8601、UTC）",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "maxBytes": {
+            "description": "受け付ける最大バイト数",
+            "title": "Maxbytes",
+            "type": "integer"
+          },
+          "uploadId": {
+            "description": "アップロードの識別子。ストレージ内部キーではない",
+            "title": "Uploadid",
+            "type": "string"
+          },
+          "uploadUrl": {
+            "description": "本文を送る先。期限付きで、この利用者だけが使える",
+            "title": "Uploadurl",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId",
+          "uploadUrl",
+          "expiresAt",
+          "maxBytes"
+        ],
+        "title": "UploadSessionResponse",
+        "type": "object"
+      },
+      "UploadedContentResponse": {
+        "properties": {
+          "byteSize": {
+            "description": "メタデータ除去後のバイト数",
+            "title": "Bytesize",
+            "type": "integer"
+          },
+          "contentType": {
+            "enum": [
+              "image/jpeg",
+              "image/png"
+            ],
+            "title": "Contenttype",
+            "type": "string"
+          },
+          "status": {
+            "const": "stored",
+            "title": "Status",
+            "type": "string"
+          },
+          "uploadId": {
+            "title": "Uploadid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId",
+          "status",
+          "contentType",
+          "byteSize"
+        ],
+        "title": "UploadedContentResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -3780,6 +3953,305 @@
         ]
       }
     },
+    "/profile/image": {
+      "delete": {
+        "description": "自分のプロフィール画像を削除する。設定していない場合は404。",
+        "operationId": "delete_profile_image_profile_image_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "プロフィール画像を削除",
+        "tags": [
+          "Profile"
+        ]
+      },
+      "put": {
+        "description": "検証済みのアップロードを自分のプロフィール画像として確定する。確定に失敗した場合、既存の画像は残る。",
+        "operationId": "set_profile_image_profile_image_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileImageInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileImageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "details": {},
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "依頼の状態が更新されているため処理できません"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "プロフィール画像を確定",
+        "tags": [
+          "Profile"
+        ]
+      }
+    },
+    "/profile/images/{image_token}": {
+      "get": {
+        "description": "推測できない参照子で画像を返す。認証済み利用者だけが取得でき、キャッシュへ残さない。",
+        "operationId": "get_profile_image_profile_images__image_token__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "image_token",
+            "required": true,
+            "schema": {
+              "title": "Image Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "プロフィール画像を取得",
+        "tags": [
+          "Profile"
+        ]
+      }
+    },
     "/reports": {
       "post": {
         "description": "通報者はセッションから決定する。詐欺または危険作業の依頼通報はhighとなり、対象依頼をsuspendedへ自動遷移する。",
@@ -5176,6 +5648,297 @@
         "summary": "公開依頼へ応募",
         "tags": [
           "Applications"
+        ]
+      }
+    },
+    "/uploads": {
+      "post": {
+        "description": "申告されたMIME type、拡張子、サイズを検証し、期限付きのアップロード先を発行する。ストレージ内部キーは返さない。",
+        "operationId": "create_upload_session_uploads_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadSessionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "IMAGE_TOO_LARGE",
+                    "details": {},
+                    "message": "ファイルが大きすぎます",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "ファイルが大きすぎます"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNSUPPORTED_MEDIA_TYPE",
+                    "details": {},
+                    "message": "対応していない形式です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対応していない形式です"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "画像アップロードを開始",
+        "tags": [
+          "Uploads"
+        ]
+      }
+    },
+    "/uploads/{upload_id}/content": {
+      "put": {
+        "description": "バイト列の実体から形式を判定し、申告と一致しない画像を拒否する。保存前にメタデータを除去する。",
+        "operationId": "upload_content_uploads__upload_id__content_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadedContentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "details": {},
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "依頼の状態が更新されているため処理できません"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "IMAGE_TOO_LARGE",
+                    "details": {},
+                    "message": "ファイルが大きすぎます",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "ファイルが大きすぎます"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNSUPPORTED_MEDIA_TYPE",
+                    "details": {},
+                    "message": "対応していない形式です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対応していない形式です"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "画像の本文を送信",
+        "tags": [
+          "Uploads"
         ]
       }
     },
