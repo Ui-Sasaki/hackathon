@@ -14,6 +14,26 @@ FastAPI実装やAPI接続だけでは確定できない事項を記録する。�
 
 ## 未確認
 
+### COORD-003: 応募者選択のPostgres原子操作
+
+- 対象TODO: 19 応募者選択API接続
+- 調整先: Supabase担当
+- 現状とずれ:
+  - API契約は応募IDと`expectedVersion`から、応募選択、定員予約、依頼状態更新、未選択応募終了、マッチ作成を一体で行う必要がある。
+  - 既存Postgres Repositoryには、この一連の操作を同一トランザクションで実行するメソッドがない。
+  - FastAPIから複数のPostgres更新を個別に呼ぶと、複数端末からの同時選択時に定員超過や部分更新が起こり得る。
+- FastAPI担当側で完了する範囲:
+  - クライアント入力を`expectedVersion`だけに制限する。
+  - 所有者、ブロック関係、応募状態、定員、楽観ロックを検証するService。
+  - `ApplicationRepository.select`と`RequestRepository.reserve_helper`の共通契約。
+  - Memory Repository、API接続、認可・競合テスト。
+  - Postgres側の操作が未実装なら503で拒否し、不完全な更新を実行しない。
+- 接続・引き継ぎ条件:
+  - 応募ID、依頼者、`expectedVersion`を検証し、応募状態更新、定員予約、依頼状態更新、未選択応募終了、マッチ作成を単一トランザクションまたはPostgreSQL関数で行う。
+  - version不一致、定員到達、選択済み応募は409へ変換できる結果を返す。
+  - ブロック関係と依頼所有者はFastAPIでも引き続き検証する。
+- 状態: 未確認（Memory RepositoryとAPI契約を先行し、Postgres実装は本番で選択不能）
+
 ### COORD-001: 位置情報利用の明示同意UI
 
 - 対象TODO: 08 概算地域API接続

@@ -116,6 +116,12 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/reports` | 通報 |
 | POST | `/users/{id}/block` | ブロック・解除 |
 
+`PATCH /profile`は既存フロントエンドのプロフィール入力を基準に、表示名、都道府県、
+年代、注意事項、支援者区分、大学・学部・学年、職業・業界・勤務先、性別、興味、
+一言メッセージを更新する。本人ID、ロール、メール確認、本人確認状態はセッションと
+サーバー側レコードから決定し、クライアント入力では変更できない。プロフィール画像は
+安全なアップロードAPIが未実装のため、端末ローカルURIを`PATCH /profile`へ送らない。
+
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
 認証、モック利用者、ページング、実装状況を含むフロント向け手順は
 [`docs/api-development.md`](../docs/api-development.md)を参照する。固定OpenAPIは
@@ -153,6 +159,18 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 この固定ルールは代表的な形式を検出する補助機能であり、完全な匿名化を保証しない。
 固有名詞、崩した表記、文脈から推測できる情報は検出できない場合があるため、送信前に
 ユーザー自身がマスキング結果を確認する必要がある。
+
+### Claudeによる依頼構造化
+
+既定の`CLAUDE_API_ENABLED=false`では外部通信をせず、開発用のローカルProviderを
+使う。Claudeを使う場合は`CLAUDE_API_ENABLED=true`と`ANTHROPIC_API_KEY`を設定する。
+Messages APIにはタイムアウトを設定し、JSON Schemaを指定した
+`structure_request`ツールだけを選択させたうえで、tool inputをPydanticでも再検証する。
+
+応答は常に`status: draft`、`requiresConfirmation: true`、`autoPublished: false`で、
+ユーザー確認なしに公開されない。監査用Memory Repositoryにはモデル名、プロンプト版、
+処理日時、スキーマ版だけを保存し、依頼本文やマスキング前の個人情報は保存しない。
+この機能は`app/db.py`、Postgres Repository、migration、RLSへ依存しない。
 
 ## エラーレスポンスとトレースID
 
