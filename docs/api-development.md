@@ -42,6 +42,41 @@ SDKが設定する `anti-csrf` ヘッダーも必要である。`userId`、`requ
 
 ## 実装状況
 
+### 利用者設定
+
+`GET /settings` と `PATCH /settings` は、認証済み本人の `notificationsEnabled`、
+`locationEnabled`、`fontSize`（`small`、`medium`、`large`）を取得・部分更新する。
+未指定項目は維持される。`locationEnabled: false` の間、画面はブラウザ位置情報の
+取得を開始しない。`notificationsEnabled` はアプリ内の通知希望であり、ブラウザや
+OSの通知権限自体を付与・解除するものではない。
+
+現在はMemory Repositoryを使用する。Postgres実装、migration、RLSはSupabase担当との
+合意後に追加する。`tetote/src/shared/SettingsScreen.tsx` は初回表示時にGETを行い、
+各操作をPATCHした成功レスポンスで表示状態を確定できる。
+
+### 依頼カードの非表示
+
+`POST /requests/{request_id}/dismiss` は認証済み本人の一覧から依頼を非表示にし、
+`DELETE /requests/{request_id}/dismiss` は非表示を解除する。どちらも冪等で成功時は
+204を返す。`GET /requests` は本人が非表示にした依頼だけを除外し、他利用者の一覧へ
+影響しない。存在しない依頼、公開中でない依頼、ブロック関係など存在を開示できない
+依頼への操作は404となる。
+
+現在はMemory Repositoryを使用する。Postgres実装、migration、RLSはSupabase担当との
+合意後に追加する。`tetote/src/context/RequestsContext.tsx` はスキップ操作の成功後に
+対象を画面状態から除外し、再取得後はAPI一覧を正本として表示できる。
+
+### 依頼の保存
+
+`GET /saved-requests` は認証済み本人の保存依頼だけを返す。
+`POST /saved-requests/{request_id}` と `DELETE /saved-requests/{request_id}` は保存・解除を
+冪等に行い、成功時は204を返す。非公開、停止、取消済み、ブロック関係の依頼は一覧へ
+露出しない。保存操作の対象を閲覧できない場合は404を返す。
+
+現在はMemory Repositoryを使用する。Postgres実装、migration、RLSはSupabase担当との
+合意後に追加する。`tetote/src/context/RequestsContext.tsx` はローカル保存状態の代わりに
+この一覧を正本として利用できる。
+
 依頼CRUDはMemory/Postgres Repositoryに対応する。プロフィール、位置解決、応募、
 マッチ、チャット、完了、レビュー、AI実績、本人確認、通報、ブロックのAPI経路と
 状態・認可検査は実装済みだが、依頼以外の保存、AI生成、本人確認審査は開発用

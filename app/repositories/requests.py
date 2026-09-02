@@ -182,6 +182,10 @@ class RequestRepository(Protocol):
         *, expected_version: int | None = None, bump_version: bool = True,
     ) -> bool: ...
 
+    async def reserve_helper(
+        self, actor: CurrentUser, request_id: str, expected_version: int
+    ) -> RequestRecord | None: ...
+
     async def reset(self) -> None: ...
 
 
@@ -315,6 +319,28 @@ class MemoryRequestRepository:
             item["version"] += 1
         item["updatedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         return True
+
+    async def reserve_helper(
+        self, actor: CurrentUser, request_id: str, expected_version: int
+    ) -> RequestRecord | None:
+        del actor
+        item = self._items.get(request_id)
+        if (
+            item is None
+            or item["version"] != expected_version
+            or item["status"] not in {"published", "matching"}
+            or item["acceptedHelpers"] >= item["requiredHelpers"]
+        ):
+            return None
+        item["acceptedHelpers"] += 1
+        item["status"] = (
+            "matched"
+            if item["acceptedHelpers"] >= item["requiredHelpers"]
+            else "matching"
+        )
+        item["version"] += 1
+        item["updatedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        return deepcopy(item)
 
     async def reset(self) -> None:
         self.reset_sync()
