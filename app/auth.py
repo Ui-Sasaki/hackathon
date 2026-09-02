@@ -9,6 +9,8 @@ from typing import Any, Callable, Literal
 from fastapi import HTTPException, Request, Security
 from fastapi.security import APIKeyCookie
 
+from app.http_middleware import website_origin
+
 
 SUPERTOKENS_ENABLED = os.getenv("SUPERTOKENS_ENABLED", "true").lower() in {
     "1", "true", "yes", "on"
@@ -105,7 +107,7 @@ def initialise_supertokens() -> None:
         app_info=InputAppInfo(
             app_name="たすけの輪",
             api_domain=os.getenv("API_DOMAIN", "http://localhost:8000"),
-            website_domain=os.getenv("WEBSITE_DOMAIN", "http://localhost:3000"),
+            website_domain=website_origin(),
             api_base_path="/auth",
             website_base_path="/auth",
         ),

@@ -26,7 +26,7 @@ python -m uvicorn main:app --reload --port 8000
 | `SUPERTOKENS_CONNECTION_URI` | `http://localhost:3567` | SuperTokens Core接続先 |
 | `SUPERTOKENS_API_KEY` | 未設定 | Core APIキー |
 | `API_DOMAIN` | `http://localhost:8000` | API公開元 |
-| `WEBSITE_DOMAIN` | `http://localhost:3000` | CORSで許可するフロントエンド |
+| `WEBSITE_DOMAIN` | `http://localhost:3000` | CORSで許可するフロントエンドOrigin（末尾 `/` なし）。本番は `https://hackathon-tau-mauve.vercel.app` |
 | `AUTH_COOKIE_SECURE` | `true` | CookieのSecure属性 |
 | `AUTH_COOKIE_SAME_SITE` | `lax` | CookieのSameSite属性 |
 | `AUTH_MOCK_ENABLED` | `false` | 開発用の認証モックを有効化 |

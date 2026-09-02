@@ -15,7 +15,6 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Reques
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 import httpx
 from starlette.datastructures import MutableHeaders
@@ -24,6 +23,7 @@ from app.auth import (
     SUPERTOKENS_ENABLED, CurrentUser, configure_user_creator, configure_user_lookup,
     cors_headers, get_current_user,
 )
+from app.http_middleware import add_cors_middleware
 from app.repositories.requests import (
     InvalidCursor, RequestRepository, decode_cursor, encode_cursor, get_request_repository,
 )
@@ -78,13 +78,7 @@ app = FastAPI(
     ),
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[os.getenv("WEBSITE_DOMAIN", "http://localhost:3000")],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=cors_headers(),
-)
+add_cors_middleware(app, allow_headers=cors_headers())
 
 
 class ApiPrefixMiddleware:
