@@ -8,7 +8,7 @@ from app.auth import CurrentUser
 from app.repositories.applications import (
     ApplicationRecord, ApplicationRepository, DuplicateApplicationError,
 )
-from app.repositories.requests import RequestRecord
+from app.repositories.requests import RequestRecord, RequestRepository
 
 
 def _is_expired(request_item: RequestRecord) -> bool:
@@ -54,3 +54,54 @@ async def withdraw_application(
     if updated is None:
         raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
     return updated
+
+
+async def select_application(
+    application_repository: ApplicationRepository,
+    request_repository: RequestRepository,
+    actor: CurrentUser,
+    application_id: str,
+    expected_version: int,
+    *,
+    blocked: bool,
+    helper_verified: bool,
+) -> tuple[ApplicationRecord, RequestRecord]:
+    item = await application_repository.get(actor, application_id)
+    if item is None or blocked:
+        raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
+    request_item = await request_repository.get(actor, item["requestId"])
+    if request_item is None:
+        raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND"})
+    if request_item["requesterId"] != actor.user_id:
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+    if request_item["version"] != expected_version:
+        raise HTTPException(409, detail={
+            "code": "REQUEST_STATE_CONFLICT",
+            "currentVersion": request_item["version"],
+        })
+    if item["status"] != "applied":
+        raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
+    if request_item.get("verificationRequired") and not helper_verified:
+        raise HTTPException(409, detail={"code": "HELPER_VERIFICATION_REQUIRED"})
+    if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
+        raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
+
+    reserve_helper = getattr(request_repository, "reserve_helper", None)
+    select = getattr(application_repository, "select", None)
+    if not callable(reserve_helper) or not callable(select):
+        raise HTTPException(503, detail={"code": "APPLICATION_SELECTION_UNAVAILABLE"})
+
+    updated_request = await reserve_helper(actor, item["requestId"], expected_version)
+    if updated_request is None:
+        raise HTTPException(409, detail={"code": "REQUEST_STATE_CONFLICT"})
+    selected = await select(
+        actor,
+        application_id,
+        close_remaining=updated_request["status"] == "matched",
+    )
+    if not selected:
+        raise HTTPException(409, detail={"code": "APPLICATION_NOT_SELECTABLE"})
+    updated_application = await application_repository.get(actor, application_id)
+    if updated_application is None:
+        raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
+    return updated_application, updated_request
