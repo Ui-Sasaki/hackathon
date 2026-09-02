@@ -1,0 +1,8 @@
+.venv/
+backend_mock/
+docs/
+supabase/
+tests/
+tetote/
+todo.md
+setting.state.json
