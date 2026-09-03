@@ -25,6 +25,8 @@ from app.repositories.applications import (
     MemoryApplicationRepository, PostgresApplicationRepository,
     get_application_repository,
 )
+from app.repositories.matches import MemoryMatchRepository, PostgresMatchRepository
+from app.repositories.messages import MemoryMessageRepository, PostgresMessageRepository
 from app.repositories.user_settings import (
     MemoryUserSettingsRepository, UserSettingsRepository,
     get_user_settings_repository,
@@ -787,6 +789,19 @@ def test_repository_implementations_share_application_contract() -> None:
     for implementation in (MemoryApplicationRepository, PostgresApplicationRepository):
         assert operations <= set(dir(implementation))
     assert "select" in dir(MemoryApplicationRepository)
+    assert "select_atomically" in dir(PostgresApplicationRepository)
+
+
+def test_repository_implementations_share_match_contract() -> None:
+    operations = {"get", "create", "complete", "dispute", "reset"}
+    for implementation in (MemoryMatchRepository, PostgresMatchRepository):
+        assert operations <= set(dir(implementation))
+
+
+def test_repository_implementations_share_message_contract() -> None:
+    operations = {"list_for_match", "create", "reset"}
+    for implementation in (MemoryMessageRepository, PostgresMessageRepository):
+        assert operations <= set(dir(implementation))
 
 
 def test_memory_request_repository_supports_selection_capacity_reservation() -> None:
@@ -1342,7 +1357,7 @@ def test_match_detail_hides_missing_and_blocked_matches() -> None:
     assert blocked.json()["error"]["code"] == "MATCH_NOT_FOUND"
 
 
-def test_complete_match_needs_both_parties_and_tolerates_repeat() -> None:
+def test_complete_match_needs_both_parties_and_rejects_repeat() -> None:
     async def helper_user() -> CurrentUser:
         return HELPER
 
@@ -1358,8 +1373,8 @@ def test_complete_match_needs_both_parties_and_tolerates_repeat() -> None:
         f"/matches/{match_id}/complete",
         json={"completed": True, "actorRole": "requester"},
     )
-    assert repeated.status_code == 200
-    assert repeated.json()["status"] == "completion_pending"
+    assert repeated.status_code == 409
+    assert repeated.json()["error"]["code"] == "COMPLETION_ALREADY_CONFIRMED"
 
     app.dependency_overrides[get_current_user] = helper_user
     second = client.post(
