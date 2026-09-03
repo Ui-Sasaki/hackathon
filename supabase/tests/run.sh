@@ -89,4 +89,14 @@ echo "=== 12. 認証境界・プロフィール永続化検査（非特権ロー
   -v ON_ERROR_STOP=1 -f "$HERE/identity_profile_persistence.sql" 2>&1 \
   | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
 
+echo "=== 13. ブロック永続化・監査検査（非特権ロール tetote_app）==="
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/block_persistence.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
+echo "=== 14. 通報・依頼停止・監査検査（非特権ロール tetote_app）==="
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/report_persistence.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
 echo "=== 全検査を通過した ==="

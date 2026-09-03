@@ -77,8 +77,8 @@ OSの通知権限自体を付与・解除するものではない。
 合意後に追加する。`tetote/src/context/RequestsContext.tsx` はローカル保存状態の代わりに
 この一覧を正本として利用できる。
 
-依頼CRUD、応募、マッチ、チャット、完了処理、プロフィールはMemory/Postgres
-Repositoryに対応する。位置解決、レビュー、AI実績、本人確認、通報、ブロックのAPI経路と
+依頼CRUD、応募、マッチ、チャット、完了処理、プロフィール、ブロック、通報はMemory/Postgres
+Repositoryに対応する。位置解決、レビュー、AI実績、本人確認のAPI経路と
 状態・認可検査は実装済みだが、これらの保存、AI生成、本人確認審査は開発用
 インメモリ／モックである。SuperTokensの `/auth/*` はSDK提供であり、FastAPI生成の
 OpenAPIには個別操作として現れない。管理画面、Realtime、実AI、本人確認審査、
