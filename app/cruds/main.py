@@ -1652,18 +1652,30 @@ async def update_achievement_visibility(
 async def create_verification(
     body: VerificationInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: UploadRepository = Depends(upload_repository_dependency),
 ):
-    if body.method == "student_card" and not body.storageObjectKey:
-        raise HTTPException(422, detail={"code": "STORAGE_OBJECT_REQUIRED"})
+    if body.method == "student_card" and not body.uploadId:
+        raise HTTPException(422, detail={"code": "UPLOAD_REQUIRED"})
+    # 重複確認を画像の確定より先に行い、二重申請でアップロードを消費させない。
     if any(
         item["status"] == "pending" and item["userId"] == current_user.user_id
         for item in verifications.values()
     ):
         raise HTTPException(409, detail={"code": "VERIFICATION_ALREADY_PENDING"})
+    image = None
+    if body.uploadId:
+        await owned_stored_upload(
+            repository, body.uploadId, current_user, "verification_document"
+        )
+        image = await repository.promote_to_image(body.uploadId, current_user.user_id)
+        if image is None:
+            raise HTTPException(409, detail={"code": "UPLOAD_CONTENT_MISSING"})
     item = {
         "id": new_id("verification"),
         "userId": current_user.user_id,
-        **body.model_dump(),
+        "method": body.method,
+        # 画像の参照はサーバー内部にだけ持つ。レスポンスにも監査ログにも出さない。
+        "_imageId": image["id"] if image else None,
         "status": "pending",
         "createdAt": now_iso(),
     }

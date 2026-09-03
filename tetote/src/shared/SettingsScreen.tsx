@@ -287,6 +287,37 @@ export default function HelperSettingsScreen() {
           <View style={styles.accountGroup}>
             <Pressable
               onPress={() =>
+                router.push(
+                  pathname.startsWith("/help")
+                    ? "/help/verification"
+                    : "/helper/verification"
+                )
+              }
+              style={({ pressed }) => [
+                styles.accountButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.logoutText,
+                  { fontSize: fs(15) },
+                ]}
+              >
+                本人確認
+              </Text>
+
+              <Ionicons
+                name="chevron-forward"
+                size={20}
+                color="#777777"
+              />
+            </Pressable>
+
+            <View style={styles.divider} />
+
+            <Pressable
+              onPress={() =>
                 setLogoutModalVisible(true)
               }
               style={({ pressed }) => [
