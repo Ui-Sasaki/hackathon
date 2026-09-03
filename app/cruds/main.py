@@ -651,6 +651,7 @@ async def reset_mock(
     reset_store()
     await repository.reset()
     await application_repository.reset()
+    await get_match_repository().reset()
     await get_upload_repository().reset()
     await structure_audit_repository.reset()
     await user_settings_repository.reset()
@@ -1684,15 +1685,18 @@ async def update_achievement_visibility(
 async def get_character_progress(
     current_user: CurrentUser = Depends(get_current_user),
     repository: RequestRepository = Depends(request_repository_dependency),
+    match_repository: MatchRepository = Depends(match_repository_dependency),
 ):
+    # マッチは Repository（本番は Postgres）が正本。インメモリの辞書は見ない。
     helps: list[character.CompletedHelp] = []
-    for match in matches.values():
-        if match["helperId"] != current_user.user_id or match["status"] != "completed":
-            continue
-        # 依頼が読めないとき（削除済みなど）は活動時間を0として回数だけ数える。
-        request_item = await repository.get(current_user, match["requestId"])
-        minutes = request_item["estimatedMinutes"] if request_item else 0
-        helps.append({"matchId": match["id"], "estimatedMinutes": minutes})
+    for completed in await match_repository.list_completed_for_helper(current_user):
+        minutes = completed.get("estimatedMinutes")
+        if minutes is None:
+            # Memory実装は活動時間を持たないので依頼から引く。
+            # 依頼が読めないとき（削除済みなど）は0として回数だけ数える。
+            request_item = await repository.get(current_user, completed["requestId"])
+            minutes = request_item["estimatedMinutes"] if request_item else 0
+        helps.append({"matchId": completed["matchId"], "estimatedMinutes": minutes})
     return character.build_progress(current_user.user_id, helps)
 
 

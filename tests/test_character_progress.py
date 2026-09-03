@@ -10,10 +10,10 @@ os.environ["REQUEST_REPOSITORY"] = "memory"
 
 import httpx
 
-import app.cruds.main as crud_module
 from app.auth import CurrentUser, get_current_user
 from app.cruds.main import SEED_REQUEST_1024, SEED_REQUEST_1025
 from app.main import app
+from app.repositories.matches import get_match_repository
 from app.services import character
 
 
@@ -57,11 +57,12 @@ def act_as(user: CurrentUser) -> None:
 def setup_function() -> None:
     act_as(HELPER)
     client.post("/_mock/reset")
+    asyncio.run(get_match_repository().reset())
 
 
 def seed_match(match_id: str, *, helper_id: str, request_id: str, status: str) -> None:
-    """API本体が使っている辞書へ直接マッチを置く（マッチ作成APIを経由しない）。"""
-    crud_module.matches[match_id] = {
+    """マッチ Repository へ直接マッチを置く（応募選択APIを経由しない）。"""
+    record = {
         "id": match_id,
         "requestId": request_id,
         "requesterId": "usr_101",
@@ -71,8 +72,11 @@ def seed_match(match_id: str, *, helper_id: str, request_id: str, status: str) -
         "helperConfirmed": status == "completed",
         "matchedAt": "2026-09-01T10:00:00Z",
         "completedAt": "2026-09-02T10:00:00Z" if status == "completed" else None,
+        "disputeReason": None,
+        "disputedAt": None,
         "version": 1,
     }
+    asyncio.run(get_match_repository().create(HELPER, record))
 
 
 # --- 規則そのもの ------------------------------------------------------------
