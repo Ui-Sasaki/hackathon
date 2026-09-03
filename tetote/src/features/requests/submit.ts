@@ -73,6 +73,17 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
+/**
+ * AIが返した日時をそのまま使えるか。読めない値や過去の日時は、期限のラベルから
+ * 決め直す（過去の日時で依頼を出すと、支援者には期限切れに見えてしまう）。
+ */
+function usableScheduledAt(value: string | null, now: Date): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime()) || parsed.getTime() <= now.getTime()) return null;
+  return value;
+}
+
 export function buildCreateRequestInput(
   draft: StructuredRequestDraft,
   inputs: ManualRequestInputs = {},
@@ -91,7 +102,9 @@ export function buildCreateRequestInput(
     MAX_MINUTES,
   );
   const requiredHelpers = clamp(draft.requiredHelpers ?? 1, 1, 5);
-  const scheduledAt = draft.scheduledAt ?? scheduledAtFromDeadline(inputs.deadline, options.now);
+  const now = options.now ?? new Date();
+  const scheduledAt =
+    usableScheduledAt(draft.scheduledAt, now) ?? scheduledAtFromDeadline(inputs.deadline, now);
   const areaCode = draft.approximateArea || options.fallbackAreaCode || DEFAULT_AREA_CODE;
 
   return {

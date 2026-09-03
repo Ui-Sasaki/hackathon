@@ -122,6 +122,22 @@ describe("作成APIへ送る形の組み立て", () => {
     });
   });
 
+  it("AIが過去の日時や読めない日時を返したら、期限のラベルから決め直す", () => {
+    const past = buildCreateRequestInput(
+      { ...draft, scheduledAt: "2026-08-19T17:00:00+09:00" },
+      { deadline: "1週間後" },
+      { now: NOW },
+    );
+    const broken = buildCreateRequestInput(
+      { ...draft, scheduledAt: "not-a-date" },
+      {},
+      { now: NOW },
+    );
+
+    expect(past.input?.scheduledAt).toBe("2026-09-10T09:00:00.000Z");
+    expect(broken.input?.scheduledAt).toBe("2026-09-06T09:00:00.000Z");
+  });
+
   it("所要時間はサーバーが受け付ける範囲へ丸める", () => {
     const tooLong = buildCreateRequestInput({ ...draft, estimatedMinutes: 600 }, {}, { now: NOW });
     const tooShort = buildCreateRequestInput({ ...draft, estimatedMinutes: 3 }, {}, { now: NOW });
