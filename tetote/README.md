@@ -71,7 +71,7 @@ Chrome、Safari、Edgeの開発者ツールで次を確認する。
 
 - 登録・ログイン後にHttpOnlyのセッションCookieが発行され、再読み込み後も復元される
 - API通信が `credentials: include` で行われ、SuperTokens SDKがanti-CSRFヘッダーを付与する
-- CookieのSameSite設定がフロント/APIの配置に合い、本番CookieにSecure属性がある
+- APIとフロントが別オリジンの場合はCookieのSameSiteが`None`で、本番CookieにSecure属性がある
 - ログアウト後または期限切れ後に保護画面へ戻れず、ログイン画面へ1回だけ遷移する
 - パスワード、Cookie、セッショントークン、anti-CSRF値がURL・Storage・ログへ出ない
 

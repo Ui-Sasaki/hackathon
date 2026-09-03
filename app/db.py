@@ -3,10 +3,8 @@
 Runtime connects as `tetote_app` (NOBYPASSRLS). RLS policies read the current
 actor from a transaction-local setting, so every authenticated request must:
 
-1. resolve (or provision) the internal `users.id` for the SuperTokens subject
-   via the `app.ensure_user` SECURITY DEFINER function, which is the only
-   permitted way to create a `users` row (see supabase/migrations/
-   20260821000000_user_provisioning.sql);
+1. resolve the already authenticated SuperTokens subject to an internal
+   `users.id` via the narrowly scoped `app.authenticated_user_id` function;
 2. set `app.actor_id` for that transaction via `set_config(..., true)`
    (transaction-local — never session-level, so it cannot leak across a
    pooled/reused connection);
@@ -54,14 +52,10 @@ async def actor_connection(current_user: CurrentUser) -> AsyncIterator[asyncpg.C
     try:
         async with conn.transaction():
             actor_id = await conn.fetchval(
-                "select app.ensure_user($1, $2, $3::account_role)",
-                current_user.user_id,
-                # Profile management (display_name) is out of scope for #4;
-                # the SuperTokens subject is used as a placeholder until a
-                # real profile endpoint provisions one.
-                current_user.user_id,
-                current_user.role,
+                "select app.authenticated_user_id($1)", current_user.user_id
             )
+            if actor_id is None:
+                raise RuntimeError("Authenticated user is not provisioned")
             await conn.execute("select set_config('app.actor_id', $1, true)", str(actor_id))
             yield conn
     finally:

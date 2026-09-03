@@ -2,7 +2,7 @@
 # 同じversionを見た2接続が同時に選択しても、成功は1件だけになることを検査する。
 set -euo pipefail
 
-PGBIN="${PGBIN:-/usr/lib/postgresql/18/bin}"
+PGBIN="${PGBIN:-$(pg_config --bindir)}"
 PGHOST="${PGHOST:-127.0.0.1}"
 PGPORT="${PGPORT:-55432}"
 PGDATABASE="${PGDATABASE:-tetote}"
