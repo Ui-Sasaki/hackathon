@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -22,6 +22,11 @@ import {
   voiceReducer,
   VOICE_ERROR_MESSAGES,
 } from "../../voice/session";
+import {
+  appendAnswer,
+  MAX_QUESTION_ROUNDS,
+  nextConversationStep,
+} from "../../voice/conversation";
 
 export default function RequestVoiceScreen() {
   const router = useRouter();
@@ -30,6 +35,11 @@ export default function RequestVoiceScreen() {
 
   const [state, dispatch] = useReducer(voiceReducer, initialVoiceState);
   const controllerRef = useRef<RecognitionController | null>(null);
+  // AIとの会話ループ。確認済みテキストの累積と、いま提示中の質問を持つ。
+  const [baseText, setBaseText] = useState("");
+  const [question, setQuestion] = useState<string | null>(null);
+  const [questionRound, setQuestionRound] = useState(0);
+  const [checking, setChecking] = useState(false);
 
   // 非対応ブラウザでは録音を始めさせず、最初から手入力へ促す。
   useEffect(() => {
@@ -93,9 +103,20 @@ export default function RequestVoiceScreen() {
     return describeMasked(maskPersonalInfo(draft).masked);
   }, [draft, isReviewing]);
 
-  // 確認を押したときにだけ次の画面へ進む。渡すのは必ずマスク済みテキスト。
-  // 確認画面から戻って再度押した場合も、同じ内容でもう一度進める。
-  const confirmDraft = () => {
+  const proceedToConfirm = (content: string) => {
+    router.push({
+      pathname: "/help/request-confirm",
+      params: { content },
+    });
+  };
+
+  // 確認を押したときにだけ先へ進む。渡すのは必ずマスク済みテキスト。
+  // 不足情報があればAIの追加質問を1問だけ受け取り、答えを継ぎ足して繰り返す。
+  const confirmDraft = async () => {
+    if (checking) {
+      return;
+    }
+
     const next = voiceReducer(state, { type: "confirm" });
     dispatch({ type: "confirm" });
 
@@ -105,10 +126,25 @@ export default function RequestVoiceScreen() {
       return;
     }
 
-    router.push({
-      pathname: "/help/request-confirm",
-      params: { content: submission.text },
-    });
+    const combined = appendAnswer(baseText, submission.text);
+    setChecking(true);
+
+    try {
+      const step = await nextConversationStep(combined, questionRound);
+
+      if (step.type === "question") {
+        setBaseText(combined);
+        setQuestion(step.question);
+        setQuestionRound((current) => current + 1);
+        // 回答を録音できるよう、録音前の状態へ戻す。
+        dispatch({ type: "cancel" });
+        return;
+      }
+
+      proceedToConfirm(combined);
+    } finally {
+      setChecking(false);
+    }
   };
 
   return (
@@ -136,7 +172,47 @@ export default function RequestVoiceScreen() {
             話した内容を文字にします。確認してから依頼へ進みます
           </Text>
 
-          {state.status === "idle" && (
+          {state.status === "idle" && question && (
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Ionicons name="sparkles" size={22} color="#F2A329" />
+
+                <Text style={styles.cardTitle}>AIからの質問</Text>
+              </View>
+
+              <Text style={styles.questionText}>{question}</Text>
+
+              <Text style={styles.cardText}>
+                マイクで答えると、これまでの内容に追加されます。（{questionRound}/{MAX_QUESTION_ROUNDS}回目）
+              </Text>
+
+              <Pressable
+                onPress={startRecording}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Ionicons name="mic" size={20} color="#FFFFFF" />
+
+                <Text style={styles.primaryButtonText}>マイクで答える</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => proceedToConfirm(baseText)}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.secondaryButtonText}>
+                  答えずにこのまま進む
+                </Text>
+              </Pressable>
+            </View>
+          )}
+
+          {state.status === "idle" && !question && (
             <View style={styles.card}>
               <View style={styles.cardHeader}>
                 <Ionicons name="mic-outline" size={22} color="#245C2D" />
@@ -232,6 +308,10 @@ export default function RequestVoiceScreen() {
                 <Text style={styles.cardTitle}>聞き取った内容</Text>
               </View>
 
+              {question && (
+                <Text style={styles.questionText}>{question}</Text>
+              )}
+
               <Text style={styles.cardText}>
                 違うところがあれば、そのまま直せます。
               </Text>
@@ -254,17 +334,23 @@ export default function RequestVoiceScreen() {
               )}
 
               <Pressable
-                onPress={confirmDraft}
+                onPress={() => void confirmDraft()}
+                disabled={checking}
                 style={({ pressed }) => [
                   styles.primaryButton,
+                  checking && styles.disabledButton,
                   pressed && styles.pressed,
                 ]}
               >
-                <Text style={styles.primaryButtonText}>
-                  この内容で確認へ進む
-                </Text>
+                {checking ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
+                )}
 
-                <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
+                <Text style={styles.primaryButtonText}>
+                  {checking ? "AIが確認しています..." : "この内容で確認へ進む"}
+                </Text>
               </Pressable>
 
               <Pressable
@@ -461,6 +547,22 @@ const createStyles = (scale: number) =>
       fontSize: 15 * scale,
       lineHeight: 22 * scale,
       textAlignVertical: "top",
+    },
+
+    questionText: {
+      alignSelf: "flex-start",
+      color: "#245C2D",
+      fontSize: 15 * scale,
+      lineHeight: 22 * scale,
+      fontWeight: "700",
+      backgroundColor: "#F1F7F1",
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+    },
+
+    disabledButton: {
+      opacity: 0.6,
     },
 
     maskNotice: {
