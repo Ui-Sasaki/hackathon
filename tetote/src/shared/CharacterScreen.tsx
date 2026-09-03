@@ -20,7 +20,7 @@ export default function HelperCharacterScreen() {
         <View style={styles.characterArea}>
           <Image
             source={require(
-              "../../assets/onboarding_asset/c1.jpg"
+              "../../assets/onboarding_asset/c1.png"
             )}
             style={styles.characterImage}
             resizeMode="contain"

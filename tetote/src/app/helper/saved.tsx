@@ -50,7 +50,7 @@ export default function SavedScreen() {
         {savedRequests.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Image
-              source={require("../../../assets/onboarding_asset/c1.jpg")}
+              source={require("../../../assets/onboarding_asset/c1.png")}
               style={styles.mascot}
               resizeMode="contain"
             />
