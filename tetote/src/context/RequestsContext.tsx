@@ -13,6 +13,7 @@ import {
   toRequestCard,
   type RequestCard,
 } from "../features/requests/client";
+import { useAuth } from "../auth/AuthContext";
 
 export type RequestItem = RequestCard;
 
@@ -34,6 +35,7 @@ type RequestsContextType = {
 const RequestsContext = createContext<RequestsContextType | null>(null);
 
 export function RequestsProvider({ children }: { children: ReactNode }) {
+  const { status: authStatus } = useAuth();
   const [requests, setRequests] = useState<RequestItem[]>([]);
   const [status, setStatus] = useState<RequestsStatus>("loading");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -53,10 +55,11 @@ export function RequestsProvider({ children }: { children: ReactNode }) {
       });
   }, []);
 
-  // 初期状態が loading のため、初回はそのまま取得だけを行う。
+  // セッション復元前の401が認証済みセッションを消さないよう、復元完了後に取得する。
   useEffect(() => {
+    if (authStatus !== "authenticated") return;
     fetchRequests();
-  }, [fetchRequests]);
+  }, [authStatus, fetchRequests]);
 
   const reload = useCallback(() => {
     setStatus("loading");
