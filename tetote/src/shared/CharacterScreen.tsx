@@ -21,9 +21,9 @@ import {
 
 // 段階ごとの画像。require はビルド時に解決されるため、動的なパスは使えない。
 const characterImages: Record<CharacterAssetKey, number> = {
-  c1: require("../../assets/onboarding_asset/c1.jpg"),
-  c2: require("../../assets/onboarding_asset/c2.jpg"),
-  c3: require("../../assets/onboarding_asset/c3.jpg"),
+  c1: require("../../assets/onboarding_asset/c1.png"),
+  c2: require("../../assets/onboarding_asset/c2.png"),
+  c3: require("../../assets/onboarding_asset/c3.png"),
 };
 
 /**
