@@ -13,15 +13,15 @@ import { useRouter } from "expo-router";
 const characters = [
   {
     id: 1,
-    image: require("../../../../assets/onboarding_asset/c1.jpg"),
+    image: require("../../../../assets/onboarding_asset/c1.png"),
   },
   {
     id: 2,
-    image: require("../../../../assets/onboarding_asset/c2.jpg"),
+    image: require("../../../../assets/onboarding_asset/c2.png"),
   },
   {
     id: 3,
-    image: require("../../../../assets/onboarding_asset/c3.jpg"),
+    image: require("../../../../assets/onboarding_asset/c3.png"),
   },
 ];
 

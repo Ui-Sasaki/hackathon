@@ -85,7 +85,7 @@ export default function HelpHomeScreen() {
           <View style={styles.mascotArea}>
             <Image
               source={require(
-                "../../../assets/onboarding_asset/c1.jpg"
+                "../../../assets/onboarding_asset/c1.png"
               )}
               style={styles.mascot}
               resizeMode="contain"

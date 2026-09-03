@@ -31,10 +31,13 @@ export default function SignupScreen() {
 
   const [showSuccess, setShowSuccess] =
     useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [isSubmitting, setIsSubmitting] =
+    useState(false);
 
   const handleSignup = async () => {
     if (isSubmitting) return;
+
     setError("");
 
     if (!email || !password || !confirmPassword) {
@@ -55,13 +58,20 @@ export default function SignupScreen() {
     }
 
     setIsSubmitting(true);
+
     try {
-      const result = await signUp(email.trim(), password);
+      const result = await signUp(
+        email.trim(),
+        password
+      );
+
       if (!result.ok) {
         setError(result.message);
         return;
       }
+
       setShowSuccess(true);
+
       setTimeout(() => {
         setShowSuccess(false);
         router.replace("/onboarding/intro");
@@ -91,8 +101,11 @@ export default function SignupScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <Pressable
-          onPress={() => router.replace("/auth")}
+          onPress={() =>
+            router.replace("/auth")
+          }
           style={styles.backButton}
+          disabled={isSubmitting}
         >
           <Ionicons
             name="chevron-back"
@@ -122,6 +135,8 @@ export default function SignupScreen() {
               placeholderTextColor="#AAAAAA"
               keyboardType="email-address"
               autoCapitalize="none"
+              autoCorrect={false}
+              editable={!isSubmitting}
               style={styles.input}
             />
           </View>
@@ -131,22 +146,31 @@ export default function SignupScreen() {
               パスワード
             </Text>
 
-            <View style={styles.passwordInput}>
+            <View
+              style={styles.passwordInput}
+            >
               <TextInput
                 value={password}
                 onChangeText={setPassword}
                 placeholder="8文字以上"
                 placeholderTextColor="#AAAAAA"
-                secureTextEntry={!showPassword}
-                style={styles.passwordTextInput}
+                secureTextEntry={
+                  !showPassword
+                }
+                editable={!isSubmitting}
+                style={
+                  styles.passwordTextInput
+                }
               />
 
               <Pressable
                 onPress={() =>
                   setShowPassword(
-                    (current) => !current
+                    (current) =>
+                      !current
                   )
                 }
+                disabled={isSubmitting}
               >
                 <Ionicons
                   name={
@@ -168,11 +192,19 @@ export default function SignupScreen() {
 
             <TextInput
               value={confirmPassword}
-              onChangeText={setConfirmPassword}
+              onChangeText={
+                setConfirmPassword
+              }
               placeholder="もう一度入力してください"
               placeholderTextColor="#AAAAAA"
-              secureTextEntry={!showPassword}
+              secureTextEntry={
+                !showPassword
+              }
+              editable={!isSubmitting}
               style={styles.input}
+              onSubmitEditing={
+                handleSignup
+              }
             />
           </View>
 
@@ -187,27 +219,47 @@ export default function SignupScreen() {
             disabled={isSubmitting}
             style={({ pressed }) => [
               styles.signupButton,
-              isSubmitting && styles.disabled,
-              pressed && styles.pressed,
+              isSubmitting &&
+                styles.disabled,
+              pressed &&
+                !isSubmitting &&
+                styles.pressed,
             ]}
           >
-            <Text style={styles.signupButtonText}>
-              {isSubmitting ? "登録中…" : "新規登録"}
+            <Text
+              style={
+                styles.signupButtonText
+              }
+            >
+              {isSubmitting
+                ? "登録中…"
+                : "新規登録"}
             </Text>
           </Pressable>
         </View>
 
         <View style={styles.loginRow}>
-          <Text style={styles.bottomText}>
+          <Text
+            style={styles.bottomText}
+          >
             すでにアカウントをお持ちですか？
           </Text>
 
           <Pressable
             onPress={() =>
-              router.replace("/auth/login")
+              router.replace(
+                "/auth/login"
+              )
             }
+            disabled={isSubmitting}
           >
-            <Text style={styles.loginLink}>
+            <Text
+              style={[
+                styles.loginLink,
+                isSubmitting &&
+                  styles.disabledText,
+              ]}
+            >
               ログイン
             </Text>
           </Pressable>
@@ -220,9 +272,15 @@ export default function SignupScreen() {
         animationType="fade"
         statusBarTranslucent
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.successModal}>
-            <View style={styles.checkCircle}>
+        <View
+          style={styles.modalOverlay}
+        >
+          <View
+            style={styles.successModal}
+          >
+            <View
+              style={styles.checkCircle}
+            >
               <Ionicons
                 name="checkmark"
                 size={38}
@@ -230,11 +288,19 @@ export default function SignupScreen() {
               />
             </View>
 
-            <Text style={styles.successTitle}>
+            <Text
+              style={
+                styles.successTitle
+              }
+            >
               サインアップ完了しました！
             </Text>
 
-            <Text style={styles.successSubtitle}>
+            <Text
+              style={
+                styles.successSubtitle
+              }
+            >
               tetoteへようこそ
             </Text>
           </View>
@@ -363,16 +429,25 @@ const styles = StyleSheet.create({
 
   pressed: {
     opacity: 0.75,
-    transform: [{ scale: 0.98 }],
+    transform: [
+      {
+        scale: 0.98,
+      },
+    ],
   },
 
   disabled: {
     opacity: 0.55,
   },
 
+  disabledText: {
+    opacity: 0.55,
+  },
+
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.25)",
+    backgroundColor:
+      "rgba(0, 0, 0, 0.25)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 28,
@@ -386,7 +461,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingVertical: 38,
     alignItems: "center",
-
     shadowColor: "#000000",
     shadowOpacity: 0.15,
     shadowRadius: 16,
@@ -394,7 +468,6 @@ const styles = StyleSheet.create({
       width: 0,
       height: 8,
     },
-
     elevation: 8,
   },
 
