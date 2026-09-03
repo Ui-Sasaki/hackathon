@@ -1,6 +1,6 @@
 # テトテFastAPI 開発ガイド
 
-地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼（`requests`）の保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。応募・マッチング・チャット等その他の業務データ、AI、本人確認は現在インメモリで模擬している。
+地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼、応募、マッチ、チャット、完了処理、プロフィールの保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。レビュー、AI実績、本人確認、通報、ブロックは現在インメモリで模擬している。
 
 ## セットアップと起動
 
@@ -28,7 +28,7 @@ python -m uvicorn main:app --reload --port 8000
 | `API_DOMAIN` | `http://localhost:8000` | API公開元 |
 | `WEBSITE_DOMAIN` | `http://localhost:3000` | CORSで許可するフロントエンド |
 | `AUTH_COOKIE_SECURE` | `true` | CookieのSecure属性 |
-| `AUTH_COOKIE_SAME_SITE` | `lax` | CookieのSameSite属性 |
+| `AUTH_COOKIE_SAME_SITE` | 自動 | CookieのSameSite属性。未指定時はAPIとフロントが別オリジンかつSecure Cookieなら`none`、それ以外は`lax` |
 | `AUTH_MOCK_ENABLED` | `false` | 開発用の認証モックを有効化。**本番では有効にできない**（起動時に拒否） |
 | `AUTH_MOCK_USER_ID` | `usr_101` | 認証モックの既定ユーザーID |
 | `MOCK_RESET_ENABLED` | `false` | `POST /_mock/reset` を利用可能にする。**本番では有効にできない**（起動時に拒否） |
@@ -48,8 +48,11 @@ python -m uvicorn main:app --reload --port 8000
 登録、ログイン、ログアウト、パスワード再設定はSuperTokensの`/auth/*` APIを
 利用する。Cookie認証ではHttpOnly/Secure/SameSite Cookieと`anti-csrf`ヘッダーが
 使われる。ローカルHTTP開発時だけ`AUTH_COOKIE_SECURE=false`にする。
-ユーザー登録に成功すると、SuperTokensのユーザーIDに対応するアプリ内プロフィールを
-依頼者・未確認の初期状態で自動作成する。
+Vercelの別プロジェクトなどAPIとフロントが別オリジンの場合、ブラウザの`fetch`へ
+セッションCookieを載せるため、未指定時は`AUTH_COOKIE_SAME_SITE=none`相当にする。
+本番では検証済みSuperTokens subjectを初回の業務APIアクセス時にPostgresへ安全な
+`member`・未確認状態で登録する。再認証時に既存のプロフィール、role、本人確認状態を
+上書きしない。Memory構成では登録成功時に同等の初期プロフィールを作成する。
 
 ### SuperTokensなしで機能を試す
 
