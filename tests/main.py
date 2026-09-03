@@ -39,6 +39,7 @@ from app.repositories.saved_requests import (
 )
 from app.settings import load_settings
 
+from app.cruds.main import matches, messages
 
 class ASGITestClient:
     """Small synchronous wrapper that keeps tests independent of a live server."""
@@ -1545,3 +1546,28 @@ def test_recommendation_cold_start_fallback() -> None:
         # 位置情報がない場合でも、スコアと理由が計算されていること
         assert "score" in top_item
         assert "reason" in top_item
+
+import app.cruds.main as crud_module
+
+def test_message_moderation_flags_contact_info() -> None:
+    test_match_id = "match_test_999"
+    
+    # crud_module を経由して、API本体が使っている辞書に直接書き込む
+    crud_module.matches[test_match_id] = {
+        "id": test_match_id,
+        "requestId": "req_test_1",
+        "requesterId": "usr_101", 
+        "helperId": "usr_207",
+        "status": "matched"
+    }
+    crud_module.messages[test_match_id] = []
+
+    # 実行
+    response = client.post(
+        f"/matches/{test_match_id}/messages",
+        json={"body": "連絡はこちらへ: 090-1234-5678"}
+    )
+
+    # 検証
+    assert response.status_code == 201
+    assert response.json()["moderationStatus"] == "flagged"
