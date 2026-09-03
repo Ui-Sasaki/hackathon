@@ -50,7 +50,7 @@ from app.services import images
 from app.repositories.uploads import (
     MemoryUploadRepository, UploadRepository, get_upload_repository,
 )
-from app.services import request_structuring, safety
+from app.services import character, request_structuring, safety
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
@@ -58,6 +58,7 @@ from app.settings import reject_unsafe_in_production, settings
 from app.schemas import (
     AchievementInput, AchievementResponse, AchievementVisibilityInput,
     ApplicationInput, ApplicationListResponse, ApplicationResponse,
+    CharacterProgressResponse,
     BlockInput, BlockResponse, CompletionInput, DisputeInput, ErrorResponse,
     LocationResolveInput, LocationResolveResponse, MatchResponse, MessageInput,
     MaskingConfirmationResponse, MessageListResponse, MessageResponse,
@@ -1646,6 +1647,22 @@ async def update_achievement_visibility(
         item["approvedAt"] = now_iso()
         item["status"] = "approved"
     return item
+
+
+@app.get("/character-progress", response_model=CharacterProgressResponse, tags=["Character"], summary="自分のキャラクター進捗を取得", description="認証済み本人が支援者として完了したマッチだけを集計し、累計ポイント・支援回数・段階・次段階までのポイント・表示キャラクター識別子を返す。集計値はクライアント入力を使わない。", responses=api_errors(401, 500))
+async def get_character_progress(
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+):
+    helps: list[character.CompletedHelp] = []
+    for match in matches.values():
+        if match["helperId"] != current_user.user_id or match["status"] != "completed":
+            continue
+        # 依頼が読めないとき（削除済みなど）は活動時間を0として回数だけ数える。
+        request_item = await repository.get(current_user, match["requestId"])
+        minutes = request_item["estimatedMinutes"] if request_item else 0
+        helps.append({"matchId": match["id"], "estimatedMinutes": minutes})
+    return character.build_progress(current_user.user_id, helps)
 
 
 @app.post("/verifications", response_model=VerificationResponse, status_code=201, tags=["Verification"], summary="本人確認を申請", description="大学メールまたは学生証で申請する開発用モック。学生証方式は非公開ストレージキーが必須だが、キーや画像はレスポンスに含めない。審査中の重複申請は409。", responses=api_errors(401, 409, 422, 500))

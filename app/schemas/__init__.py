@@ -8,6 +8,7 @@ from .main import (
     AuthInput,
     BlockInput,
     BlockResponse,
+    CharacterProgressResponse,
     CompletionInput,
     DisputeInput,
     ErrorResponse,

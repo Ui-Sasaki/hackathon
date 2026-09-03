@@ -427,6 +427,21 @@ class AchievementResponse(ContractModel):
     approvedAt: datetime | None
 
 
+class CharacterProgressResponse(ContractModel):
+    """キャラクター画面の貢献度。完了済みマッチだけをサーバーが集計する。"""
+
+    userId: str
+    helpCount: int = Field(ge=0, description="完了した支援の回数")
+    currentPoints: int = Field(ge=0, description="累計ポイント")
+    stage: int = Field(ge=1, description="現在の段階（1始まり）")
+    maxStage: int = Field(ge=1, description="最終段階")
+    characterId: str = Field(description="表示するキャラクター識別子（c1, c2, c3）")
+    nextStagePoints: int | None = Field(description="次の段階に必要な累計ポイント。最終段階ならnull")
+    pointsUntilNextStage: int = Field(ge=0, description="次の段階まであと何ポイントか。最終段階なら0")
+    progressRatio: float = Field(ge=0, le=1, description="現在の段階内での進み具合（0〜1）")
+    ruleVersion: str = Field(description="ポイント規則の版")
+
+
 class AchievementVisibilityInput(ContractModel):
     achievementId: str
     visibility: Literal["private", "members", "public"]
