@@ -7,31 +7,36 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 
+import NameLogo from "../../../assets/onboarding_asset/name.svg";
+
 export default function AuthScreen() {
   const router = useRouter();
 
   return (
     <View style={styles.screen}>
       <View style={styles.content}>
-        <View style={styles.logoPlaceholder}>
-          <Text style={styles.logoText}>tetote</Text>
+        <View style={styles.logoWrapper}>
+          <NameLogo
+            width={180}
+            height={90}
+          />
         </View>
 
         <View style={styles.textArea}>
-  <Text style={styles.title}>
-    はじめまして。
-  </Text>
+          <Text style={styles.title}>
+            はじめまして。
+          </Text>
 
-  <Text style={styles.subtitle}>
-    小さな「助けて」と「手伝いたい」を、
-    {"\n"}
-    もっと近くに。
-  </Text>
-</View>
+          <Text style={styles.subtitle}>
+            小さな「助けて」と「手伝いたい」を、
+            {"\n"}
+            もっと近くに。
+          </Text>
+        </View>
 
         <View style={styles.mascotArea}>
           <Image
-            source={require("../../../assets/onboarding_asset/c1.jpg")}
+            source={require("../../../assets/onboarding_asset/c1.png")}
             style={styles.mascot}
             resizeMode="contain"
           />
@@ -83,36 +88,31 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
 
-  logoPlaceholder: {
+  logoWrapper: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  textArea: {
+    marginTop: 55,
     alignItems: "center",
   },
 
-  logoText: {
+  title: {
     color: "#245C2D",
-    fontSize: 42,
+    fontSize: 30,
     fontWeight: "900",
+    textAlign: "center",
   },
 
- textArea: {
-  marginTop: 55,
-  alignItems: "center",
-},
-
-title: {
-  color: "#245C2D",
-  fontSize: 30,
-  fontWeight: "900",
-  textAlign: "center",
-},
-
-subtitle: {
-  color: "#555555",
-  fontSize: 16,
-  lineHeight: 27,
-  fontWeight: "600",
-  marginTop: 14,
-  textAlign: "center",
-},
+  subtitle: {
+    color: "#555555",
+    fontSize: 16,
+    lineHeight: 27,
+    fontWeight: "600",
+    marginTop: 14,
+    textAlign: "center",
+  },
 
   mascotArea: {
     flex: 1,

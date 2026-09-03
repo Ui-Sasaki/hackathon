@@ -9,23 +9,40 @@ import {
   Modal,
 } from "react-native";
 import { useState } from "react";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import {
+  Href,
+  useLocalSearchParams,
+  useRouter,
+} from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../auth/AuthContext";
 import { apiConfigurationProblem } from "../../api/config";
 
-function safeReturnTo(value: string | string[] | undefined): string {
-  const path = Array.isArray(value) ? value[0] : value;
-  return path?.startsWith("/") && !path.startsWith("//") ? path : "/helper";
+function safeReturnTo(
+  value: string | string[] | undefined
+): string {
+  const path = Array.isArray(value)
+    ? value[0]
+    : value;
+
+  return path?.startsWith("/") &&
+    !path.startsWith("//")
+    ? path
+    : "/helper";
 }
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { returnTo } = useLocalSearchParams<{ returnTo?: string | string[] }>();
+
+  const { returnTo } = useLocalSearchParams<{
+    returnTo?: string | string[];
+  }>();
+
   const { signIn } = useAuth();
 
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [password, setPassword] =
+    useState("");
 
   const [showPassword, setShowPassword] =
     useState(false);
@@ -34,28 +51,45 @@ export default function LoginScreen() {
     useState(false);
 
   const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [
+    isSubmitting,
+    setIsSubmitting,
+  ] = useState(false);
 
   const handleLogin = async () => {
     if (isSubmitting) return;
+
     setError("");
 
     if (!email || !password) {
-      setError("メールアドレスとパスワードを入力してください");
+      setError(
+        "メールアドレスとパスワードを入力してください"
+      );
       return;
     }
 
     setIsSubmitting(true);
+
     try {
-      const result = await signIn(email.trim(), password);
+      const result = await signIn(
+        email.trim(),
+        password
+      );
+
       if (!result.ok) {
         setError(result.message);
         return;
       }
+
       setShowSuccess(true);
+
       setTimeout(() => {
         setShowSuccess(false);
-        router.replace(safeReturnTo(returnTo));
+
+        router.replace(
+          safeReturnTo(returnTo) as Href
+        );
       }, 800);
     } catch {
       // 接続先の設定漏れは通信障害と対処が違うため、分かる場合はそちらを示す。
@@ -79,7 +113,9 @@ export default function LoginScreen() {
     >
       <View style={styles.content}>
         <Pressable
-          onPress={() => router.replace("/auth")}
+          onPress={() =>
+            router.replace("/auth")
+          }
           style={styles.backButton}
         >
           <Ionicons
@@ -110,6 +146,8 @@ export default function LoginScreen() {
               placeholderTextColor="#AAAAAA"
               keyboardType="email-address"
               autoCapitalize="none"
+              autoCorrect={false}
+              editable={!isSubmitting}
               style={styles.input}
             />
           </View>
@@ -119,22 +157,34 @@ export default function LoginScreen() {
               パスワード
             </Text>
 
-            <View style={styles.passwordInput}>
+            <View
+              style={styles.passwordInput}
+            >
               <TextInput
                 value={password}
                 onChangeText={setPassword}
                 placeholder="パスワード"
                 placeholderTextColor="#AAAAAA"
-                secureTextEntry={!showPassword}
-                style={styles.passwordTextInput}
+                secureTextEntry={
+                  !showPassword
+                }
+                editable={!isSubmitting}
+                style={
+                  styles.passwordTextInput
+                }
+                onSubmitEditing={
+                  handleLogin
+                }
               />
 
               <Pressable
                 onPress={() =>
                   setShowPassword(
-                    (current) => !current
+                    (current) =>
+                      !current
                   )
                 }
+                disabled={isSubmitting}
               >
                 <Ionicons
                   name={
@@ -160,43 +210,68 @@ export default function LoginScreen() {
             disabled={isSubmitting}
             style={({ pressed }) => [
               styles.loginButton,
-              isSubmitting && styles.disabled,
-              pressed && styles.pressed,
+              isSubmitting &&
+                styles.disabled,
+              pressed &&
+                !isSubmitting &&
+                styles.pressed,
             ]}
           >
-            <Text style={styles.loginButtonText}>
-              {isSubmitting ? "ログイン中…" : "ログイン"}
+            <Text
+              style={
+                styles.loginButtonText
+              }
+            >
+              {isSubmitting
+                ? "ログイン中…"
+                : "ログイン"}
             </Text>
           </Pressable>
         </View>
 
         <View style={styles.signupRow}>
-          <Text style={styles.bottomText}>
+          <Text
+            style={styles.bottomText}
+          >
             アカウントをお持ちでないですか？
           </Text>
 
           <Pressable
             onPress={() =>
-              router.replace("/auth/signup")
+              router.replace(
+                "/auth/signup"
+              )
             }
+            disabled={isSubmitting}
           >
-            <Text style={styles.signupLink}>
+            <Text
+              style={[
+                styles.signupLink,
+                isSubmitting &&
+                  styles.disabledText,
+              ]}
+            >
               新規登録
             </Text>
           </Pressable>
         </View>
       </View>
 
-      {/* SUCCESS POPUP */}
       <Modal
         visible={showSuccess}
         transparent
         animationType="fade"
         statusBarTranslucent
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.successModal}>
-            <View style={styles.checkCircle}>
+        <View
+          style={styles.modalOverlay}
+        >
+          <View
+            style={styles.successModal}
+          >
+            <View
+              style={styles.checkCircle}
+            >
               <Ionicons
                 name="checkmark"
                 size={38}
@@ -204,11 +279,17 @@ export default function LoginScreen() {
               />
             </View>
 
-            <Text style={styles.successTitle}>
+            <Text
+              style={styles.successTitle}
+            >
               サインイン完了しました！
             </Text>
 
-            <Text style={styles.successSubtitle}>
+            <Text
+              style={
+                styles.successSubtitle
+              }
+            >
               おかえりなさい！
             </Text>
           </View>
@@ -336,18 +417,25 @@ const styles = StyleSheet.create({
 
   pressed: {
     opacity: 0.75,
-    transform: [{ scale: 0.98 }],
+    transform: [
+      {
+        scale: 0.98,
+      },
+    ],
   },
 
   disabled: {
     opacity: 0.55,
   },
 
-  /* SUCCESS POPUP */
+  disabledText: {
+    opacity: 0.55,
+  },
 
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.25)",
+    backgroundColor:
+      "rgba(0, 0, 0, 0.25)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 28,
@@ -361,7 +449,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingVertical: 38,
     alignItems: "center",
-
     shadowColor: "#000000",
     shadowOpacity: 0.15,
     shadowRadius: 16,
@@ -369,7 +456,6 @@ const styles = StyleSheet.create({
       width: 0,
       height: 8,
     },
-
     elevation: 8,
   },
 
