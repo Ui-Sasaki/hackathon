@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   View,
   Text,
   TextInput,
@@ -11,81 +12,62 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-
-type Message = {
-  id: number;
-  sender: "requester" | "helper";
-  text: string;
-  time: string;
-};
+import { useAuth } from "../auth/AuthContext";
+import {
+  mergeMessages,
+  sendMessage as sendMessageToApi,
+  startMessagePolling,
+  type Message,
+} from "../features/messages/client";
 
 type TalkScreenProps = {
   role: "requester" | "helper";
+  matchId?: string;
 };
 
-export default function TalkScreen({ role }: TalkScreenProps) {
+export default function TalkScreen({ role, matchId }: TalkScreenProps) {
   const router = useRouter();
-
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      sender: "requester",
-      text: "応募ありがとうございます！明日の14時ごろでも大丈夫でしょうか？",
-      time: "10:32",
-    },
-    {
-      id: 2,
-      sender: "helper",
-      text: "はい、大丈夫です！どのあたりに伺えばいいですか？",
-      time: "10:34",
-    },
-    {
-      id: 3,
-      sender: "requester",
-      text: "赤坂駅の7番出口付近でお願いします！",
-      time: "10:35",
-    },
-    {
-      id: 4,
-      sender: "helper",
-      text: "了解です！荷物はどれくらいありますか？",
-      time: "10:36",
-    },
-    {
-      id: 5,
-      sender: "requester",
-      text: "段ボールが3箱です。15分くらいで終わると思います！",
-      time: "10:37",
-    },
-  ]);
-
+  const { profile } = useAuth();
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [completed, setCompleted] = useState(false);
+  const [loading, setLoading] = useState(Boolean(matchId));
+  const [pollKey, setPollKey] = useState(0);
+  const [loadError, setLoadError] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState(false);
 
-  const sendMessage = () => {
-    const trimmed = input.trim();
-
-    if (!trimmed) return;
-
-    const now = new Date();
-
-    const time = now.toLocaleTimeString("ja-JP", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    setMessages((previousMessages) => [
-      ...previousMessages,
-      {
-        id: Date.now(),
-        sender: role,
-        text: trimmed,
-        time,
+  useEffect(() => {
+    if (!matchId) return;
+    return startMessagePolling({
+      matchId,
+      onMessages: (incoming) => {
+        setMessages(mergeMessages([], incoming));
+        setLoading(false);
+        setLoadError(false);
       },
-    ]);
+      onError: () => {
+        setLoading(false);
+        setLoadError(true);
+      },
+    });
+  }, [matchId, pollKey]);
 
-    setInput("");
-  };
+  const sendMessage = useCallback(async () => {
+    const trimmed = input.trim();
+    if (!trimmed || !matchId || sending) return;
+    setSending(true);
+    setSendError(false);
+    try {
+      const sent = await sendMessageToApi(matchId, trimmed);
+      setMessages((current) => mergeMessages(current, [sent]));
+      setInput("");
+    } catch {
+      setSendError(true);
+    } finally {
+      setSending(false);
+    }
+  }, [input, matchId, sending]);
 
   return (
     <View style={styles.page}>
@@ -167,10 +149,40 @@ export default function TalkScreen({ role }: TalkScreenProps) {
           contentContainerStyle={styles.messagesContent}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.date}>8月29日</Text>
+          {!matchId ? (
+            <View style={styles.statusContainer}>
+              <Text style={styles.errorText}>チャットを開くためのマッチ情報がありません。</Text>
+            </View>
+          ) : loading && messages.length === 0 ? (
+            <View style={styles.statusContainer}>
+              <ActivityIndicator color="#4E8B62" />
+              <Text style={styles.statusText}>メッセージを取得しています...</Text>
+            </View>
+          ) : loadError && messages.length === 0 ? (
+            <View style={styles.statusContainer}>
+              <Text style={styles.errorText}>メッセージを取得できませんでした。</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setLoading(true);
+                  setLoadError(false);
+                  setPollKey((key) => key + 1);
+                }}
+              >
+                <Text style={styles.retryText}>再試行</Text>
+              </TouchableOpacity>
+            </View>
+          ) : messages.length === 0 ? (
+            <Text style={styles.date}>まだメッセージはありません</Text>
+          ) : null}
+
+          {loadError && messages.length > 0 ? (
+            <Text style={styles.syncErrorText}>
+              最新メッセージを取得できません。自動的に再試行します。
+            </Text>
+          ) : null}
 
           {messages.map((message) => {
-            const mine = message.sender === role;
+            const mine = message.senderId === profile?.id;
 
             return (
               <View
@@ -206,12 +218,15 @@ export default function TalkScreen({ role }: TalkScreenProps) {
                           : styles.otherMessageText,
                       ]}
                     >
-                      {message.text}
+                      {message.body}
                     </Text>
                   </View>
 
                   <Text style={styles.time}>
-                    {message.time}
+                    {new Date(message.sentAt).toLocaleTimeString("ja-JP", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
                   </Text>
                 </View>
               </View>
@@ -256,18 +271,21 @@ export default function TalkScreen({ role }: TalkScreenProps) {
               <TouchableOpacity
                 style={[
                   styles.sendButton,
-                  !input.trim() && styles.sendButtonDisabled,
+                  (!input.trim() || !matchId || sending) && styles.sendButtonDisabled,
                 ]}
                 onPress={sendMessage}
-                disabled={!input.trim()}
+                disabled={!input.trim() || !matchId || sending}
               >
-                <Ionicons
-                  name="send"
-                  size={18}
-                  color="#FFFFFF"
-                />
+                {sending ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Ionicons name="send" size={18} color="#FFFFFF" />
+                )}
               </TouchableOpacity>
             </View>
+            {sendError ? (
+              <Text style={styles.sendErrorText}>送信できませんでした。もう一度お試しください。</Text>
+            ) : null}
 
             <TouchableOpacity
               style={styles.completeButton}
@@ -421,6 +439,36 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
 
+  statusContainer: {
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 28,
+  },
+
+  statusText: {
+    color: "#777777",
+    fontSize: 13,
+  },
+
+  errorText: {
+    color: "#A23B32",
+    fontSize: 13,
+    textAlign: "center",
+  },
+
+  retryText: {
+    color: "#4E8B62",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+
+  syncErrorText: {
+    color: "#A23B32",
+    fontSize: 12,
+    marginBottom: 12,
+    textAlign: "center",
+  },
+
   messageRow: {
     width: "100%",
     marginBottom: 13,
@@ -529,6 +577,13 @@ const styles = StyleSheet.create({
 
   sendButtonDisabled: {
     backgroundColor: "#CCCCCC",
+  },
+
+  sendErrorText: {
+    color: "#A23B32",
+    fontSize: 12,
+    marginLeft: 50,
+    marginTop: 6,
   },
 
   completeButton: {

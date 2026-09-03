@@ -48,7 +48,6 @@ psql_su -d "$PGDATABASE" -v ON_ERROR_STOP=1 -f "$HERE/baseline_constraints.sql" 
 
 echo "=== 4. RLS 検査用データを投入する ==="
 psql_su -d "$PGDATABASE" -q -v ON_ERROR_STOP=1 -f "$HERE/_rls_seed.sql"
-psql_su -d "$PGDATABASE" -q -v ON_ERROR_STOP=1 -f "$HERE/_application_seed.sql"
 
 echo "=== 5. RLS 検査（非特権ロール tetote_app）==="
 "$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
@@ -56,8 +55,33 @@ echo "=== 5. RLS 検査（非特権ロール tetote_app）==="
   | grep -E 'OK |FAIL|完了' | sed 's/^psql:[^ ]* //'
 
 echo "=== 6. 応募永続化検査（非特権ロール tetote_app）==="
+psql_su -d "$PGDATABASE" -q -v ON_ERROR_STOP=1 -f "$HERE/_application_seed.sql"
 "$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
   -v ON_ERROR_STOP=1 -f "$HERE/application_persistence.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
+echo "=== 7. 応募選択の原子処理検査（非特権ロール tetote_app）==="
+psql_su -d "$PGDATABASE" -q -v ON_ERROR_STOP=1 -f "$HERE/_selection_seed.sql"
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/atomic_application_selection.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
+echo "=== 8. 応募選択の同時実行検査（2接続）==="
+bash "$HERE/atomic_selection_concurrency.sh"
+
+echo "=== 9. マッチ永続化・取得認可検査（非特権ロール tetote_app）==="
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/match_persistence.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
+echo "=== 10. チャット永続化・既読・認可検査（非特権ロール tetote_app）==="
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/chat_persistence.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
+echo "=== 11. 完了確認・dispute原子処理検査（非特権ロール tetote_app）==="
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/atomic_match_completion.sql" 2>&1 \
   | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
 
 echo "=== 全検査を通過した ==="
