@@ -3739,7 +3739,7 @@
     },
     "/matches/{match_id}/complete": {
       "post": {
-        "description": "依頼者と支援者本人だけが自分の役割で確認できる。片方のみはcompletion_pending、双方確認後はcompleted。disputedまたはcompletedへの操作は409。現行実装では同じ当事者の再確認は冪等に成功する。",
+        "description": "依頼者と支援者本人だけが自分の役割で確認できる。片方のみはcompletion_pending、双方確認後はcompleted。重複確認、disputedまたはcompletedへの操作は409。",
         "operationId": "complete_match_matches__match_id__complete_post",
         "parameters": [
           {
