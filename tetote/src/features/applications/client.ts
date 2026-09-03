@@ -1,0 +1,92 @@
+import { apiClient, type ApiClient } from "../../api/client";
+import { ApiError } from "../../api/errors";
+
+const applicationErrorMessages: Record<string, string> = {
+  SELF_APPLICATION_NOT_ALLOWED: "自分の依頼には応募できません。",
+  VERIFICATION_REQUIRED: "この依頼への応募には本人確認が必要です。",
+  DUPLICATE_APPLICATION: "この依頼には応募済みです。",
+  REQUEST_EXPIRED: "この依頼の募集期限は終了しました。",
+  REQUEST_NOT_OPEN: "この依頼は現在募集していません。",
+};
+
+export function applicationErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    return applicationErrorMessages[error.code] ?? error.message;
+  }
+  return "応募を送信できませんでした。通信環境を確認して、もう一度お試しください。";
+}
+
+const withdrawalErrorMessages: Record<string, string> = {
+  AUTHENTICATION_REQUIRED: "セッションの有効期限が切れました。もう一度ログインしてください。",
+  ROLE_FORBIDDEN: "この応募を取り下げる権限がありません。",
+  APPLICATION_NOT_FOUND: "応募が見つかりません。",
+  APPLICATION_NOT_WITHDRAWABLE: "この応募はすでに取り下げ済みか、現在の状態では取り下げできません。",
+};
+
+export function withdrawalErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    return withdrawalErrorMessages[error.code] ?? error.message;
+  }
+  return "応募を取り下げできませんでした。通信環境を確認して、もう一度お試しください。";
+}
+
+export type CreateApplicationInput = {
+  message: string;
+  availableAt: string;
+};
+
+export type ApplicationStatus =
+  | "applied"
+  | "selected"
+  | "accepted"
+  | "completed"
+  | "not_selected"
+  | "withdrawn"
+  | "cancelled";
+
+export type Application = {
+  id: string;
+  requestId: string;
+  helperId: string;
+  message: string;
+  availableAt: string;
+  status: ApplicationStatus;
+  createdAt: string;
+  updatedAt: string | null;
+};
+
+export function createApplication(
+  requestId: string,
+  input: CreateApplicationInput,
+  client: ApiClient = apiClient,
+): Promise<Application> {
+  return client.post<Application>(
+    `/requests/${encodeURIComponent(requestId)}/applications`,
+    {
+      message: input.message,
+      availableAt: input.availableAt,
+    },
+  );
+}
+
+const pendingWithdrawals = new WeakMap<ApiClient, Map<string, Promise<Application>>>();
+
+export function withdrawApplication(
+  applicationId: string,
+  client: ApiClient = apiClient,
+): Promise<Application> {
+  let clientWithdrawals = pendingWithdrawals.get(client);
+  if (!clientWithdrawals) {
+    clientWithdrawals = new Map();
+    pendingWithdrawals.set(client, clientWithdrawals);
+  }
+
+  const pending = clientWithdrawals.get(applicationId);
+  if (pending) return pending;
+
+  const withdrawal = client
+    .post<Application>(`/applications/${encodeURIComponent(applicationId)}/withdraw`)
+    .finally(() => clientWithdrawals?.delete(applicationId));
+  clientWithdrawals.set(applicationId, withdrawal);
+  return withdrawal;
+}
