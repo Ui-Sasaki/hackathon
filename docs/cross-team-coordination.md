@@ -14,6 +14,24 @@ FastAPI実装やAPI接続だけでは確定できない事項を記録する。�
 
 ## 未確認
 
+### COORD-005: 本番の認証ユーザープロフィール自動作成
+
+- 対象: 公開環境の `GET /profile` が新規登録直後に403を返す問題
+- 調整先: Supabase担当、デプロイ担当
+- 現状とずれ:
+  - FastAPIはSuperTokensのsubjectを`app.resolve_authenticated_user`へ渡し、アプリ側プロフィールを解決する。
+  - `20260903040000_identity_profile_persistence.sql`では、未登録subjectを安全な既定値（`member`、`active`）で自動作成する。
+  - 公開環境で`USER_PROFILE_NOT_FOUND`が返る場合、APIコードと本番DB migrationの適用状態が一致していない。
+- FastAPI・接続側で完了している範囲:
+  - クライアント入力のユーザーIDやroleを信用せず、検証済みセッションsubjectだけを使用する。
+  - 認証復元完了前に依頼APIを呼ばないため、初期401とセッション復元の競合を防止する。
+  - Memory RepositoryとPostgres Repositoryで同じプロフィールAPI契約を提供する。
+- 接続・引き継ぎ条件:
+  - 本番Supabaseへ`20260903040000_identity_profile_persistence.sql`までを順番どおり適用する。
+  - 適用後、新規アカウントで登録し、`GET /profile`が200、続く`GET /requests`が200になることを確認する。
+  - 既存アカウントが403の場合はレスポンスの`error.code`を確認し、`USER_SUSPENDED`を自動解除しない。
+- 状態: 未確認（コード実装済み、本番migration適用と結合確認待ち）
+
 ### COORD-003: 応募者選択のPostgres原子操作（実装済み）
 
 - 対象TODO: 19 応募者選択API接続
