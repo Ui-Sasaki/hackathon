@@ -1,5 +1,7 @@
 import TalkScreen from "../../shared/TalkScreen";
+import { useLocalSearchParams } from "expo-router";
 
 export default function HelpChat() {
-  return <TalkScreen role="requester" />;
+  const { matchId } = useLocalSearchParams<{ matchId?: string }>();
+  return <TalkScreen key={matchId} role="requester" matchId={matchId} />;
 }
