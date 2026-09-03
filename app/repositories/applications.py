@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+import json
 from typing import Any, Protocol
 import uuid
 
@@ -234,6 +235,20 @@ class PostgresApplicationRepository:
         async with actor_connection(actor) as conn:
             updated = await conn.fetchval("select app.withdraw_application($1)", parsed_id)
         return updated is not None
+
+    async def select_atomically(
+        self, actor: CurrentUser, application_id: str, expected_version: int
+    ) -> dict[str, Any]:
+        """Select an application through the database's single-transaction RPC."""
+        try:
+            parsed_id = uuid.UUID(application_id)
+        except ValueError:
+            return {"code": "APPLICATION_NOT_FOUND"}
+        async with actor_connection(actor) as conn:
+            result = await conn.fetchval(
+                "select app.select_application($1, $2)", parsed_id, expected_version,
+            )
+        return json.loads(result) if isinstance(result, str) else dict(result)
 
     async def reset(self) -> None:
         # Applications are removed by app.mock_reset_requests() through the request FK.
