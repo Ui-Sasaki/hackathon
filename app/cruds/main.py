@@ -85,15 +85,6 @@ app = FastAPI(
     ),
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[os.getenv("WEBSITE_DOMAIN", "http://localhost:3000")],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=cors_headers(),
-)
-
-
 class ApiPrefixMiddleware:
     """要件書の /api パスと、既存フロント用の無接頭辞パスを両方提供する。"""
 
@@ -113,6 +104,19 @@ class ApiPrefixMiddleware:
 app.add_middleware(ApiPrefixMiddleware)
 if SUPERTOKENS_ENABLED:
     app.add_middleware(get_middleware())
+
+# CORS は SuperTokens のあとに登録する。Starlette は後から add_middleware した
+# ものが外側になるため、先に登録すると SuperTokens が /auth/* に直接返す応答
+# （新規登録・ログイン・セッション更新）が CORS を通らず、Access-Control-Allow-Origin
+# が付かない。フロントとAPIのドメインが異なる本番では、その応答がブラウザに
+# 遮断されて新規登録とログインが必ず失敗する。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[os.getenv("WEBSITE_DOMAIN", "http://localhost:3000")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=cors_headers(),
+)
 app.include_router(system_router)
 
 
