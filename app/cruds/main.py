@@ -46,7 +46,7 @@ from app.services.applications import (
     withdraw_application as withdraw_application_service,
 )
 from app.services.requests import cancel_owned_request, require_request, update_owned_request
-from app.services import request_structuring
+from app.services import request_structuring, safety
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
@@ -219,6 +219,25 @@ structure_provider: request_structuring.StructureProvider = (
 def configure_structure_llm_client(client: StructureLLMClient) -> None:
     global structure_provider
     structure_provider = CallableStructureProvider(client)
+
+
+safety_llm_client: safety.SafetyLLMClient = safety.default_safety_llm_client
+
+
+def configure_safety_llm_client(client: safety.SafetyLLMClient) -> None:
+    global safety_llm_client
+    safety_llm_client = client
+
+
+def prohibited_request_error(assessment: safety.RiskAssessment) -> HTTPException:
+    """禁止判定を、理由を伏せずに安全な形でクライアントへ返す。"""
+    return HTTPException(422, detail={
+        "code": "PROHIBITED_REQUEST",
+        "riskLevel": assessment.level,
+        "reasonCodes": list(assessment.reason_codes),
+        "messages": list(assessment.messages),
+        "ruleVersion": safety.RULE_VERSION,
+    })
 
 REGIONS = {
     "AREA-001": {"label": "大学周辺", "latitude": 43.062, "longitude": 141.354},
@@ -679,8 +698,12 @@ async def structure_request(
             "requiresMaskingConfirmation": True,
             "message": "マスキング箇所を確認し、必要なら元の入力を修正してください",
         }
-    if any(word in masking["maskedText"] for word in ["電気工事", "医療行為", "介護", "送迎"]):
-        raise HTTPException(422, detail={"code": "PROHIBITED_REQUEST", "riskLevel": "prohibited"})
+    # LLMへ渡すのはマスク済みテキストだけ。危険度判定も同じ文字列だけを見る。
+    assessment = await safety.assess_risk(
+        masking["maskedText"], llm_client=safety_llm_client
+    )
+    if assessment.rejected:
+        raise prohibited_request_error(assessment)
     try:
         result = await request_structuring.structure_request(
             masking["maskedText"], body.areaCode, structure_provider,
@@ -713,6 +736,7 @@ async def structure_request(
             "ruleVersion": masking["ruleVersion"],
             "confirmed": body.maskingConfirmed,
         },
+        "safety": assessment.to_payload(),
     }
 
 
@@ -976,12 +1000,29 @@ async def create_request(
     if cache_key in idempotency_store:
         return idempotency_store[cache_key]
     area_code, _source = resolve_location(None, current_user, body.areaCode)
+    # 危険度はサーバー側で判定する。クライアントが送る riskLevel は採用しない。
+    masked = mask_request_text(f"{body.title} {body.description}")
+    assessment = await safety.assess_risk(
+        masked["maskedText"],
+        llm_client=safety_llm_client,
+        scheduled_at=body.scheduledAt,
+    )
+    if assessment.rejected:
+        raise prohibited_request_error(assessment)
     item = await repository.create(current_user, {
         "title": body.title, "description": body.description, "category": body.category,
-        "riskLevel": body.riskLevel, "areaCode": area_code,
+        "riskLevel": assessment.level, "areaCode": area_code,
         "scheduledAt": body.scheduledAt, "estimatedMinutes": body.estimatedMinutes,
         "requiredHelpers": body.requiredHelpers,
     })
+    # 判断不能と審査対象は公開せず、管理者審査へ送る。
+    if assessment.needs_review and await repository.set_status(
+        current_user, item["id"], "pending_review",
+        expected_version=item["version"], bump_version=False,
+    ):
+        item = {**item, "status": "pending_review"}
+    if assessment.messages:
+        item = {**item, "warnings": list(assessment.messages)}
     idempotency_store[cache_key] = item
     return item
 
@@ -1106,9 +1147,39 @@ async def update_request(
     repository: RequestRepository = Depends(request_repository_dependency),
 ):
     changes = body.model_dump(exclude={"expectedVersion"}, exclude_none=True)
-    return await update_owned_request(
+    # 作成時の判定を更新で迂回できないよう、本文と日時が変わるなら judge し直す。
+    if {"title", "description", "scheduledAt"} & changes.keys():
+        current = await require_request(repository, current_user, request_id)
+        # 他人の依頼で判定を走らせないための先出し確認。更新可否は下の Service が改めて判断する。
+        if current["requesterId"] != current_user.user_id:
+            raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+        masked = mask_request_text(
+            f"{changes.get('title', current['title'])} "
+            f"{changes.get('description', current['description'])}"
+        )
+        assessment = await safety.assess_risk(
+            masked["maskedText"],
+            llm_client=safety_llm_client,
+            scheduled_at=changes.get("scheduledAt", current["scheduledAt"]),
+        )
+        if assessment.rejected:
+            raise prohibited_request_error(assessment)
+        # 保存済み riskLevel はここでは書き換えない。Postgres の update_request が
+        # この列を受け取らず、Memory実装とだけ差が出るためである（COORD-003）。
+        # 公開可否は status で止めるため、審査への遷移は下で行う。
+    else:
+        assessment = None
+    item = await update_owned_request(
         repository, current_user, request_id, body.expectedVersion, changes,
     )
+    if assessment is not None and assessment.needs_review and await repository.set_status(
+        current_user, item["id"], "pending_review",
+        expected_version=item["version"], bump_version=False,
+    ):
+        item = {**item, "status": "pending_review"}
+    if assessment is not None and assessment.messages:
+        item = {**item, "warnings": list(assessment.messages)}
+    return item
 
 
 @app.delete("/requests/{request_id}", status_code=204, tags=["Requests"], summary="自分の依頼を取消", description="依頼者本人が取消可能な状態の依頼をcancelledへ遷移させ、未処理応募もcancelledにする。レスポンス本文はない。", responses=api_errors(401, 403, 404, 409, 500))

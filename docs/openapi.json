@@ -1973,6 +1973,124 @@
         "title": "ReviewResponse",
         "type": "object"
       },
+      "SafetyAssessment": {
+        "description": "固定ルールとLLMを併用した危険度判定の結果と、その判定根拠。",
+        "properties": {
+          "decision": {
+            "description": "公開可否の決定",
+            "enum": [
+              "publish",
+              "publish_with_warning",
+              "pending_review",
+              "rejected"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "evaluatedAt": {
+            "description": "判定日時（ISO 8601、UTC）",
+            "title": "Evaluatedat",
+            "type": "string"
+          },
+          "llmLevel": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "prohibited"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "LLM単独の判定。固定ルールを緩める用途には使わない",
+            "title": "Llmlevel"
+          },
+          "llmStatus": {
+            "description": "LLM判定の実行結果",
+            "enum": [
+              "ok",
+              "skipped_fixed_rule",
+              "skipped_not_configured",
+              "unavailable",
+              "invalid_output"
+            ],
+            "title": "Llmstatus",
+            "type": "string"
+          },
+          "matchedRules": {
+            "description": "一致した固定ルールのコード",
+            "items": {
+              "type": "string"
+            },
+            "title": "Matchedrules",
+            "type": "array"
+          },
+          "messages": {
+            "description": "利用者向けの安全なメッセージ",
+            "items": {
+              "type": "string"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "判定に使ったモデル名",
+            "title": "Model"
+          },
+          "promptVersion": {
+            "description": "LLMプロンプトの版",
+            "title": "Promptversion",
+            "type": "string"
+          },
+          "reasonCodes": {
+            "description": "判定理由のコード",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasoncodes",
+            "type": "array"
+          },
+          "riskLevel": {
+            "description": "固定ルールとLLMのうち強い方を採用した最終危険度",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "prohibited"
+            ],
+            "title": "Risklevel",
+            "type": "string"
+          },
+          "ruleVersion": {
+            "description": "固定ルールの版",
+            "title": "Ruleversion",
+            "type": "string"
+          }
+        },
+        "required": [
+          "riskLevel",
+          "decision",
+          "ruleVersion",
+          "promptVersion",
+          "llmStatus",
+          "evaluatedAt"
+        ],
+        "title": "SafetyAssessment",
+        "type": "object"
+      },
       "SavedRequestListResponse": {
         "properties": {
           "items": {
@@ -2211,6 +2329,10 @@
             "title": "Risklevel",
             "type": "string"
           },
+          "safety": {
+            "$ref": "#/components/schemas/SafetyAssessment",
+            "description": "公開前の危険度判定結果"
+          },
           "scheduledAt": {
             "anyOf": [
               {
@@ -2260,7 +2382,8 @@
           "requiresConfirmation",
           "autoPublished",
           "metadata",
-          "request"
+          "request",
+          "safety"
         ],
         "title": "StructuredRequestResponse",
         "type": "object"

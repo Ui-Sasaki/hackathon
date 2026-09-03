@@ -29,6 +29,7 @@ from .main import (
     ReviewInput,
     ReviewResponse,
     ResetResponse,
+    SafetyAssessment,
     SelectionInput,
     SavedRequestListResponse,
     StructureInput,
