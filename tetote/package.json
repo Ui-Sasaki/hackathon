@@ -51,7 +51,9 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:api-url": "node scripts/check-api-url.js",
+    "build:web": "node scripts/check-api-url.js && npx expo export --platform web"
   },
   "private": true
 }
