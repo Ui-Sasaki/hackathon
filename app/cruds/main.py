@@ -85,15 +85,6 @@ app = FastAPI(
     ),
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[os.getenv("WEBSITE_DOMAIN", "http://localhost:3000")],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=cors_headers(),
-)
-
-
 class ApiPrefixMiddleware:
     """要件書の /api パスと、既存フロント用の無接頭辞パスを両方提供する。"""
 
@@ -393,6 +384,15 @@ class RequestIdMiddleware:
 
 
 app.add_middleware(RequestIdMiddleware)
+# CORS must be the outermost middleware so responses produced directly by
+# SuperTokens (including refresh failures) receive the browser CORS headers.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[os.getenv("WEBSITE_DOMAIN", "http://localhost:3000")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=cors_headers(),
+)
 
 
 async def request_repository_dependency() -> RequestRepository:
