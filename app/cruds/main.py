@@ -1327,6 +1327,23 @@ async def create_message(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     ensure_match_participant(match_or_404(match_id), current_user.user_id)
+
+    # 個人情報の検知ロジック(現在は電話番号とメールアドレスのみ、必要に応じて"address"などを追加)
+    moderation_status = "allowed"
+    for pii_type, _, pattern in PII_MASK_RULES:
+        if pii_type in {"phone", "email"} and pattern.search(body.body):
+            moderation_status = "flagged"
+
+            # --- 送信確認フロー（別パターン）有効化時にコメントアウトを外す ---
+            # if getattr(body, "confirmed", False) is not True:
+            #     raise HTTPException(422, detail={
+            #         "code": "CONFIRMATION_REQUIRED",
+            #         "message": "個人情報が含まれている可能性があります。送信するには確認が必要です"
+            #     })
+            # -----------------------------------------------------------------
+
+            break
+
     item = {
         "id": new_id("msg"),
         "matchId": match_id,
@@ -1334,7 +1351,7 @@ async def create_message(
         "body": body.body,
         "sentAt": now_iso(),
         "readAt": None,
-        "moderationStatus": "allowed",
+        "moderationStatus": moderation_status,
     }
     messages.setdefault(match_id, []).append(item)
     return item

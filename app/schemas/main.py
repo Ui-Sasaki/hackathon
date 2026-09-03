@@ -327,6 +327,8 @@ class MatchResponse(ContractModel):
 
 class MessageInput(ContractModel):
     body: str = Field(min_length=1, max_length=2000)
+    # --- 送信確認フロー（別パターン）有効化時にコメントアウトを外す ---
+    # confirmed: bool = Field(False, description="警告が出たメッセージの送信を強制するフラグ")
 
 
 class MessageResponse(ContractModel):
