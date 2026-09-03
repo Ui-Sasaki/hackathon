@@ -1156,6 +1156,7 @@
         "type": "object"
       },
       "ProfileUpdateInput": {
+        "additionalProperties": false,
         "properties": {
           "age": {
             "anyOf": [

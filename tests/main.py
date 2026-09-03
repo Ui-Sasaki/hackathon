@@ -1014,6 +1014,51 @@ def test_session_dependency_returns_verified_user(monkeypatch) -> None:
     assert user.verification_status == "approved"
 
 
+def test_session_dependency_supports_async_database_lookup(monkeypatch) -> None:
+    class FakeSession:
+        def get_user_id(self) -> str:
+            return "persisted-user"
+
+        def get_access_token_payload(self) -> dict:
+            return {}
+
+    def fake_verify_session(**_options):
+        async def verify(_request):
+            return FakeSession()
+        return verify
+
+    async def database_lookup(user_id: str) -> dict:
+        assert user_id == "persisted-user"
+        return {
+            "role": "member", "status": "active", "emailVerified": True,
+            "verificationStatus": "approved",
+        }
+
+    monkeypatch.setattr(auth_module, "SUPERTOKENS_ENABLED", True)
+    monkeypatch.setattr(auth_module, "verify_session", fake_verify_session, raising=False)
+    monkeypatch.setattr(auth_module, "_user_lookup", database_lookup)
+    request = Request({"type": "http", "method": "GET", "path": "/profile", "headers": []})
+
+    user = asyncio.run(get_current_user(request))
+    assert user.user_id == "persisted-user"
+    assert user.email_verified is True
+
+
+def test_suspended_database_user_is_rejected(monkeypatch) -> None:
+    async def suspended_lookup(_user_id: str) -> dict:
+        return {
+            "role": "member", "status": "suspended", "emailVerified": True,
+            "verificationStatus": "approved",
+        }
+
+    monkeypatch.setattr(auth_module, "AUTH_MOCK_ENABLED", True)
+    monkeypatch.setattr(auth_module, "_user_lookup", suspended_lookup)
+    request = Request({"type": "http", "method": "GET", "path": "/profile", "headers": []})
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(get_current_user(request))
+    assert exc_info.value.detail == {"code": "USER_SUSPENDED"}
+
+
 def test_auth_mock_returns_default_user_without_session(monkeypatch) -> None:
     monkeypatch.setattr(auth_module, "AUTH_MOCK_ENABLED", True)
     monkeypatch.setattr(auth_module, "AUTH_MOCK_USER_ID", "usr_101")

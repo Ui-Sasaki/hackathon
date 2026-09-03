@@ -46,6 +46,11 @@ from app.repositories.saved_requests import (
 from app.repositories.user_settings import (
     UserSettingsRepository, get_user_settings_repository,
 )
+from app.repositories.profiles import (
+    ProfileRepository, ProfileValidationError, configure_memory_profile_store,
+    get_profile_repository, resolve_authenticated_user,
+)
+from app.settings import settings
 from app.services.applications import (
     create_application as create_application_service,
     select_application as select_application_service,
@@ -83,9 +88,6 @@ app = FastAPI(
         "した非本番環境だけで利用できる。"
     ),
 )
-
-add_cors_middleware(app, allow_headers=cors_headers())
-
 
 class ApiPrefixMiddleware:
     """要件書の /api パスと、既存フロント用の無接頭辞パスを両方提供する。"""
@@ -363,6 +365,10 @@ class RequestIdMiddleware:
 
 
 app.add_middleware(RequestIdMiddleware)
+# Register CORS last so it is the outermost middleware. SuperTokens handles
+# /auth/* itself, and its responses must still receive credentialed CORS
+# headers when the web app and API are hosted on different origins.
+add_cors_middleware(app, allow_headers=cors_headers())
 
 
 async def request_repository_dependency() -> RequestRepository:
@@ -395,6 +401,11 @@ async def request_dismissal_repository_dependency() -> RequestDismissalRepositor
 
 async def saved_request_repository_dependency() -> SavedRequestRepository:
     return get_saved_request_repository()
+
+
+async def profile_repository_dependency() -> ProfileRepository:
+    """Resolve the profile repository without a test-time threadpool hop."""
+    return get_profile_repository()
 
 
 def now_iso() -> str:
@@ -510,7 +521,11 @@ def reset_store() -> None:
 
 
 reset_store()
-configure_user_lookup(lambda user_id: users_store.get(user_id))
+configure_memory_profile_store(lambda: users_store)
+if settings.request_repository == "postgres":
+    configure_user_lookup(resolve_authenticated_user)
+else:
+    configure_user_lookup(lambda user_id: users_store.get(user_id))
 
 
 def create_user_profile(user_id: str) -> None:
@@ -529,7 +544,8 @@ def create_user_profile(user_id: str) -> None:
     )
 
 
-configure_user_creator(create_user_profile)
+if settings.request_repository == "memory":
+    configure_user_creator(create_user_profile)
 def match_or_404(match_id: str) -> dict:
     return get_or_404(matches, match_id, "MATCH_NOT_FOUND")
 
@@ -617,29 +633,31 @@ async def reset_mock(
 
 
 @app.get("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを取得", description="Cookieセッションの本人の公開可能なプロフィールだけを返す。", responses=api_errors(401, 403, 500))
-async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
-    return users_store[current_user.user_id]
+async def get_profile(
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: ProfileRepository = Depends(profile_repository_dependency),
+):
+    profile = await repository.get(current_user)
+    if profile is None:
+        raise HTTPException(404, detail={"code": "USER_PROFILE_NOT_FOUND"})
+    return profile
 
 
 @app.patch("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを更新", description="既存プロフィール画面の編集項目を更新する。ユーザーID、ロール、本人確認状態は入力できない。端末ローカルの画像URIは受け付けない。", responses=api_errors(401, 403, 422, 500))
 async def update_profile(
     body: ProfileUpdateInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: ProfileRepository = Depends(profile_repository_dependency),
 ):
     changes = body.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(422, detail={"code": "NO_CHANGES"})
-    profile = users_store[current_user.user_id]
-    candidate = {**profile, **changes}
-    if candidate.get("helperType") == "student" and not all(
-        candidate.get(field) for field in ("university", "faculty", "schoolYear")
-    ):
-        raise HTTPException(422, detail={"code": "STUDENT_PROFILE_INCOMPLETE"})
-    if candidate.get("helperType") == "worker" and not candidate.get("occupation"):
-        raise HTTPException(422, detail={"code": "WORKER_PROFILE_INCOMPLETE"})
-    profile.update(changes)
-    profile["updatedAt"] = now_iso()
-    return profile
+    try:
+        return await repository.update(current_user, changes)
+    except KeyError as exc:
+        raise HTTPException(404, detail={"code": "USER_PROFILE_NOT_FOUND"}) from exc
+    except ProfileValidationError as exc:
+        raise HTTPException(422, detail={"code": exc.code}) from exc
 
 
 @app.get("/settings", response_model=UserSettingsResponse, tags=["Settings"], summary="自分の利用者設定を取得", description="Cookieセッション本人の通知、位置情報利用、文字サイズ設定だけを返す。通知設定はブラウザ・OSの通知権限を変更しない。", responses=api_errors(401, 500))

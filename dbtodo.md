@@ -56,21 +56,21 @@
 
 関連Draft: [#68](https://github.com/Ui-Sasaki/hackathon/pull/68)
 
-- [ ] SuperTokens subjectから内部の`users.id`を解決する。
-- [ ] role、利用停止、メール確認、本人確認状態をDBから取得する。
-- [ ] 再認証時にプロフィール情報を上書きしない。
-- [ ] actor contextなしの業務クエリをRLSで拒否する。
+- [x] SuperTokens subjectから内部の`users.id`を解決する。
+- [x] role、利用停止、メール確認、本人確認状態をDBから取得する。
+- [x] 再認証時にプロフィール情報を上書きしない。
+- [x] actor contextなしの業務クエリをRLSで拒否する。
 - [ ] 実SuperTokensとの結合確認を行う。
 
 ### 06. プロフィールの永続化
 
 関連Draft: [#68](https://github.com/Ui-Sasaki/hackathon/pull/68)
 
-- [ ] Profile RepositoryのPostgres実装を統合する。
-- [ ] 本人だけがプロフィールを更新できるようにする。
-- [ ] role、本人確認状態などの保護フィールドを更新入力から除外する。
-- [ ] 活動地域マスタとプロフィール項目の制約を適用する。
-- [ ] 公開プロフィールへ機微情報を含めない。
+- [x] Profile RepositoryのPostgres実装を統合する。
+- [x] 本人だけがプロフィールを更新できるようにする。
+- [x] role、本人確認状態などの保護フィールドを更新入力から除外する。
+- [x] 活動地域マスタとプロフィール項目の制約を適用する。
+- [x] 公開プロフィールへ機微情報を含めない。
 
 ### 07. ブロック関係の永続化
 

@@ -188,6 +188,8 @@ class RequestUpdateInput(ContractModel):
 
 
 class ProfileUpdateInput(ContractModel):
+    model_config = ConfigDict(extra="forbid")
+
     displayName: str | None = Field(None, min_length=1, max_length=50)
     areaCode: str | None = Field(None, min_length=1, max_length=30)
     region: str | None = Field(None, min_length=1, max_length=20)
@@ -206,6 +208,8 @@ class ProfileUpdateInput(ContractModel):
 
     @model_validator(mode="after")
     def validate_helper_details(self) -> "ProfileUpdateInput":
+        if "displayName" in self.model_fields_set and self.displayName is None:
+            raise ValueError("displayName cannot be null")
         if self.helperType == "student" and not all(
             (self.university, self.faculty, self.schoolYear)
         ):
