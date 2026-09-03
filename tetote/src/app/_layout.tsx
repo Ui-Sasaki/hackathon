@@ -5,6 +5,8 @@ import { RequestsProvider } from "../context/RequestsContext";
 import { ModeProvider } from "../context/ModeContext";
 import { FontSizeProvider } from "../context/FontSizeContext";
 import { AuthProvider, useAuth } from "../auth/AuthContext";
+import { warmUpApi } from "../api/client";
+import { SafetyProvider } from "../context/SafetyContext";
 
 function AuthenticatedStack() {
   const { refreshProfile, status } = useAuth();
@@ -49,12 +51,20 @@ function AuthenticatedStack() {
 }
 
 export default function RootLayout() {
+  // 停止しているサーバーを先に起こす。利用者が登録や送信を押すころには
+  // 起動が終わっている状態にして、初回アクセスの失敗を減らす。
+  useEffect(() => {
+    void warmUpApi();
+  }, []);
+
   return (
     <AuthProvider>
       <ModeProvider>
         <FontSizeProvider>
           <RequestsProvider>
-            <AuthenticatedStack />
+            <SafetyProvider>
+              <AuthenticatedStack />
+            </SafetyProvider>
           </RequestsProvider>
         </FontSizeProvider>
       </ModeProvider>

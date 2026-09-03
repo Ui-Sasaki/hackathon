@@ -807,6 +807,11 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
           }
         },
         "required": [
@@ -818,7 +823,8 @@
           "requesterConfirmed",
           "helperConfirmed",
           "matchedAt",
-          "completedAt"
+          "completedAt",
+          "version"
         ],
         "title": "MatchResponse",
         "type": "object"
@@ -924,8 +930,60 @@
         "title": "MessageResponse",
         "type": "object"
       },
+      "ProfileImageInput": {
+        "properties": {
+          "uploadId": {
+            "description": "本文の送信を終えたアップロードの識別子",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Uploadid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId"
+        ],
+        "title": "ProfileImageInput",
+        "type": "object"
+      },
+      "ProfileImageResponse": {
+        "properties": {
+          "imageId": {
+            "title": "Imageid",
+            "type": "string"
+          },
+          "imageUrl": {
+            "description": "表示用の推測できないURL。ストレージ内部キーは含まない",
+            "title": "Imageurl",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "imageId",
+          "imageUrl",
+          "updatedAt"
+        ],
+        "title": "ProfileImageResponse",
+        "type": "object"
+      },
       "ProfileResponse": {
         "properties": {
+          "age": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age"
+          },
           "areaCode": {
             "anyOf": [
               {
@@ -946,9 +1004,124 @@
             "title": "Emailverified",
             "type": "boolean"
           },
+          "faculty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faculty"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "helperType": {
+            "anyOf": [
+              {
+                "enum": [
+                  "student",
+                  "worker"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Helpertype"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "imageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "プロフィール画像の表示用URL。未設定ならnull",
+            "title": "Imageurl"
+          },
+          "industry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry"
+          },
+          "interest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interest"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "occupation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occupation"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
           },
           "role": {
             "enum": [
@@ -959,6 +1132,17 @@
             "title": "Role",
             "type": "string"
           },
+          "schoolYear": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schoolyear"
+          },
           "status": {
             "enum": [
               "active",
@@ -966,6 +1150,17 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "university": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "University"
           },
           "updatedAt": {
             "anyOf": [
@@ -989,6 +1184,17 @@
             ],
             "title": "Verificationstatus",
             "type": "string"
+          },
+          "workplace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workplace"
           }
         },
         "required": [
@@ -1004,6 +1210,19 @@
       },
       "ProfileUpdateInput": {
         "properties": {
+          "age": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age"
+          },
           "areaCode": {
             "anyOf": [
               {
@@ -1029,9 +1248,216 @@
               }
             ],
             "title": "Displayname"
+          },
+          "faculty": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faculty"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "helperType": {
+            "anyOf": [
+              {
+                "enum": [
+                  "student",
+                  "worker"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Helpertype"
+          },
+          "industry": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry"
+          },
+          "interest": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interest"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "occupation": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occupation"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "schoolYear": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schoolyear"
+          },
+          "university": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "University"
+          },
+          "workplace": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workplace"
           }
         },
         "title": "ProfileUpdateInput",
+        "type": "object"
+      },
+      "RecommendedRequestItem": {
+        "properties": {
+          "reason": {
+            "description": "ユーザーに提示する推薦理由",
+            "title": "Reason",
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/RequestResponse"
+          },
+          "score": {
+            "description": "推薦総合スコア(0-100)",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "request",
+          "score",
+          "reason"
+        ],
+        "title": "RecommendedRequestItem",
+        "type": "object"
+      },
+      "RecommendedRequestListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendedRequestItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "次ページなしの場合null",
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "RecommendedRequestListResponse",
         "type": "object"
       },
       "ReportInput": {
@@ -1600,20 +2026,150 @@
         "title": "ReviewResponse",
         "type": "object"
       },
+      "SafetyAssessment": {
+        "description": "固定ルールとLLMを併用した危険度判定の結果と、その判定根拠。",
+        "properties": {
+          "decision": {
+            "description": "公開可否の決定",
+            "enum": [
+              "publish",
+              "publish_with_warning",
+              "pending_review",
+              "rejected"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "evaluatedAt": {
+            "description": "判定日時（ISO 8601、UTC）",
+            "title": "Evaluatedat",
+            "type": "string"
+          },
+          "llmLevel": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "prohibited"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "LLM単独の判定。固定ルールを緩める用途には使わない",
+            "title": "Llmlevel"
+          },
+          "llmStatus": {
+            "description": "LLM判定の実行結果",
+            "enum": [
+              "ok",
+              "skipped_fixed_rule",
+              "skipped_not_configured",
+              "unavailable",
+              "invalid_output"
+            ],
+            "title": "Llmstatus",
+            "type": "string"
+          },
+          "matchedRules": {
+            "description": "一致した固定ルールのコード",
+            "items": {
+              "type": "string"
+            },
+            "title": "Matchedrules",
+            "type": "array"
+          },
+          "messages": {
+            "description": "利用者向けの安全なメッセージ",
+            "items": {
+              "type": "string"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "判定に使ったモデル名",
+            "title": "Model"
+          },
+          "promptVersion": {
+            "description": "LLMプロンプトの版",
+            "title": "Promptversion",
+            "type": "string"
+          },
+          "reasonCodes": {
+            "description": "判定理由のコード",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasoncodes",
+            "type": "array"
+          },
+          "riskLevel": {
+            "description": "固定ルールとLLMのうち強い方を採用した最終危険度",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "prohibited"
+            ],
+            "title": "Risklevel",
+            "type": "string"
+          },
+          "ruleVersion": {
+            "description": "固定ルールの版",
+            "title": "Ruleversion",
+            "type": "string"
+          }
+        },
+        "required": [
+          "riskLevel",
+          "decision",
+          "ruleVersion",
+          "promptVersion",
+          "llmStatus",
+          "evaluatedAt"
+        ],
+        "title": "SafetyAssessment",
+        "type": "object"
+      },
+      "SavedRequestListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RequestResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SavedRequestListResponse",
+        "type": "object"
+      },
       "SelectionInput": {
+        "additionalProperties": false,
         "properties": {
           "expectedVersion": {
             "minimum": 1.0,
             "title": "Expectedversion",
             "type": "integer"
-          },
-          "requestId": {
-            "title": "Requestid",
-            "type": "string"
           }
         },
         "required": [
-          "requestId",
           "expectedVersion"
         ],
         "title": "SelectionInput",
@@ -1669,44 +2225,152 @@
         "title": "StructureInput",
         "type": "object"
       },
-      "StructuredRequestResponse": {
+      "StructureMetadata": {
         "properties": {
+          "modelName": {
+            "title": "Modelname",
+            "type": "string"
+          },
+          "processedAt": {
+            "format": "date-time",
+            "title": "Processedat",
+            "type": "string"
+          },
+          "promptVersion": {
+            "title": "Promptversion",
+            "type": "string"
+          }
+        },
+        "required": [
+          "modelName",
+          "promptVersion",
+          "processedAt"
+        ],
+        "title": "StructureMetadata",
+        "type": "object"
+      },
+      "StructuredRequestResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "additionalQuestion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Additionalquestion"
+          },
+          "approximateArea": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approximatearea"
+          },
+          "autoPublished": {
+            "const": false,
+            "title": "Autopublished",
+            "type": "boolean"
+          },
           "category": {
-            "maxLength": 100,
+            "maxLength": 50,
+            "minLength": 1,
             "title": "Category",
             "type": "string"
           },
           "description": {
-            "maxLength": 3000,
+            "maxLength": 2000,
+            "minLength": 1,
             "title": "Description",
             "type": "string"
           },
           "estimatedMinutes": {
-            "maximum": 240.0,
-            "minimum": 10.0,
-            "title": "Estimatedminutes",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 240.0,
+                "minimum": 10.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimatedminutes"
+          },
+          "itemsToBring": {
+            "items": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Itemstobring",
+            "type": "array"
           },
           "masking": {
             "$ref": "#/components/schemas/AppliedMasking"
           },
+          "metadata": {
+            "$ref": "#/components/schemas/StructureMetadata"
+          },
           "missingFields": {
             "items": {
+              "enum": [
+                "title",
+                "description",
+                "category",
+                "scheduledAt",
+                "estimatedMinutes",
+                "approximateArea",
+                "requiredHelpers",
+                "itemsToBring",
+                "details"
+              ],
               "type": "string"
             },
+            "maxItems": 20,
             "title": "Missingfields",
             "type": "array"
           },
+          "request": {
+            "$ref": "#/components/schemas/VoiceRequestData",
+            "description": "音声入力画面との互換用依頼データ"
+          },
           "requiredHelpers": {
-            "maximum": 5.0,
-            "minimum": 1.0,
-            "title": "Requiredhelpers",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 5.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requiredhelpers"
           },
           "requiresConfirmation": {
-            "default": true,
+            "const": true,
             "title": "Requiresconfirmation",
             "type": "boolean"
+          },
+          "riskCandidates": {
+            "items": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Riskcandidates",
+            "type": "array"
           },
           "riskLevel": {
             "enum": [
@@ -1718,21 +2382,41 @@
             "title": "Risklevel",
             "type": "string"
           },
+          "safety": {
+            "$ref": "#/components/schemas/SafetyAssessment",
+            "description": "公開前の危険度判定結果"
+          },
           "scheduledAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "description": "ISO 8601日時",
-            "format": "date-time",
-            "title": "Scheduledat",
+            "title": "Scheduledat"
+          },
+          "status": {
+            "const": "draft",
+            "title": "Status",
             "type": "string"
           },
           "title": {
             "maxLength": 100,
+            "minLength": 1,
             "title": "Title",
             "type": "string"
           },
           "warnings": {
             "items": {
+              "maxLength": 200,
+              "minLength": 1,
               "type": "string"
             },
+            "maxItems": 20,
             "title": "Warnings",
             "type": "array"
           }
@@ -1741,15 +2425,213 @@
           "title",
           "description",
           "category",
-          "scheduledAt",
-          "estimatedMinutes",
-          "requiredHelpers",
+          "itemsToBring",
           "riskLevel",
+          "riskCandidates",
           "missingFields",
           "warnings",
-          "masking"
+          "masking",
+          "status",
+          "requiresConfirmation",
+          "autoPublished",
+          "metadata",
+          "request",
+          "safety"
         ],
         "title": "StructuredRequestResponse",
+        "type": "object"
+      },
+      "UploadSessionInput": {
+        "examples": [
+          {
+            "byteSize": 240000,
+            "contentType": "image/jpeg",
+            "fileName": "photo.jpg",
+            "purpose": "profile_image"
+          }
+        ],
+        "properties": {
+          "byteSize": {
+            "description": "申告するファイルサイズ。上限超過は413",
+            "minimum": 1.0,
+            "title": "Bytesize",
+            "type": "integer"
+          },
+          "contentType": {
+            "description": "申告するMIME type。対応外は415。受信時に実体と突き合わせる",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Contenttype",
+            "type": "string"
+          },
+          "fileName": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "拡張子の突き合わせだけに使う。保存はしない",
+            "title": "Filename"
+          },
+          "purpose": {
+            "description": "画像の用途",
+            "enum": [
+              "profile_image",
+              "verification_document"
+            ],
+            "title": "Purpose",
+            "type": "string"
+          }
+        },
+        "required": [
+          "purpose",
+          "contentType",
+          "byteSize"
+        ],
+        "title": "UploadSessionInput",
+        "type": "object"
+      },
+      "UploadSessionResponse": {
+        "properties": {
+          "expiresAt": {
+            "description": "アップロードの期限（ISO 8601、UTC）",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "maxBytes": {
+            "description": "受け付ける最大バイト数",
+            "title": "Maxbytes",
+            "type": "integer"
+          },
+          "uploadId": {
+            "description": "アップロードの識別子。ストレージ内部キーではない",
+            "title": "Uploadid",
+            "type": "string"
+          },
+          "uploadUrl": {
+            "description": "本文を送る先。期限付きで、この利用者だけが使える",
+            "title": "Uploadurl",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId",
+          "uploadUrl",
+          "expiresAt",
+          "maxBytes"
+        ],
+        "title": "UploadSessionResponse",
+        "type": "object"
+      },
+      "UploadedContentResponse": {
+        "properties": {
+          "byteSize": {
+            "description": "メタデータ除去後のバイト数",
+            "title": "Bytesize",
+            "type": "integer"
+          },
+          "contentType": {
+            "enum": [
+              "image/jpeg",
+              "image/png"
+            ],
+            "title": "Contenttype",
+            "type": "string"
+          },
+          "status": {
+            "const": "stored",
+            "title": "Status",
+            "type": "string"
+          },
+          "uploadId": {
+            "title": "Uploadid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId",
+          "status",
+          "contentType",
+          "byteSize"
+        ],
+        "title": "UploadedContentResponse",
+        "type": "object"
+      },
+      "UserSettingsResponse": {
+        "properties": {
+          "fontSize": {
+            "enum": [
+              "small",
+              "medium",
+              "large"
+            ],
+            "title": "Fontsize",
+            "type": "string"
+          },
+          "locationEnabled": {
+            "title": "Locationenabled",
+            "type": "boolean"
+          },
+          "notificationsEnabled": {
+            "title": "Notificationsenabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notificationsEnabled",
+          "locationEnabled",
+          "fontSize"
+        ],
+        "title": "UserSettingsResponse",
+        "type": "object"
+      },
+      "UserSettingsUpdateInput": {
+        "additionalProperties": false,
+        "properties": {
+          "fontSize": {
+            "anyOf": [
+              {
+                "enum": [
+                  "small",
+                  "medium",
+                  "large"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fontsize"
+          },
+          "locationEnabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locationenabled"
+          },
+          "notificationsEnabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notificationsenabled"
+          }
+        },
+        "title": "UserSettingsUpdateInput",
         "type": "object"
       },
       "ValidationError": {
@@ -1786,6 +2668,12 @@
         "type": "object"
       },
       "VerificationInput": {
+        "examples": [
+          {
+            "method": "student_card",
+            "uploadId": "4f1c0f0e-0f1e-4f4a-9b2a-2f1d3c4b5a60"
+          }
+        ],
         "properties": {
           "method": {
             "enum": [
@@ -1795,18 +2683,19 @@
             "title": "Method",
             "type": "string"
           },
-          "storageObjectKey": {
+          "uploadId": {
             "anyOf": [
               {
-                "maxLength": 300,
+                "maxLength": 100,
+                "minLength": 1,
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "学生証方式のみ。非公開ストレージのキー",
-            "title": "Storageobjectkey"
+            "description": "学生証方式のみ。用途 verification_document のアップロード識別子。ストレージ内部キーは受け取らない",
+            "title": "Uploadid"
           }
         },
         "required": [
@@ -1859,6 +2748,63 @@
         ],
         "title": "VerificationResponse",
         "type": "object"
+      },
+      "VoiceRequestData": {
+        "properties": {
+          "deadline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "VoiceRequestData",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -1898,7 +2844,7 @@
     },
     "/_mock/reset": {
       "post": {
-        "description": "非本番かつMOCK_RESET_ENABLED=trueの場合だけ、認証済み利用者が実行できる。全モックデータを初期状態へ戻す。",
+        "description": "MOCK_RESET_ENABLED=trueの非本番環境だけで、認証済み利用者が実行できる。本番ではこの設定自体が起動時に拒否される。全モックデータを初期状態へ戻す。",
         "operationId": "reset_mock__mock_reset_post",
         "responses": {
           "200": {
@@ -3596,7 +4542,7 @@
         ]
       },
       "patch": {
-        "description": "表示名または概算地域を更新する。ユーザーID、ロール、本人確認状態は入力できない。",
+        "description": "既存プロフィール画面の編集項目を更新する。ユーザーID、ロール、本人確認状態は入力できない。端末ローカルの画像URIは受け付けない。",
         "operationId": "update_profile_profile_patch",
         "requestBody": {
           "content": {
@@ -3698,6 +4644,305 @@
           }
         ],
         "summary": "自分のプロフィールを更新",
+        "tags": [
+          "Profile"
+        ]
+      }
+    },
+    "/profile/image": {
+      "delete": {
+        "description": "自分のプロフィール画像を削除する。設定していない場合は404。",
+        "operationId": "delete_profile_image_profile_image_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "プロフィール画像を削除",
+        "tags": [
+          "Profile"
+        ]
+      },
+      "put": {
+        "description": "検証済みのアップロードを自分のプロフィール画像として確定する。確定に失敗した場合、既存の画像は残る。",
+        "operationId": "set_profile_image_profile_image_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileImageInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileImageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "details": {},
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "依頼の状態が更新されているため処理できません"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "プロフィール画像を確定",
+        "tags": [
+          "Profile"
+        ]
+      }
+    },
+    "/profile/images/{image_token}": {
+      "get": {
+        "description": "推測できない参照子で画像を返す。認証済み利用者だけが取得でき、キャッシュへ残さない。",
+        "operationId": "get_profile_image_profile_images__image_token__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "image_token",
+            "required": true,
+            "schema": {
+              "title": "Image Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "プロフィール画像を取得",
         "tags": [
           "Profile"
         ]
@@ -4230,9 +5475,123 @@
         ]
       }
     },
+    "/requests/recommended": {
+      "get": {
+        "description": "支援者のプロフィールに基づき、応募可能な依頼をスコアリングして推薦順に返す。",
+        "operationId": "get_recommended_requests_requests_recommended_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "latitude",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": -90,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Latitude"
+            }
+          },
+          {
+            "in": "query",
+            "name": "longitude",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 180,
+                  "minimum": -180,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Longitude"
+            }
+          },
+          {
+            "in": "query",
+            "name": "consentGranted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Consentgranted",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "locationFailure",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(denied|timeout|unsupported|unavailable)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Locationfailure"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendedRequestListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "パーソナライズされた依頼推薦",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
     "/requests/structure": {
       "post": {
-        "description": "自由記述を依頼候補へ構造化する開発用AIモック。個人情報をマスクし、検出時は確認を求める。結果は自動公開されない。",
+        "description": "自由記述を検証済みの確認用下書きへ構造化する。個人情報をマスクし、検出時は確認を求める。結果は自動公開されない。",
         "operationId": "structure_request_requests_structure_post",
         "requestBody": {
           "content": {
@@ -4316,6 +5675,42 @@
               }
             },
             "description": "サーバー内部でエラーが発生しました"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "STRUCTURE_INVALID_RESPONSE",
+                    "details": {},
+                    "message": "構造化サービスの応答を検証できません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "構造化サービスの応答を検証できません"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "STRUCTURE_SERVICE_UNAVAILABLE",
+                    "details": {},
+                    "message": "構造化サービスを利用できません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "構造化サービスを利用できません"
           }
         },
         "security": [
@@ -4985,6 +6380,908 @@
         "summary": "公開依頼へ応募",
         "tags": [
           "Applications"
+        ]
+      }
+    },
+    "/requests/{request_id}/dismiss": {
+      "delete": {
+        "description": "セッション本人の非表示関係を冪等に解除する。",
+        "operationId": "restore_dismissed_request_requests__request_id__dismiss_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "依頼の非表示を解除",
+        "tags": [
+          "Requests"
+        ]
+      },
+      "post": {
+        "description": "セッション本人の非表示関係を冪等に保存する。他利用者の一覧には影響しない。",
+        "operationId": "dismiss_request_requests__request_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "依頼を自分の一覧から非表示",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/saved-requests": {
+      "get": {
+        "description": "セッション本人が保存した公開中かつ閲覧可能な依頼だけを返す。",
+        "operationId": "list_saved_requests_saved_requests_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRequestListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "保存した依頼を一覧",
+        "tags": [
+          "Saved requests"
+        ]
+      }
+    },
+    "/saved-requests/{request_id}": {
+      "delete": {
+        "description": "閲覧可能な公開依頼をセッション本人の保存一覧から冪等に削除する。",
+        "operationId": "remove_saved_request_saved_requests__request_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "依頼の保存を解除",
+        "tags": [
+          "Saved requests"
+        ]
+      },
+      "post": {
+        "description": "閲覧可能な公開依頼をセッション本人の保存一覧へ冪等に追加する。",
+        "operationId": "save_request_saved_requests__request_id__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "依頼を保存",
+        "tags": [
+          "Saved requests"
+        ]
+      }
+    },
+    "/settings": {
+      "get": {
+        "description": "Cookieセッション本人の通知、位置情報利用、文字サイズ設定だけを返す。通知設定はブラウザ・OSの通知権限を変更しない。",
+        "operationId": "get_user_settings_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "自分の利用者設定を取得",
+        "tags": [
+          "Settings"
+        ]
+      },
+      "patch": {
+        "description": "指定した項目だけを更新する。locationEnabled=falseの場合、クライアントはブラウザ位置情報の取得を開始しない。notificationsEnabledはアプリ内の希望設定であり、ブラウザ・OS権限とは別に扱う。",
+        "operationId": "update_user_settings_settings_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserSettingsUpdateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "自分の利用者設定を部分更新",
+        "tags": [
+          "Settings"
+        ]
+      }
+    },
+    "/uploads": {
+      "post": {
+        "description": "申告されたMIME type、拡張子、サイズを検証し、期限付きのアップロード先を発行する。ストレージ内部キーは返さない。",
+        "operationId": "create_upload_session_uploads_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadSessionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "IMAGE_TOO_LARGE",
+                    "details": {},
+                    "message": "ファイルが大きすぎます",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "ファイルが大きすぎます"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNSUPPORTED_MEDIA_TYPE",
+                    "details": {},
+                    "message": "対応していない形式です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対応していない形式です"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "画像アップロードを開始",
+        "tags": [
+          "Uploads"
+        ]
+      }
+    },
+    "/uploads/{upload_id}/content": {
+      "put": {
+        "description": "バイト列の実体から形式を判定し、申告と一致しない画像を拒否する。保存前にメタデータを除去する。",
+        "operationId": "upload_content_uploads__upload_id__content_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadedContentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "details": {},
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "依頼の状態が更新されているため処理できません"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "IMAGE_TOO_LARGE",
+                    "details": {},
+                    "message": "ファイルが大きすぎます",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "ファイルが大きすぎます"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNSUPPORTED_MEDIA_TYPE",
+                    "details": {},
+                    "message": "対応していない形式です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対応していない形式です"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "画像の本文を送信",
+        "tags": [
+          "Uploads"
         ]
       }
     },

@@ -29,12 +29,17 @@ python -m uvicorn main:app --reload --port 8000
 | `WEBSITE_DOMAIN` | `http://localhost:3000` | CORSで許可するフロントエンド |
 | `AUTH_COOKIE_SECURE` | `true` | CookieのSecure属性 |
 | `AUTH_COOKIE_SAME_SITE` | `lax` | CookieのSameSite属性 |
-| `AUTH_MOCK_ENABLED` | `false` | 開発用の認証モックを有効化 |
+| `AUTH_MOCK_ENABLED` | `false` | 開発用の認証モックを有効化。**本番では有効にできない**（起動時に拒否） |
 | `AUTH_MOCK_USER_ID` | `usr_101` | 認証モックの既定ユーザーID |
-| `MOCK_RESET_ENABLED` | `false` | `POST /_mock/reset` を利用可能にする。開発・テスト環境でのみ有効にする |
+| `MOCK_RESET_ENABLED` | `false` | `POST /_mock/reset` を利用可能にする。**本番では有効にできない**（起動時に拒否） |
 | `APP_ENV` | `development` | `production` の場合はPostgresを強制し、Memory指定を拒否する |
 | `REQUEST_REPOSITORY` | `memory` | 非本番での依頼保存先。`memory` または `postgres` |
 | `DATABASE_URL` | 未設定 | Postgres選択時は必須。Supabaseの接続文字列 |
+
+`APP_ENV=production` では、認証や運用の安全装置を外す設定を起動時に拒否する。
+`AUTH_MOCK_ENABLED=true`、`MOCK_RESET_ENABLED=true`、`SUPERTOKENS_ENABLED=false` の
+いずれかが設定されているとアプリは起動しない。黙って無効化せず起動を止めるのは、
+設定した本人が気づけないまま公開されるのを防ぐためである。
 
 本番は `APP_ENV=production` と `DATABASE_URL` を必ず設定する。本番では
 `REQUEST_REPOSITORY` の省略時もPostgresが選ばれ、接続情報がなければアプリのimport時に
@@ -116,6 +121,12 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/reports` | 通報 |
 | POST | `/users/{id}/block` | ブロック・解除 |
 
+`PATCH /profile`は既存フロントエンドのプロフィール入力を基準に、表示名、都道府県、
+年代、注意事項、支援者区分、大学・学部・学年、職業・業界・勤務先、性別、興味、
+一言メッセージを更新する。本人ID、ロール、メール確認、本人確認状態はセッションと
+サーバー側レコードから決定し、クライアント入力では変更できない。プロフィール画像は
+安全なアップロードAPIが未実装のため、端末ローカルURIを`PATCH /profile`へ送らない。
+
 詳細なリクエスト・レスポンス仕様はSwagger UIを参照する。
 認証、モック利用者、ページング、実装状況を含むフロント向け手順は
 [`docs/api-development.md`](../docs/api-development.md)を参照する。固定OpenAPIは
@@ -153,6 +164,18 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 この固定ルールは代表的な形式を検出する補助機能であり、完全な匿名化を保証しない。
 固有名詞、崩した表記、文脈から推測できる情報は検出できない場合があるため、送信前に
 ユーザー自身がマスキング結果を確認する必要がある。
+
+### Claudeによる依頼構造化
+
+既定の`CLAUDE_API_ENABLED=false`では外部通信をせず、開発用のローカルProviderを
+使う。Claudeを使う場合は`CLAUDE_API_ENABLED=true`と`ANTHROPIC_API_KEY`を設定する。
+Messages APIにはタイムアウトを設定し、JSON Schemaを指定した
+`structure_request`ツールだけを選択させたうえで、tool inputをPydanticでも再検証する。
+
+応答は常に`status: draft`、`requiresConfirmation: true`、`autoPublished: false`で、
+ユーザー確認なしに公開されない。監査用Memory Repositoryにはモデル名、プロンプト版、
+処理日時、スキーマ版だけを保存し、依頼本文やマスキング前の個人情報は保存しない。
+この機能は`app/db.py`、Postgres Repository、migration、RLSへ依存しない。
 
 ## エラーレスポンスとトレースID
 

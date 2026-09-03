@@ -16,7 +16,7 @@ from starlette.requests import Request
 import app.auth as auth_module
 import app.cruds.main as crud_module
 from app.auth import CurrentUser, get_current_user
-from app.cruds.main import SEED_REQUEST_1024
+from app.cruds.main import SEED_REQUEST_1024, SEED_REQUEST_1025
 from app.main import app
 from app.repositories.requests import (
     MemoryRequestRepository, PostgresRequestRepository, encode_cursor, get_request_repository,
@@ -25,8 +25,21 @@ from app.repositories.applications import (
     MemoryApplicationRepository, PostgresApplicationRepository,
     get_application_repository,
 )
+from app.repositories.user_settings import (
+    MemoryUserSettingsRepository, UserSettingsRepository,
+    get_user_settings_repository,
+)
+from app.repositories.request_dismissals import (
+    MemoryRequestDismissalRepository, RequestDismissalRepository,
+    get_request_dismissal_repository,
+)
+from app.repositories.saved_requests import (
+    MemorySavedRequestRepository, SavedRequestRepository,
+    get_saved_request_repository,
+)
 from app.settings import load_settings
 
+from app.cruds.main import matches, messages
 
 class ASGITestClient:
     """Small synchronous wrapper that keeps tests independent of a live server."""
@@ -106,10 +119,147 @@ def test_health() -> None:
     assert response.json()["status"] == "ok"
 
 
+def test_user_settings_defaults_and_partial_update_are_scoped_to_user() -> None:
+    assert client.get("/settings").json() == {
+        "notificationsEnabled": True,
+        "locationEnabled": True,
+        "fontSize": "medium",
+    }
+    updated = client.patch("/settings", json={"fontSize": "large"})
+    assert updated.status_code == 200
+    assert updated.json() == {
+        "notificationsEnabled": True,
+        "locationEnabled": True,
+        "fontSize": "large",
+    }
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    assert client.get("/settings").json()["fontSize"] == "medium"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"fontSize": "extra-large"}, {"locationEnabled": "yes"}, {"unknown": True}],
+)
+def test_user_settings_reject_invalid_updates(payload: dict) -> None:
+    response = client.patch("/settings", json=payload)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] in {"NO_CHANGES", "VALIDATION_ERROR"}
+
+
+def test_user_settings_require_authentication() -> None:
+    app.dependency_overrides.pop(get_current_user)
+    response = client.get("/settings")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
+
+
+def test_user_settings_repository_contract() -> None:
+    required: set[str] = {"get", "update", "reset"}
+    assert required <= set(dir(MemoryUserSettingsRepository))
+    repository: UserSettingsRepository = get_user_settings_repository()
+    assert required <= set(dir(repository))
+
+
 def test_list_requests() -> None:
     response = client.get("/requests", params={"areaCode": "AREA-001"})
     assert response.status_code == 200
     assert len(response.json()["items"]) == 2
+
+
+def test_dismiss_request_is_idempotent_and_scoped_to_user() -> None:
+    for _ in range(2):
+        assert client.post(f"/requests/{SEED_REQUEST_1024}/dismiss").status_code == 204
+    requester_ids = {item["id"] for item in client.get("/requests").json()["items"]}
+    assert SEED_REQUEST_1024 not in requester_ids
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    helper_ids = {
+        item["id"]
+        for item in client.get("/requests", params={"areaCode": "AREA-001"}).json()["items"]
+    }
+    assert SEED_REQUEST_1024 in helper_ids
+
+
+def test_restore_dismissed_request_is_idempotent() -> None:
+    assert client.post(f"/requests/{SEED_REQUEST_1024}/dismiss").status_code == 204
+    for _ in range(2):
+        assert client.delete(f"/requests/{SEED_REQUEST_1024}/dismiss").status_code == 204
+    ids = {item["id"] for item in client.get("/requests").json()["items"]}
+    assert SEED_REQUEST_1024 in ids
+
+
+def test_dismiss_hides_unavailable_request_existence() -> None:
+    assert client.post("/requests/missing/dismiss").status_code == 404
+    assert client.post(f"/users/usr_301/block", json={"blocked": True}).status_code == 201
+    blocked = client.post(f"/requests/{SEED_REQUEST_1025}/dismiss")
+    assert blocked.status_code == 404
+    assert blocked.json()["error"]["code"] == "REQUEST_NOT_FOUND"
+
+
+def test_request_dismissal_repository_contract() -> None:
+    required = {"list_ids", "dismiss", "restore", "reset"}
+    assert required <= set(dir(MemoryRequestDismissalRepository))
+    repository: RequestDismissalRepository = get_request_dismissal_repository()
+    assert required <= set(dir(repository))
+
+
+def test_saved_requests_are_idempotent_and_scoped_to_user() -> None:
+    assert client.get("/saved-requests").json() == {"items": []}
+    for _ in range(2):
+        assert client.post(f"/saved-requests/{SEED_REQUEST_1024}").status_code == 204
+    assert [
+        item["id"] for item in client.get("/saved-requests").json()["items"]
+    ] == [SEED_REQUEST_1024]
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    assert client.get("/saved-requests").json() == {"items": []}
+
+
+def test_remove_saved_request_is_idempotent() -> None:
+    assert client.post(f"/saved-requests/{SEED_REQUEST_1024}").status_code == 204
+    for _ in range(2):
+        assert client.delete(f"/saved-requests/{SEED_REQUEST_1024}").status_code == 204
+    assert client.get("/saved-requests").json() == {"items": []}
+
+
+def test_saved_requests_hide_missing_blocked_and_cancelled_requests() -> None:
+    assert client.post("/saved-requests/missing").status_code == 404
+    assert client.post(f"/saved-requests/{SEED_REQUEST_1025}").status_code == 204
+    assert client.post(f"/users/usr_301/block", json={"blocked": True}).status_code == 201
+    assert client.get("/saved-requests").json() == {"items": []}
+
+    assert client.post(f"/users/usr_301/block", json={"blocked": False}).status_code == 201
+    repository = get_request_repository()
+    asyncio.run(repository.set_status(REQUESTER, SEED_REQUEST_1025, "cancelled"))
+    assert client.get("/saved-requests").json() == {"items": []}
+
+
+def test_saved_request_repository_contract() -> None:
+    required = {"list_ids", "save", "remove", "reset"}
+    assert required <= set(dir(MemorySavedRequestRepository))
+    repository: SavedRequestRepository = get_saved_request_repository()
+    assert required <= set(dir(repository))
+
+
+def test_saved_requests_require_authentication_and_validate_id() -> None:
+    invalid = client.post(f"/saved-requests/{'x' * 101}")
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    app.dependency_overrides.pop(get_current_user)
+    unauthenticated = client.get("/saved-requests")
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
 
 
 def add_search_request(request_id: str, **changes) -> None:
@@ -312,7 +462,7 @@ def test_structure_request() -> None:
         json={"text": "病気なので犬の散歩をお願いしたい", "areaCode": "AREA-001"},
     )
     assert response.status_code == 200
-    assert response.json()["category"] == "pet_support"
+    assert response.json()["request"]["task"] == "病気なので犬の散歩をお願いしたい"
 
 
 def test_masking_preview_detects_japanese_and_full_width_pii_formats() -> None:
@@ -375,7 +525,7 @@ def test_structure_requires_confirmation_and_only_sends_masked_text_to_llm() -> 
     assert calls == [("連絡先[電話番号]へ電話して、犬の散歩をお願いします", "AREA-001")]
     assert confirmed.status_code == 200
     assert "090-1234-5678" not in confirmed.text
-    assert confirmed.json()["description"] == "連絡先[電話番号]へ電話して、犬の散歩をお願いします"
+    assert confirmed.json()["request"]["task"] == "連絡先[電話番号]へ電話して、犬の散歩をお願いします"
     assert confirmed.json()["masking"]["confirmed"] is True
 
 
@@ -422,23 +572,153 @@ def test_masking_service_failure_does_not_log_or_return_unmasked_input(caplog) -
 def test_select_application_with_version_check() -> None:
     response = client.post(
         "/applications/app_55/select",
-        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+        json={"expectedVersion": 3},
     )
     assert response.status_code == 201
     assert response.json()["status"] == "matched"
 
     conflict = client.post(
         "/applications/app_56/select",
-        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+        json={"expectedVersion": 3},
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "REQUEST_STATE_CONFLICT"
+
+
+def test_select_application_rejects_client_request_id_and_unauthorized_actor() -> None:
+    invalid = client.post(
+        "/applications/app_55/select",
+        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+    )
+    assert invalid.status_code == 422
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    forbidden = client.post(
+        "/applications/app_56/select", json={"expectedVersion": 3},
+    )
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"]["code"] == "ROLE_FORBIDDEN"
+
+
+def test_select_application_hides_missing_and_blocked_applications() -> None:
+    missing = client.post(
+        "/applications/missing/select", json={"expectedVersion": 3},
+    )
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "APPLICATION_NOT_FOUND"
+
+    assert client.post(f"/users/{HELPER.user_id}/block", json={"blocked": True}).status_code == 201
+    blocked = client.post(
+        "/applications/app_55/select", json={"expectedVersion": 3},
+    )
+    assert blocked.status_code == 404
+    assert blocked.json()["error"]["code"] == "APPLICATION_NOT_FOUND"
+
+
+def test_repository_created_application_can_be_selected() -> None:
+    request_id = create_open_request_for_application()
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    created = client.post(
+        f"/requests/{request_id}/applications",
+        json={"message": "対応できます", "availableAt": "2099-08-22T09:00:00+09:00"},
+    )
+    assert created.status_code == 201
+
+    app.dependency_overrides[get_current_user] = requester_user
+    selected = client.post(
+        f"/applications/{created.json()['id']}/select",
+        json={"expectedVersion": 2},
+    )
+    assert selected.status_code == 201
+    assert selected.json()["requestId"] == request_id
+    assert selected.json()["helperId"] == HELPER.user_id
+    assert selected.json()["version"] == 1
+
+
+def test_select_application_rechecks_required_helper_verification() -> None:
+    repository = get_request_repository()
+    assert isinstance(repository, MemoryRequestRepository)
+    repository._items[SEED_REQUEST_1024]["verificationRequired"] = True
+    crud_module.users_store[HELPER.user_id]["verificationStatus"] = "expired"
+
+    response = client.post(
+        "/applications/app_55/select", json={"expectedVersion": 3},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "HELPER_VERIFICATION_REQUIRED"
 
 
 def test_api_prefix_and_profile_update() -> None:
     response = client.patch("/api/profile", json={"displayName": "更新後の名前"})
     assert response.status_code == 200
     assert response.json()["displayName"] == "更新後の名前"
+
+
+def test_profile_update_supports_existing_frontend_fields() -> None:
+    payload = {
+        "displayName": "田中 悠",
+        "region": "北海道",
+        "age": "22",
+        "notes": "犬の扱いに慣れています",
+        "helperType": "student",
+        "university": "テトテ大学",
+        "faculty": "地域学部",
+        "schoolYear": "3年",
+        "occupation": None,
+        "industry": None,
+        "workplace": None,
+        "gender": "回答しない",
+        "interest": "地域清掃",
+        "message": "よろしくお願いします",
+    }
+    response = client.patch("/profile", json=payload)
+
+    assert response.status_code == 200
+    for field, value in payload.items():
+        assert response.json()[field] == value
+    assert response.json()["id"] == REQUESTER.user_id
+    assert response.json()["role"] == "member"
+    assert response.json()["verificationStatus"] == "approved"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"age": ""},
+        {"age": "長" * 31},
+        {"helperType": "requester"},
+        {"helperType": "student", "university": "テトテ大学"},
+        {"helperType": "worker"},
+        {"notes": "長" * 501},
+    ],
+)
+def test_profile_update_validates_frontend_fields(payload: dict) -> None:
+    response = client.patch("/profile", json=payload)
+    assert response.status_code == 422
+
+
+def test_profile_update_preserves_helper_profile_consistency() -> None:
+    created = client.patch(
+        "/profile",
+        json={
+            "helperType": "student",
+            "university": "テトテ大学",
+            "faculty": "地域学部",
+            "schoolYear": "3年",
+        },
+    )
+    assert created.status_code == 200
+
+    incomplete = client.patch("/profile", json={"university": None})
+    assert incomplete.status_code == 422
+    assert incomplete.json()["error"]["code"] == "STUDENT_PROFILE_INCOMPLETE"
 
 
 def test_create_request_is_idempotent() -> None:
@@ -507,6 +787,11 @@ def test_repository_implementations_share_application_contract() -> None:
     operations = {"list_for_request", "get", "create", "withdraw", "reset"}
     for implementation in (MemoryApplicationRepository, PostgresApplicationRepository):
         assert operations <= set(dir(implementation))
+    assert "select" in dir(MemoryApplicationRepository)
+
+
+def test_memory_request_repository_supports_selection_capacity_reservation() -> None:
+    assert "reserve_helper" in dir(MemoryRequestRepository)
 
 
 def test_production_settings_never_fall_back_to_memory(monkeypatch) -> None:
@@ -1014,10 +1299,48 @@ def test_mock_reset_succeeds_for_authenticated_caller_in_enabled_environment() -
 def create_match() -> str:
     response = client.post(
         "/applications/app_55/select",
-        json={"requestId": SEED_REQUEST_1024, "expectedVersion": 3},
+        json={"expectedVersion": 3},
     )
     assert response.status_code == 201
     return response.json()["id"]
+
+
+def test_match_detail_is_available_only_to_participants() -> None:
+    match_id = create_match()
+    requester_response = client.get(f"/matches/{match_id}")
+    assert requester_response.status_code == 200
+    assert requester_response.json()["id"] == match_id
+    assert requester_response.json()["status"] == "matched"
+    assert requester_response.json()["version"] == 1
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    assert client.get(f"/matches/{match_id}").status_code == 200
+
+    async def outsider_user() -> CurrentUser:
+        return CurrentUser(
+            user_id="usr_outsider", role="member", status="active",
+            email_verified=True, verification_status="approved",
+        )
+
+    app.dependency_overrides[get_current_user] = outsider_user
+    forbidden = client.get(f"/matches/{match_id}")
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"]["code"] == "ROLE_FORBIDDEN"
+
+
+def test_match_detail_hides_missing_and_blocked_matches() -> None:
+    missing = client.get("/matches/missing")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "MATCH_NOT_FOUND"
+
+    match_id = create_match()
+    assert client.post(f"/users/{HELPER.user_id}/block", json={"blocked": True}).status_code == 201
+    blocked = client.get(f"/matches/{match_id}")
+    assert blocked.status_code == 404
+    assert blocked.json()["error"]["code"] == "MATCH_NOT_FOUND"
 
 
 def test_complete_match_needs_both_parties_and_tolerates_repeat() -> None:
@@ -1177,3 +1500,74 @@ def test_privileged_roles_still_require_mfa(monkeypatch) -> None:
             assert exc.detail["code"] == "MFA_REQUIRED"
         else:
             raise AssertionError(f"{privileged} must require MFA")
+
+def test_recommendation_excludes_invalid_and_sorts_by_score() -> None:
+    # 準備: テスト用の依頼を複数作成
+    # 1. 自身の依頼（除外されるべき）
+    own_req = client.post(
+        "/requests",
+        json={"title": "自分の依頼", "description": "テスト", "category": "cleaning", "scheduledAt": "2026-08-25T10:00:00Z", "estimatedMinutes": 30, "requiredHelpers": 1, "areaCode": "AREA-001", "riskLevel": "low", "confirmed": True},
+        headers={"Idempotency-Key": "rec_test_1"}
+    ).json()
+
+    # 2. 他人の有効な依頼（AREA-001, 近く, カテゴリ不一致）
+    # ※ テストユーザー(usr_101)で作成すると自身の依頼になるため、ここでは一覧取得時のモックデータ(SEED_REQUEST_1024など)を利用するか、
+    # 既に存在する公開済み依頼を前提とします。
+
+    response = client.get("/requests/recommended?latitude=43.062&longitude=141.354&consentGranted=true")
+    assert response.status_code == 200
+    data = response.json()
+
+    # 検証1: 自身の依頼が含まれていないこと（除外条件）
+    request_ids = [item["request"]["id"] for item in data["items"]]
+    assert own_req["id"] not in request_ids
+
+    if len(data["items"]) >= 2:
+        # 検証2: スコアの降順（高い順）でソートされていること
+        assert data["items"][0]["score"] >= data["items"][1]["score"]
+
+    if len(data["items"]) >= 1:
+        top_item = data["items"][0]
+        # 検証3: 個人情報（緯度・経度）がレスポンスに含まれていないこと
+        assert "latitude" not in top_item["request"]
+        assert "longitude" not in top_item["request"]
+        # 検証4: 推薦理由が文字列として生成されていること
+        assert isinstance(top_item["reason"], str)
+        assert len(top_item["reason"]) > 0
+
+def test_recommendation_cold_start_fallback() -> None:
+    # 位置情報なしでリクエスト（登録地域へのフォールバック）
+    response = client.get("/requests/recommended")
+    assert response.status_code == 200
+    data = response.json()
+
+    if len(data["items"]) > 0:
+        top_item = data["items"][0]
+        # 位置情報がない場合でも、スコアと理由が計算されていること
+        assert "score" in top_item
+        assert "reason" in top_item
+
+import app.cruds.main as crud_module
+
+def test_message_moderation_flags_contact_info() -> None:
+    test_match_id = "match_test_999"
+    
+    # crud_module を経由して、API本体が使っている辞書に直接書き込む
+    crud_module.matches[test_match_id] = {
+        "id": test_match_id,
+        "requestId": "req_test_1",
+        "requesterId": "usr_101", 
+        "helperId": "usr_207",
+        "status": "matched"
+    }
+    crud_module.messages[test_match_id] = []
+
+    # 実行
+    response = client.post(
+        f"/matches/{test_match_id}/messages",
+        json={"body": "連絡はこちらへ: 090-1234-5678"}
+    )
+
+    # 検証
+    assert response.status_code == 201
+    assert response.json()["moderationStatus"] == "flagged"

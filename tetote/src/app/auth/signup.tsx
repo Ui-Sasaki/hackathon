@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { useState } from "react";
 import { useRouter } from "expo-router";
+import { apiConfigurationProblem } from "../../api/config";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../auth/AuthContext";
 
@@ -76,8 +77,10 @@ export default function SignupScreen() {
         router.replace("/onboarding/intro");
       }, 800);
     } catch {
+      // 接続先の設定漏れは通信障害と対処が違うため、分かる場合はそちらを示す。
       setError(
-        "通信に失敗しました。接続を確認してもう一度お試しください"
+        apiConfigurationProblem() ??
+          "通信に失敗しました。接続を確認してもう一度お試しください"
       );
     } finally {
       setIsSubmitting(false);

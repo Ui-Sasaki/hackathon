@@ -10,6 +10,16 @@ from typing import Literal
 RepositoryBackend = Literal["memory", "postgres"]
 
 
+def reject_unsafe_in_production(name: str, enabled: bool, environment: str) -> None:
+    """本番で認証や運用の安全装置を外す設定を、起動時に拒否する。
+
+    黙って無効化せず起動を止める。設定した本人が気づけないまま
+    公開されるのを防ぐためで、`REQUEST_REPOSITORY` と同じ扱いにしている。
+    """
+    if environment == "production" and enabled:
+        raise RuntimeError(f"{name} must be disabled in production")
+
+
 @dataclass(frozen=True)
 class Settings:
     environment: str

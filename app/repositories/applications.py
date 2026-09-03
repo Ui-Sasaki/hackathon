@@ -65,6 +65,10 @@ class ApplicationRepository(Protocol):
 
     async def withdraw(self, actor: CurrentUser, application_id: str) -> bool: ...
 
+    async def select(
+        self, actor: CurrentUser, application_id: str, *, close_remaining: bool
+    ) -> bool: ...
+
     async def reset(self) -> None: ...
 
 
@@ -134,6 +138,25 @@ class MemoryApplicationRepository:
             return False
         item["status"] = "withdrawn"
         item["updatedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        return True
+
+    async def select(
+        self, actor: CurrentUser, application_id: str, *, close_remaining: bool
+    ) -> bool:
+        del actor
+        item = self._items.get(application_id)
+        if item is None or item["status"] != "applied":
+            return False
+        item["status"] = "selected"
+        item["updatedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        if close_remaining:
+            for other in self._items.values():
+                if (
+                    other["requestId"] == item["requestId"]
+                    and other["status"] == "applied"
+                ):
+                    other["status"] = "not_selected"
+                    other["updatedAt"] = item["updatedAt"]
         return True
 
     async def reset(self) -> None:

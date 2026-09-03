@@ -96,7 +96,7 @@ export default function SavedScreen() {
                     </Text>
 
                     <Text style={styles.personText}>
-                      {request.gender} {request.age}
+                      {request.meta}
                     </Text>
                   </View>
 
@@ -108,6 +108,16 @@ export default function SavedScreen() {
                     </View>
 
                     <Pressable
+                      onPress={() =>
+                        router.push({
+                          pathname: "/helper/request",
+                          params: {
+                            requestId: request.id,
+                            title: request.title,
+                            description: request.description,
+                          },
+                        })
+                      }
                       style={({ pressed }) => [
                         styles.acceptButton,
                         pressed && styles.pressed,
