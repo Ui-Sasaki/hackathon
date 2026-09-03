@@ -33,7 +33,8 @@
 | 完了確認・dispute | Memoryのみ | #64に実装あり | #64統合。72時間リマインドは別途不足 |
 | 認証subjectからDB利用者への解決 | `ensure_user`で仮表示名を作成 | #68に実装あり | #68統合、実SuperTokensとの結合確認 |
 | プロフィール取得・更新 | Memoryの共有store | #68に実装あり | #68統合 |
-| ブロック・解除 | Memoryの集合 | #69に実装あり | #69統合 |
+| ブロック・解除 | Postgres実装済み | 同左 | Production適用・接続確認 |
+| 通報・高危険度依頼の停止 | Postgres実装済み | 同左 | 管理者による調査・解決・却下の状態遷移を追加 |
 | 利用者設定 | Memory Repositoryのみ | 未実装 | テーブル／migration、RLS、Postgres Repository、DBテスト |
 | 依頼カード非表示 | Memory Repositoryのみ | 未実装 | 関係テーブル／migration、RLS、Postgres Repository、DBテスト |
 | 依頼保存 | Memory Repositoryのみ | 未実装 | 関係テーブル／migration、RLS、Postgres Repository、DBテスト |
@@ -42,7 +43,7 @@
 | AI実績プロフィール | API・AIともモック、Memory store | 未実装 | Repository、生成履歴・本人承認・公開範囲の永続化、実AI境界 |
 | 本人確認申請・審査 | APIは開発用モック、Memory store | 未実装 | Repository、審査状態遷移、担当者認可、監査ログ |
 | 本人確認画像 | 未実装 | 未実装 | private Storage bucket、アップロード方式、短期署名URL、Storage policy、7日以内の削除job |
-| 通報 | APIはMemory store | 未実装 | target存在確認、依頼停止を含む原子処理、Repository、管理者処理、DBテスト |
+| 通報 | Postgres実装済み | 同左 | 管理者処理（調査・解決・却下）のRepository、API、DBテスト |
 | Realtime chat | pollingのみ | 未実装 | Realtime購読権限、認証連携、再接続・重複排除テスト。書き込みはFastAPI経由を維持 |
 | 管理画面向け操作 | 未実装 | 未実装 | 通報調査、利用停止、本人確認審査、監査ログ閲覧のAPI／DB認可 |
 
@@ -50,8 +51,10 @@
 
 `20260820000000_baseline.sql`には、`messages`、`reviews`、
 `achievement_profiles`、`verification_requests`、`reports`、`audit_logs`、
-`user_blocks`のテーブルと一部RLSがある。ただし、現行FastAPIには対応するPostgres
-Repositoryがなく、業務状態遷移を原子的に実行するRPC、エラー変換、結合テストも不足する。
+`user_blocks`のテーブルとRLSがある。メッセージとブロックは後続migrationおよび
+FastAPIのPostgres Repositoryまで実装済みだが、レビュー、実績、本人確認には
+業務状態遷移を原子的に実行するRPC、エラー変換、結合テストが不足する。通報は作成と
+高危険度依頼の停止まで実装済みで、管理者処理が残る。
 
 特に次の条件はテーブル単体の制約だけでは満たせないため、RPCまたは同一transaction内での
 検証が必要である。
@@ -68,7 +71,7 @@ Repositoryがなく、業務状態遷移を原子的に実行するRPC、エラ�
 1. 利用者設定、依頼非表示、依頼保存の永続化。
 2. レビューとAI実績プロフィールの永続化。
 3. 本人確認申請・審査とprivate Storage、署名URL、削除job。
-4. 通報・管理者処理・利用停止・監査ログの永続化。
+4. 通報の管理者処理、利用停止、監査ログの永続化。
 5. Supabase Realtimeの読み取り認可と再接続設計。
 6. 構造化監査情報の永続化と保持期間の決定。
 7. メッセージ等のカーソルページング、完了確認の72時間リマインドなど運用処理。

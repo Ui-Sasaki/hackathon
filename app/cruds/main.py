@@ -50,6 +50,15 @@ from app.repositories.profiles import (
     ProfileRepository, ProfileValidationError, configure_memory_profile_store,
     get_profile_repository, resolve_authenticated_user,
 )
+from app.repositories.blocks import (
+    BlockRepository, BlockRepositoryError, get_block_repository,
+)
+from app.repositories.reports import (
+    ReportRepository, ReportRepositoryError, get_report_repository,
+)
+from app.repositories.verifications import (
+    VerificationRepository, VerificationRepositoryError, get_verification_repository,
+)
 from app.settings import settings
 from app.services.applications import (
     create_application as create_application_service,
@@ -1701,14 +1710,12 @@ async def create_verification(
     body: VerificationInput,
     current_user: CurrentUser = Depends(get_current_user),
     repository: UploadRepository = Depends(upload_repository_dependency),
+    verification_repository: VerificationRepository = Depends(get_verification_repository),
 ):
     if body.method == "student_card" and not body.uploadId:
         raise HTTPException(422, detail={"code": "UPLOAD_REQUIRED"})
     # 重複確認を画像の確定より先に行い、二重申請でアップロードを消費させない。
-    if any(
-        item["status"] == "pending" and item["userId"] == current_user.user_id
-        for item in verifications.values()
-    ):
+    if await verification_repository.has_pending(current_user):
         raise HTTPException(409, detail={"code": "VERIFICATION_ALREADY_PENDING"})
     image = None
     if body.uploadId:
@@ -1718,57 +1725,34 @@ async def create_verification(
         image = await repository.promote_to_image(body.uploadId, current_user.user_id)
         if image is None:
             raise HTTPException(409, detail={"code": "UPLOAD_CONTENT_MISSING"})
-    item = {
-        "id": new_id("verification"),
-        "userId": current_user.user_id,
-        "method": body.method,
-        # 画像の参照はサーバー内部にだけ持つ。レスポンスにも監査ログにも出さない。
-        "_imageId": image["id"] if image else None,
-        "status": "pending",
-        "createdAt": now_iso(),
-    }
-    verifications[item["id"]] = item
-    users_store[current_user.user_id]["verificationStatus"] = "pending"
-    return item
+    try:
+        return await verification_repository.create(
+            current_user, method=body.method,
+            storage_object_key=image["storageObjectKey"] if image else None,
+            image_id=image["id"] if image else None,
+        )
+    except VerificationRepositoryError as exc:
+        if exc.code == "VERIFICATION_ALREADY_PENDING":
+            raise HTTPException(409, detail={"code": exc.code}) from exc
+        raise HTTPException(422, detail={"code": exc.code}) from exc
 
 
-@app.post("/reports", response_model=ReportResponse, status_code=201, tags=["Safety"], summary="違反・危険行為を通報", description="通報者はセッションから決定する。詐欺または危険作業の依頼通報はhighとなり、対象依頼をsuspendedへ自動遷移する。", responses=api_errors(401, 422, 500))
+@app.post("/reports", response_model=ReportResponse, status_code=201, tags=["Safety"], summary="違反・危険行為を通報", description="通報者はセッションから決定する。詐欺または危険作業の依頼通報はhighとなり、対象依頼をsuspendedへ自動遷移する。", responses=api_errors(401, 404, 422, 500))
 async def create_report(
     body: ReportInput,
     current_user: CurrentUser = Depends(get_current_user),
-    repository: RequestRepository = Depends(request_repository_dependency),
+    repository: ReportRepository = Depends(get_report_repository),
 ):
-    item = {
-        "id": new_id("report"),
-        "reporterId": current_user.user_id,
-        **body.model_dump(),
-        "severity": "high" if body.reason in {"fraud", "dangerous_work"} else "medium",
-        "status": "open",
-        "createdAt": now_iso(),
-    }
-    reports[item["id"]] = item
-    record_audit_event(
-        actor_id=current_user.user_id,
-        event_type="report_created",
-        target_type=body.targetType,
-        target_id=body.targetId,
-        detail={"reportId": item["id"], "severity": item["severity"]},
-    )
-    if item["severity"] == "high" and body.targetType == "request":
-        try:
-            target_id = UUID(body.targetId)
-        except ValueError:
-            target_id = None
-        if target_id is not None:
-            await repository.set_status(current_user, str(target_id), "suspended")
-            record_audit_event(
-                actor_id=current_user.user_id,
-                event_type="request_auto_suspended",
-                target_type="request",
-                target_id=body.targetId,
-                detail={"reportId": item["id"]},
-            )
-    return item
+    try:
+        return await repository.create(
+            current_user,
+            target_type=body.targetType,
+            target_id=body.targetId,
+            reason=body.reason,
+            description=body.description,
+        )
+    except ReportRepositoryError as exc:
+        raise HTTPException(404, detail={"code": exc.code}) from exc
 
 
 @app.post("/users/{user_id}/block", response_model=BlockResponse, status_code=201, tags=["Safety"], summary="利用者をブロックまたは解除", description="blocked=trueでブロック、falseで解除する。セッション本人との関係として保存し、対象との依頼・応募・メッセージを非表示にする。自分自身は指定不可。", responses=api_errors(401, 404, 422, 500))
@@ -1776,20 +1760,12 @@ async def set_user_block(
     user_id: str,
     body: BlockInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: BlockRepository = Depends(get_block_repository),
 ):
-    if user_id == current_user.user_id:
-        raise HTTPException(422, detail={"code": "SELF_BLOCK_NOT_ALLOWED"})
-    if user_id not in users_store:
-        raise HTTPException(404, detail={"code": "USER_PROFILE_NOT_FOUND"})
-    relation = (current_user.user_id, user_id)
-    if body.blocked:
-        blocks.add(relation)
-    else:
-        blocks.discard(relation)
-    record_audit_event(
-        actor_id=current_user.user_id,
-        event_type="user_blocked" if body.blocked else "user_unblocked",
-        target_type="user",
-        target_id=user_id,
-    )
-    return {"userId": user_id, "blocked": relation in blocks, "updatedAt": now_iso()}
+    try:
+        return await repository.set(current_user, user_id, body.blocked)
+    except BlockRepositoryError as exc:
+        status_code = 422 if exc.code == "SELF_BLOCK_NOT_ALLOWED" else 404
+        if exc.code in {"ROLE_FORBIDDEN", "USER_SUSPENDED"}:
+            status_code = 403
+        raise HTTPException(status_code, detail={"code": exc.code}) from exc
