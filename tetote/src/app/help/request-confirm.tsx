@@ -26,6 +26,12 @@ import {
   updateStructuredDraft,
   type RequestStructuringState,
 } from "../../api/request-structuring";
+import {
+  buildCreateRequestInput,
+  submissionErrorMessage,
+  submitAndPublishRequest,
+  type RequestSubmissionState,
+} from "../../features/requests/submit";
 
 function maskingErrorMessage(error: unknown): string {
   if (error instanceof ApiAuthenticationError) {
@@ -60,6 +66,9 @@ export default function RequestConfirmScreen() {
     useState<RequestStructuringState | null>(null);
   const [structuringLoading, setStructuringLoading] =
     useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submissionMessage, setSubmissionMessage] =
+    useState<string | null>(null);
 
   const {
     content,
@@ -99,6 +108,36 @@ export default function RequestConfirmScreen() {
     const state = await structureConfirmedRequest(maskingState);
     setStructuringState(state);
     setStructuringLoading(false);
+  };
+
+  const hasDraft =
+    structuringState?.status === "draft" || structuringState?.status === "manual";
+  const canPublish = hasDraft && !submitting;
+
+  // 下書きを作成APIへ送り、審査対象でなければ公開まで進めて完了画面へ移る。
+  const handlePublish = async () => {
+    if (!structuringState?.draft || submitting) return;
+    const built = buildCreateRequestInput(structuringState.draft, { time, deadline });
+    if (built.input === null) {
+      setSubmissionMessage(built.problem);
+      return;
+    }
+    setSubmitting(true);
+    setSubmissionMessage(null);
+    const result: RequestSubmissionState = await submitAndPublishRequest(built.input);
+    setSubmitting(false);
+    if (result.status === "failed") {
+      setSubmissionMessage(submissionErrorMessage(result));
+      return;
+    }
+    router.replace({
+      pathname: "/help/request-done",
+      params: {
+        id: result.request.id,
+        title: result.request.title,
+        status: result.status === "created_unpublished" ? "draft" : result.status,
+      },
+    });
   };
 
   return (
@@ -320,6 +359,30 @@ export default function RequestConfirmScreen() {
                 </Text>
               )}
             </Pressable>
+
+            {hasDraft && (
+              <>
+                {submissionMessage && (
+                  <Text style={styles.submissionErrorText}>{submissionMessage}</Text>
+                )}
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={!canPublish}
+                  onPress={() => void handlePublish()}
+                  style={({ pressed }) => [
+                    styles.publishButton,
+                    !canPublish && styles.disabledButton,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  {submitting ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.publishButtonText}>この内容で依頼する</Text>
+                  )}
+                </Pressable>
+              </>
+            )}
 
             <Pressable
               onPress={() => router.back()}
@@ -560,6 +623,29 @@ const createStyles = (scale: number) =>
       color: "#8B651F",
       fontSize: 12 * scale,
       lineHeight: 18 * scale,
+      fontWeight: "700",
+    },
+
+    publishButton: {
+      marginTop: 14,
+      minHeight: 58,
+      borderRadius: 999,
+      backgroundColor: "#159326",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+
+    publishButtonText: {
+      color: "#FFFFFF",
+      fontSize: 18 * scale,
+      fontWeight: "900",
+    },
+
+    submissionErrorText: {
+      marginTop: 12,
+      color: "#A52A2A",
+      fontSize: 13 * scale,
+      lineHeight: 19 * scale,
       fontWeight: "700",
     },
 

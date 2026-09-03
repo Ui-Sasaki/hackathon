@@ -141,6 +141,13 @@ export default function HelpLayout() {
           href: null,
         }}
       />
+
+      <Tabs.Screen
+        name="request-done"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }

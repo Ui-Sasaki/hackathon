@@ -45,7 +45,9 @@ from app.services.applications import (
     select_application as select_application_service,
     withdraw_application as withdraw_application_service,
 )
-from app.services.requests import cancel_owned_request, require_request, update_owned_request
+from app.services.requests import (
+    cancel_owned_request, publish_owned_request, require_request, update_owned_request,
+)
 from app.services import images
 from app.repositories.uploads import (
     MemoryUploadRepository, UploadRepository, get_upload_repository,
@@ -1346,6 +1348,15 @@ async def update_request(
     if assessment is not None and assessment.messages:
         item = {**item, "warnings": list(assessment.messages)}
     return item
+
+
+@app.post("/requests/{request_id}/publish", response_model=RequestResponse, tags=["Requests"], summary="下書きの依頼を公開", description="依頼者本人がdraftの依頼をpublishedへ遷移させ、支援者の一覧に載せる。審査待ち(pending_review)は409 REQUEST_UNDER_REVIEW、draft以外は409 INVALID_REQUEST_TRANSITION。", responses=api_errors(401, 403, 404, 409, 500))
+async def publish_request(
+    request_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+):
+    return await publish_owned_request(repository, current_user, request_id)
 
 
 @app.delete("/requests/{request_id}", status_code=204, tags=["Requests"], summary="自分の依頼を取消", description="依頼者本人が取消可能な状態の依頼をcancelledへ遷移させ、未処理応募もcancelledにする。レスポンス本文はない。", responses=api_errors(401, 403, 404, 409, 500))
