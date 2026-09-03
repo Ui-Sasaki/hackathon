@@ -12,6 +12,7 @@ import { useState } from "react";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../auth/AuthContext";
+import { apiConfigurationProblem } from "../../api/config";
 
 function safeReturnTo(value: string | string[] | undefined): string {
   const path = Array.isArray(value) ? value[0] : value;
@@ -57,7 +58,11 @@ export default function LoginScreen() {
         router.replace(safeReturnTo(returnTo));
       }, 800);
     } catch {
-      setError("通信に失敗しました。接続を確認してもう一度お試しください");
+      // 接続先の設定漏れは通信障害と対処が違うため、分かる場合はそちらを示す。
+      setError(
+        apiConfigurationProblem() ??
+          "通信に失敗しました。接続を確認してもう一度お試しください"
+      );
     } finally {
       setIsSubmitting(false);
     }

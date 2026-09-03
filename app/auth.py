@@ -9,6 +9,8 @@ from typing import Any, Callable, Literal
 from fastapi import HTTPException, Request, Security
 from fastapi.security import APIKeyCookie
 
+from app.settings import reject_unsafe_in_production, settings
+
 
 SUPERTOKENS_ENABLED = os.getenv("SUPERTOKENS_ENABLED", "true").lower() in {
     "1", "true", "yes", "on"
@@ -16,6 +18,13 @@ SUPERTOKENS_ENABLED = os.getenv("SUPERTOKENS_ENABLED", "true").lower() in {
 AUTH_MOCK_ENABLED = os.getenv("AUTH_MOCK_ENABLED", "false").lower() in {
     "1", "true", "yes", "on"
 }
+
+# 認証を無効化する設定は本番で受け付けない。AUTH_MOCK_ENABLED が有効なままだと
+# セッション検証を行わず、全リクエストが同一利用者として通ってしまう。
+reject_unsafe_in_production("AUTH_MOCK_ENABLED", AUTH_MOCK_ENABLED, settings.environment)
+reject_unsafe_in_production(
+    "SUPERTOKENS_ENABLED=false", not SUPERTOKENS_ENABLED, settings.environment
+)
 AUTH_MOCK_USER_ID = os.getenv("AUTH_MOCK_USER_ID", "usr_101")
 AUTH_MOCK_USER_HEADER = "X-Mock-User-Id"
 

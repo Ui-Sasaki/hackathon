@@ -29,12 +29,17 @@ python -m uvicorn main:app --reload --port 8000
 | `WEBSITE_DOMAIN` | `http://localhost:3000` | CORSで許可するフロントエンド |
 | `AUTH_COOKIE_SECURE` | `true` | CookieのSecure属性 |
 | `AUTH_COOKIE_SAME_SITE` | `lax` | CookieのSameSite属性 |
-| `AUTH_MOCK_ENABLED` | `false` | 開発用の認証モックを有効化 |
+| `AUTH_MOCK_ENABLED` | `false` | 開発用の認証モックを有効化。**本番では有効にできない**（起動時に拒否） |
 | `AUTH_MOCK_USER_ID` | `usr_101` | 認証モックの既定ユーザーID |
-| `MOCK_RESET_ENABLED` | `false` | `POST /_mock/reset` を利用可能にする。開発・テスト環境でのみ有効にする |
+| `MOCK_RESET_ENABLED` | `false` | `POST /_mock/reset` を利用可能にする。**本番では有効にできない**（起動時に拒否） |
 | `APP_ENV` | `development` | `production` の場合はPostgresを強制し、Memory指定を拒否する |
 | `REQUEST_REPOSITORY` | `memory` | 非本番での依頼保存先。`memory` または `postgres` |
 | `DATABASE_URL` | 未設定 | Postgres選択時は必須。Supabaseの接続文字列 |
+
+`APP_ENV=production` では、認証や運用の安全装置を外す設定を起動時に拒否する。
+`AUTH_MOCK_ENABLED=true`、`MOCK_RESET_ENABLED=true`、`SUPERTOKENS_ENABLED=false` の
+いずれかが設定されているとアプリは起動しない。黙って無効化せず起動を止めるのは、
+設定した本人が気づけないまま公開されるのを防ぐためである。
 
 本番は `APP_ENV=production` と `DATABASE_URL` を必ず設定する。本番では
 `REQUEST_REPOSITORY` の省略時もPostgresが選ばれ、接続情報がなければアプリのimport時に

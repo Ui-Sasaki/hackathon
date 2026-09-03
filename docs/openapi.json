@@ -2844,7 +2844,7 @@
     },
     "/_mock/reset": {
       "post": {
-        "description": "非本番かつMOCK_RESET_ENABLED=trueの場合だけ、認証済み利用者が実行できる。全モックデータを初期状態へ戻す。",
+        "description": "MOCK_RESET_ENABLED=trueの非本番環境だけで、認証済み利用者が実行できる。本番ではこの設定自体が起動時に拒否される。全モックデータを初期状態へ戻す。",
         "operationId": "reset_mock__mock_reset_post",
         "responses": {
           "200": {

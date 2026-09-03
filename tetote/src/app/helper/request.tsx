@@ -27,9 +27,11 @@ export default function ApplicationScreen() {
   const params = useLocalSearchParams<{
     requestId?: string | string[];
     title?: string | string[];
+    description?: string | string[];
   }>();
   const requestId = firstParam(params.requestId);
   const title = firstParam(params.title);
+  const description = firstParam(params.description);
   const [message, setMessage] = useState("");
   const [availableAt, setAvailableAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -79,6 +81,9 @@ export default function ApplicationScreen() {
 
         <Text style={styles.heading}>応募する</Text>
         <Text style={styles.requestTitle}>{title || "選択した依頼"}</Text>
+        {description ? (
+          <Text style={styles.requestDescription}>{description}</Text>
+        ) : null}
 
         {application ? (
           <View style={styles.successPanel}>
@@ -154,6 +159,12 @@ const styles = StyleSheet.create({
   backText: { color: "#245C2D", fontSize: 16, fontWeight: "700" },
   heading: { color: "#35410F", fontSize: 28, fontWeight: "900", marginTop: 20 },
   requestTitle: { color: "#2D3A2E", fontSize: 18, fontWeight: "700", marginTop: 12, marginBottom: 28 },
+  requestDescription: {
+    marginTop: 6,
+    color: "#555555",
+    fontSize: 14,
+    lineHeight: 21,
+  },
   label: { color: "#2D3A2E", fontSize: 16, fontWeight: "700", marginBottom: 8 },
   input: { backgroundColor: "#FFFFFF", borderColor: "#C8CEBD", borderRadius: 12, borderWidth: 1, fontSize: 16, marginBottom: 22, padding: 14 },
   messageInput: { minHeight: 120, textAlignVertical: "top" },
