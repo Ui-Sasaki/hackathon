@@ -142,6 +142,17 @@ export default function ApplicationScreen() {
             </Pressable>
           </>
         )}
+        <Pressable
+          onPress={() =>
+            router.push({
+              pathname: "/helper/report",
+              params: { targetType: "request", targetId: requestId, title },
+            })
+          }
+          style={({ pressed }) => [styles.reportLink, pressed && styles.reportLinkPressed]}
+        >
+          <Text style={styles.reportLinkText}>この依頼を通報する・依頼者をブロックする</Text>
+        </Pressable>
       </ScrollView>
     </View>
   );
@@ -167,4 +178,7 @@ const styles = StyleSheet.create({
   referenceText: { color: "#586259", fontSize: 13, marginTop: 5 },
   withdrawButton: { alignItems: "center", borderColor: "#A52A2A", borderRadius: 14, borderWidth: 1, justifyContent: "center", marginTop: 22, minHeight: 48 },
   withdrawText: { color: "#A52A2A", fontSize: 16, fontWeight: "800" },
+  reportLink: { alignSelf: "center", marginTop: 26, paddingVertical: 8 },
+  reportLinkPressed: { opacity: 0.6 },
+  reportLinkText: { color: "#666666", fontSize: 13, textDecorationLine: "underline" },
 });

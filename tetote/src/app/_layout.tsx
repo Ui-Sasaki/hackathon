@@ -5,6 +5,7 @@ import { RequestsProvider } from "../context/RequestsContext";
 import { ModeProvider } from "../context/ModeContext";
 import { FontSizeProvider } from "../context/FontSizeContext";
 import { AuthProvider, useAuth } from "../auth/AuthContext";
+import { SafetyProvider } from "../context/SafetyContext";
 
 function AuthenticatedStack() {
   const { refreshProfile, status } = useAuth();
@@ -54,7 +55,9 @@ export default function RootLayout() {
       <ModeProvider>
         <FontSizeProvider>
           <RequestsProvider>
-            <AuthenticatedStack />
+            <SafetyProvider>
+              <AuthenticatedStack />
+            </SafetyProvider>
           </RequestsProvider>
         </FontSizeProvider>
       </ModeProvider>
