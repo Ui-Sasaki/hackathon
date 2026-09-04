@@ -7,13 +7,11 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 
 type TabIconProps = {
-  focused: boolean;
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
 };
 
 function TabIcon({
-  focused,
   icon,
   label,
 }: TabIconProps) {
@@ -32,6 +30,14 @@ function TabIcon({
   );
 }
 
+const hiddenTabOptions = {
+  href: null,
+  tabBarButton: () => null,
+  tabBarItemStyle: {
+    display: "none" as const,
+  },
+};
+
 export default function HelpLayout() {
   return (
     <Tabs
@@ -42,11 +48,14 @@ export default function HelpLayout() {
           height: 82,
           backgroundColor: "#E6AA47",
           borderTopWidth: 0,
-          paddingTop: 8,
-          paddingBottom: 7,
+          paddingTop: 12,
+          paddingBottom: 2,
           width: "100%",
           maxWidth: 520,
           alignSelf: "center",
+        },
+        tabBarItemStyle: {
+          height: 82,
         },
       }}
     >
@@ -56,7 +65,6 @@ export default function HelpLayout() {
           title: "ホーム",
           tabBarIcon: ({ focused }) => (
             <TabIcon
-              focused={focused}
               icon={
                 focused
                   ? "home"
@@ -74,7 +82,6 @@ export default function HelpLayout() {
           title: "トーク",
           tabBarIcon: ({ focused }) => (
             <TabIcon
-              focused={focused}
               icon={
                 focused
                   ? "chatbubble-ellipses"
@@ -88,58 +95,42 @@ export default function HelpLayout() {
 
       <Tabs.Screen
         name="chat"
-        options={{
-          href: null,
-        }}
+        options={hiddenTabOptions}
       />
 
       <Tabs.Screen
         name="character"
-        options={{
-          href: null,
-        }}
+        options={hiddenTabOptions}
       />
 
       <Tabs.Screen
         name="profile"
-        options={{
-          href: null,
-        }}
+        options={hiddenTabOptions}
       />
 
       <Tabs.Screen
         name="request"
-        options={{
-          href: null,
-        }}
+        options={hiddenTabOptions}
       />
 
       <Tabs.Screen
         name="settings"
-        options={{
-          href: null,
-        }}
+        options={hiddenTabOptions}
       />
 
       <Tabs.Screen
         name="request-manual"
-        options={{
-          href: null,
-        }}
+        options={hiddenTabOptions}
       />
 
       <Tabs.Screen
         name="request-voice"
-        options={{
-          href: null,
-        }}
+        options={hiddenTabOptions}
       />
 
       <Tabs.Screen
         name="request-confirm"
-        options={{
-          href: null,
-        }}
+        options={hiddenTabOptions}
       />
       <Tabs.Screen name="requests" options={{ href: null }} />
     </Tabs>
@@ -152,6 +143,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     minWidth: 90,
     height: 65,
+    transform: [{ translateY: 5 }],
   },
 
   tabLabel: {
