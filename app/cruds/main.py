@@ -78,7 +78,7 @@ from app.settings import reject_unsafe_in_production, settings
 from app.schemas import (
     AchievementInput, AchievementResponse, AchievementVisibilityInput,
     ApplicationInput, ApplicationListResponse, ApplicationResponse,
-    BlockInput, BlockResponse, CompletionInput, DisputeInput, ErrorResponse,
+    BlockInput, BlockResponse, ChatListResponse, CompletionInput, DisputeInput, ErrorResponse,
     LocationResolveInput, LocationResolveResponse, MatchResponse, MessageInput,
     MaskingConfirmationResponse, MessageListResponse, MessageResponse,
     ProfileResponse, ProfileUpdateInput,
@@ -663,6 +663,8 @@ async def reset_mock(
     application_repository: ApplicationRepository = Depends(
         application_repository_dependency
     ),
+    match_repository: MatchRepository = Depends(match_repository_dependency),
+    message_repository: MessageRepository = Depends(message_repository_dependency),
     user_settings_repository: UserSettingsRepository = Depends(
         user_settings_repository_dependency
     ),
@@ -676,6 +678,8 @@ async def reset_mock(
     reset_store()
     await repository.reset()
     await application_repository.reset()
+    await match_repository.reset()
+    await message_repository.reset()
     await get_upload_repository().reset()
     await structure_audit_repository.reset()
     await user_settings_repository.reset()
@@ -1501,6 +1505,59 @@ async def select_application(
         messages[match["id"]] = []
         await match_repository.create(current_user, match)
     return match
+
+
+@app.get("/matches", response_model=ChatListResponse, tags=["Matches"], summary="自分のチャット一覧を取得", description="認証ユーザーが当事者であるマッチだけを最終更新の新しい順で返す。一覧取得ではメッセージを既読にしない。ブロック関係にある相手とのマッチは除外する。", responses=api_errors(401, 422, 500, 503))
+async def list_chats(
+    cursor: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    match_repository: MatchRepository = Depends(match_repository_dependency),
+    message_repository: MessageRepository = Depends(message_repository_dependency),
+    request_repository: RequestRepository = Depends(request_repository_dependency),
+):
+    if not isinstance(match_repository, MemoryMatchRepository) or not isinstance(message_repository, MemoryMessageRepository):
+        raise HTTPException(503, detail={"code": "CHAT_LIST_UNAVAILABLE"})
+    visible = []
+    for match in await match_repository.list_for_user(current_user):
+        other_id = match["helperId"] if match["requesterId"] == current_user.user_id else match["requesterId"]
+        if is_blocked_pair(current_user.user_id, other_id):
+            continue
+        request_item = await request_repository.get(current_user, match["requestId"])
+        counterpart = users_store.get(other_id)
+        if request_item is None or counterpart is None:
+            continue
+        chat_messages = await message_repository.peek_for_match(current_user, match["id"])
+        latest = chat_messages[-1] if chat_messages else None
+        unread_count = sum(
+            item["senderId"] != current_user.user_id and item["readAt"] is None
+            for item in chat_messages
+        )
+        visible.append({
+            "matchId": match["id"],
+            "status": match["status"],
+            "counterpart": {"id": other_id, "displayName": counterpart["displayName"]},
+            "request": {key: request_item[key] for key in ("id", "title", "scheduledAt", "areaLabel")},
+            "latestMessage": latest,
+            "unreadCount": unread_count,
+            "updatedAt": latest["sentAt"] if latest else match["matchedAt"],
+        })
+    visible.sort(
+        key=lambda item: (
+            datetime.fromisoformat(str(item["updatedAt"]).replace("Z", "+00:00")),
+            item["matchId"],
+        ),
+        reverse=True,
+    )
+    start = 0
+    if cursor is not None:
+        positions = [index for index, item in enumerate(visible) if item["matchId"] == cursor]
+        if not positions:
+            raise HTTPException(422, detail={"code": "INVALID_CURSOR"})
+        start = positions[0] + 1
+    page = visible[start:start + limit]
+    next_cursor = page[-1]["matchId"] if start + limit < len(visible) and page else None
+    return {"items": page, "nextCursor": next_cursor}
 
 
 @app.get("/matches/{match_id}", response_model=MatchResponse, tags=["Matches"], summary="マッチ詳細を取得", description="依頼者と選択された支援者本人だけが取得できる。", responses=api_errors(401, 403, 404, 500))

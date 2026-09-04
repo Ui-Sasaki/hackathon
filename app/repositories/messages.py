@@ -39,6 +39,10 @@ def _row_to_record(row: Any) -> MessageRecord:
 
 
 class MessageRepository(Protocol):
+    async def peek_for_match(
+        self, actor: CurrentUser, match_id: str, *, blocked_user_ids: Sequence[str] = ()
+    ) -> list[MessageRecord]: ...
+
     async def list_for_match(
         self, actor: CurrentUser, match_id: str, *, blocked_user_ids: Sequence[str] = ()
     ) -> list[MessageRecord]: ...
@@ -70,6 +74,15 @@ class MemoryMessageRepository:
             result.append(deepcopy(item))
         return result
 
+    async def peek_for_match(
+        self, actor: CurrentUser, match_id: str, *, blocked_user_ids: Sequence[str] = ()
+    ) -> list[MessageRecord]:
+        del actor
+        return [
+            deepcopy(item) for item in self._items.get(match_id, [])
+            if item["senderId"] not in blocked_user_ids
+        ]
+
     async def create(
         self, actor: CurrentUser, match_id: str, body: str,
         *, moderation_status: str = "allowed",
@@ -95,6 +108,12 @@ class PostgresMessageRepository:
                          msg.sent_at, msg.read_at,
                          app.auth_subject_of(msg.sender_id) as sender_auth_subject
                     from messages msg"""
+
+    async def peek_for_match(
+        self, actor: CurrentUser, match_id: str, *, blocked_user_ids: Sequence[str] = ()
+    ) -> list[MessageRecord]:
+        del actor, match_id, blocked_user_ids
+        raise NotImplementedError("chat list persistence is not implemented")
 
     async def list_for_match(
         self, actor: CurrentUser, match_id: str, *, blocked_user_ids: Sequence[str] = ()

@@ -382,6 +382,33 @@ class MessageListResponse(ContractModel):
     nextCursor: str | None = Field(description="次ページなしの場合null。現行実装は常にnull")
 
 
+class ChatRequestSummary(ContractModel):
+    id: str
+    title: str
+    scheduledAt: datetime
+    areaLabel: str
+
+
+class ChatCounterpartSummary(ContractModel):
+    id: str
+    displayName: str
+
+
+class ChatSummary(ContractModel):
+    matchId: str
+    status: MatchStatus
+    counterpart: ChatCounterpartSummary
+    request: ChatRequestSummary
+    latestMessage: MessageResponse | None
+    unreadCount: int = Field(ge=0)
+    updatedAt: datetime
+
+
+class ChatListResponse(ContractModel):
+    items: list[ChatSummary]
+    nextCursor: str | None = Field(description="次ページなしの場合null")
+
+
 class CompletionInput(ContractModel):
     completed: Literal[True]
     actorRole: Literal["requester", "helper"]

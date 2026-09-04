@@ -38,6 +38,8 @@ def _row_to_record(row: Any) -> MatchRecord:
 
 
 class MatchRepository(Protocol):
+    async def list_for_user(self, actor: CurrentUser) -> list[MatchRecord]: ...
+
     async def get(self, actor: CurrentUser, match_id: str) -> MatchRecord | None: ...
 
     async def create(self, actor: CurrentUser, values: MatchRecord) -> MatchRecord: ...
@@ -57,6 +59,15 @@ class MemoryMatchRepository:
         del actor
         item = self._items.get(match_id)
         return deepcopy(item) if item else None
+
+    async def list_for_user(self, actor: CurrentUser) -> list[MatchRecord]:
+        items = [
+            deepcopy(item) for item in self._items.values()
+            if actor.user_id in {item["requesterId"], item["helperId"]}
+        ]
+        return sorted(
+            items, key=lambda item: (item["matchedAt"], item["id"]), reverse=True,
+        )
 
     async def create(self, actor: CurrentUser, values: MatchRecord) -> MatchRecord:
         del actor
@@ -103,6 +114,10 @@ class MemoryMatchRepository:
 
 
 class PostgresMatchRepository:
+    async def list_for_user(self, actor: CurrentUser) -> list[MatchRecord]:
+        del actor
+        raise NotImplementedError("chat list persistence is not implemented")
+
     async def get(self, actor: CurrentUser, match_id: str) -> MatchRecord | None:
         try:
             parsed_id = uuid.UUID(match_id)
