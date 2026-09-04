@@ -493,8 +493,51 @@ class ReportResponse(ContractModel):
     reason: str
     description: str
     severity: Literal["medium", "high"]
-    status: Literal["open", "resolved"]
+    status: Literal["open", "investigating", "resolved", "rejected"]
     createdAt: datetime
+
+
+class AdminVerificationDecisionInput(ContractModel):
+    decision: Literal["approved", "rejected"]
+    note: str | None = Field(None, max_length=1000)
+
+
+class AdminVerificationItem(VerificationResponse):
+    reviewedAt: datetime | None = None
+    deletionDueAt: datetime | None = None
+
+
+class AdminVerificationListResponse(ContractModel):
+    items: list[AdminVerificationItem]
+
+
+class AdminReportDecisionInput(ContractModel):
+    status: Literal["investigating", "resolved", "rejected"]
+    note: str = Field(min_length=1, max_length=1000)
+
+
+class AdminReportListResponse(ContractModel):
+    items: list[ReportResponse]
+
+
+class AdminUserStatusInput(ContractModel):
+    status: Literal["active", "suspended"]
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class AuditLogItem(ContractModel):
+    id: str
+    actorId: str | None
+    eventType: str
+    targetType: str
+    targetId: str | None
+    result: str
+    detail: dict[str, Any]
+    createdAt: datetime
+
+
+class AuditLogListResponse(ContractModel):
+    items: list[AuditLogItem]
 
 
 class BlockInput(ContractModel):
