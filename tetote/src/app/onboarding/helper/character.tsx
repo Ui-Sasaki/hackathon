@@ -14,14 +14,26 @@ const characters = [
   {
     id: 1,
     image: require("../../../../assets/onboarding_asset/c1.png"),
+    name: "犬-Dog-",
+    type: "Caring type（寄り添う）",
+    description: "そばに寄り添って、優しく見守ってくれるよ",
+    growth: "成長すれば...\n大型犬に進化するかも？",
   },
   {
     id: 2,
     image: require("../../../../assets/onboarding_asset/c2.png"),
+    name: "ウサギ-Rabbit-",
+    type: "Cute type（一緒に成長する）",
+    description: "おどおどしてるけど一生懸命な性格",
+    growth: "成長すれば...\n一人前のうさぎになるかも？",
   },
   {
     id: 3,
     image: require("../../../../assets/onboarding_asset/c3.png"),
+    name: "ウマ-Horse-",
+    type: "Cool type（頼りになる）",
+    description: "力強い性格であなたをサポートするよ",
+    growth: "成長すれば...\nかっこいい頼りがいのある馬になるかも？",
   },
 ];
 
@@ -34,8 +46,8 @@ export default function CharacterScreen() {
     useState<number | null>(null);
 
   const handleBack = () => {
-  router.replace("/onboarding/helper/help");
-};
+    router.replace("/onboarding/helper/help");
+  };
 
   const handleNext = () => {
     if (selectedCharacter === null) return;
@@ -91,7 +103,7 @@ export default function CharacterScreen() {
           </Text>
 
           <Text style={styles.roleTitle}>
-            手伝いたい
+            手伝ってほしい
           </Text>
 
           <Text style={styles.characterTitle}>
@@ -115,10 +127,32 @@ export default function CharacterScreen() {
                     pressed && styles.characterCardPressed,
                   ]}
                 >
-                  <Image
-                    source={character.image}
-                    style={styles.characterImage}
-                  />
+                  <View style={styles.characterContent}>
+                    <View style={styles.imageArea}>
+                      <Image
+                        source={character.image}
+                        style={styles.characterImage}
+                      />
+                    </View>
+
+                    <View style={styles.characterTextArea}>
+                      <Text style={styles.characterName}>
+                        {character.name}
+                      </Text>
+
+                      <Text style={styles.characterType}>
+                        {character.type}
+                      </Text>
+
+                      <Text style={styles.characterDescription}>
+                        {character.description}
+                      </Text>
+
+                      <Text style={styles.characterGrowth}>
+                        {character.growth}
+                      </Text>
+                    </View>
+                  </View>
 
                   {selected && (
                     <View style={styles.selectedBadge}>
@@ -275,13 +309,14 @@ const styles = StyleSheet.create({
 
   characterCard: {
     width: "100%",
-    height: 135,
+    minHeight: 145,
     borderRadius: 22,
     borderWidth: 2,
     borderColor: "transparent",
     backgroundColor: "#F8ECDC",
     justifyContent: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     position: "relative",
   },
 
@@ -296,18 +331,66 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.99 }],
   },
 
+  characterContent: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
+  imageArea: {
+    width: 140,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
   characterImage: {
     width: 115,
     height: 115,
     resizeMode: "contain",
   },
 
+  characterTextArea: {
+    flex: 1,
+    paddingLeft: 4,
+    paddingRight: 8,
+  },
+
+  characterName: {
+    color: "#111111",
+    fontSize: 18,
+    fontWeight: "800",
+    marginBottom: 2,
+  },
+
+  characterType: {
+    color: "#111111",
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 14,
+  },
+
+  characterDescription: {
+    color: "#111111",
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+
+  characterGrowth: {
+    color: "#111111",
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "600",
+  },
+
   selectedBadge: {
     position: "absolute",
-    right: 18,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    top: 10,
+    right: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: "#245C2D",
     alignItems: "center",
     justifyContent: "center",
@@ -315,7 +398,7 @@ const styles = StyleSheet.create({
 
   selectedCheck: {
     color: "#FFFFFF",
-    fontSize: 19,
+    fontSize: 17,
     fontWeight: "800",
   },
 
