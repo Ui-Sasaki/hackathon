@@ -159,6 +159,9 @@ export default function HelperLayout() {
           href: null,
         }}
       />
+      {/* 通報・本人確認は他画面から遷移する画面なので、タブバーには出さない */}
+      <Tabs.Screen name="report" options={{ href: null }} />
+      <Tabs.Screen name="verification" options={{ href: null }} />
     </Tabs>
   );
 }
