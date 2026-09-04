@@ -38,6 +38,20 @@ export function listChats(
   return client.get<ChatListResponse>(`/matches${query}`);
 }
 
+export async function getChatSummary(
+  matchId: string,
+  client: ApiClient = apiClient,
+): Promise<ChatSummary | null> {
+  let cursor: string | undefined;
+  do {
+    const response = await listChats(cursor, client);
+    const match = response.items.find((item) => item.matchId === matchId);
+    if (match) return match;
+    cursor = response.nextCursor ?? undefined;
+  } while (cursor);
+  return null;
+}
+
 export const MESSAGE_POLL_INTERVAL_MS = 3_000;
 
 export function listMessages(
