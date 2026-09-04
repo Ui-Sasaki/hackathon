@@ -151,6 +151,185 @@
         "title": "AchievementVisibilityInput",
         "type": "object"
       },
+      "AdminReportDecisionInput": {
+        "properties": {
+          "note": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Note",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "investigating",
+              "resolved",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "note"
+        ],
+        "title": "AdminReportDecisionInput",
+        "type": "object"
+      },
+      "AdminReportListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReportResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AdminReportListResponse",
+        "type": "object"
+      },
+      "AdminUserStatusInput": {
+        "properties": {
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "suspended"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "AdminUserStatusInput",
+        "type": "object"
+      },
+      "AdminVerificationDecisionInput": {
+        "properties": {
+          "decision": {
+            "enum": [
+              "approved",
+              "rejected"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "AdminVerificationDecisionInput",
+        "type": "object"
+      },
+      "AdminVerificationItem": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "deletionDueAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deletiondueat"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "university_email",
+              "student_card"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "reviewedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewedat"
+          },
+          "status": {
+            "enum": [
+              "unverified",
+              "pending",
+              "approved",
+              "rejected",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "userId": {
+            "title": "Userid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "userId",
+          "method",
+          "status",
+          "createdAt"
+        ],
+        "title": "AdminVerificationItem",
+        "type": "object"
+      },
+      "AdminVerificationListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminVerificationItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AdminVerificationListResponse",
+        "type": "object"
+      },
       "ApplicationInput": {
         "examples": [
           {
@@ -354,6 +533,86 @@
           "confirmed"
         ],
         "title": "AppliedMasking",
+        "type": "object"
+      },
+      "AuditLogItem": {
+        "properties": {
+          "actorId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actorid"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "eventType": {
+            "title": "Eventtype",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "result": {
+            "title": "Result",
+            "type": "string"
+          },
+          "targetId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetid"
+          },
+          "targetType": {
+            "title": "Targettype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "actorId",
+          "eventType",
+          "targetType",
+          "targetId",
+          "result",
+          "detail",
+          "createdAt"
+        ],
+        "title": "AuditLogItem",
+        "type": "object"
+      },
+      "AuditLogListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AuditLogItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AuditLogListResponse",
         "type": "object"
       },
       "BlockInput": {
@@ -1676,7 +1935,9 @@
           "status": {
             "enum": [
               "open",
-              "resolved"
+              "investigating",
+              "resolved",
+              "rejected"
             ],
             "title": "Status",
             "type": "string"
@@ -3343,6 +3604,218 @@
         "summary": "AI実績の公開範囲を更新",
         "tags": [
           "Achievements"
+        ]
+      }
+    },
+    "/admin/audit-logs": {
+      "get": {
+        "operationId": "admin_list_audits_admin_audit_logs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditLogListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin List Audits",
+        "tags": [
+          "Administration"
+        ]
+      }
+    },
+    "/admin/reports": {
+      "get": {
+        "operationId": "admin_list_reports_admin_reports_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminReportListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin List Reports",
+        "tags": [
+          "Administration"
+        ]
+      }
+    },
+    "/admin/reports/{report_id}": {
+      "patch": {
+        "operationId": "admin_decide_report_admin_reports__report_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminReportDecisionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Decide Report",
+        "tags": [
+          "Administration"
+        ]
+      }
+    },
+    "/admin/users/{user_id}/status": {
+      "patch": {
+        "operationId": "admin_set_user_status_admin_users__user_id__status_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminUserStatusInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Set User Status",
+        "tags": [
+          "Administration"
+        ]
+      }
+    },
+    "/admin/verifications": {
+      "get": {
+        "operationId": "admin_list_verifications_admin_verifications_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminVerificationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin List Verifications",
+        "tags": [
+          "Administration"
+        ]
+      }
+    },
+    "/admin/verifications/{verification_id}": {
+      "patch": {
+        "operationId": "admin_decide_verification_admin_verifications__verification_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "verification_id",
+            "required": true,
+            "schema": {
+              "title": "Verification Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminVerificationDecisionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Decide Verification",
+        "tags": [
+          "Administration"
         ]
       }
     },

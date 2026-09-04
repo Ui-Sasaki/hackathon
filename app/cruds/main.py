@@ -22,7 +22,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.auth import (
     SUPERTOKENS_ENABLED, CurrentUser, configure_user_creator, configure_user_lookup,
-    cors_headers, get_current_user,
+    cors_headers, get_current_user, require_roles,
 )
 from app.repositories.requests import (
     InvalidCursor, RequestRepository, decode_cursor, encode_cursor, get_request_repository,
@@ -59,6 +59,7 @@ from app.repositories.reports import (
 from app.repositories.verifications import (
     VerificationRepository, VerificationRepositoryError, get_verification_repository,
 )
+from app.repositories.moderation import ModerationError, ModerationRepository, get_moderation_repository
 from app.settings import settings
 from app.services.applications import (
     create_application as create_application_service,
@@ -88,6 +89,9 @@ from app.schemas import (
     StructureInput, StructuredRequestResponse, VerificationInput, VerificationResponse,
     ProfileImageInput, ProfileImageResponse, UploadSessionInput, UploadSessionResponse,
     UploadedContentResponse,
+    AdminVerificationDecisionInput, AdminVerificationListResponse,
+    AdminReportDecisionInput, AdminReportListResponse, AdminUserStatusInput,
+    AuditLogListResponse,
     UserSettingsResponse, UserSettingsUpdateInput,
     RecommendedRequestListResponse,
 )
@@ -1822,6 +1826,46 @@ async def create_report(
         )
     except ReportRepositoryError as exc:
         raise HTTPException(404, detail={"code": exc.code}) from exc
+
+
+def moderation_http_error(exc: ModerationError) -> HTTPException:
+    if exc.code.endswith("NOT_FOUND"):
+        return HTTPException(404, detail={"code": exc.code})
+    return HTTPException(409, detail={"code": exc.code})
+
+
+@app.get("/admin/verifications", response_model=AdminVerificationListResponse, tags=["Administration"])
+async def admin_list_verifications(current_user: CurrentUser = Depends(require_roles("admin", "verifier")), repository: ModerationRepository = Depends(get_moderation_repository)):
+    return {"items": await repository.list_verifications(current_user)}
+
+
+@app.patch("/admin/verifications/{verification_id}", response_model=VerificationResponse, tags=["Administration"])
+async def admin_decide_verification(verification_id: str, body: AdminVerificationDecisionInput, current_user: CurrentUser = Depends(require_roles("admin", "verifier")), repository: ModerationRepository = Depends(get_moderation_repository)):
+    try: return await repository.decide_verification(current_user, verification_id, body.decision, body.note)
+    except ModerationError as exc: raise moderation_http_error(exc) from exc
+
+
+@app.get("/admin/reports", response_model=AdminReportListResponse, tags=["Administration"])
+async def admin_list_reports(current_user: CurrentUser = Depends(require_roles("admin")), repository: ModerationRepository = Depends(get_moderation_repository)):
+    return {"items": await repository.list_reports(current_user)}
+
+
+@app.patch("/admin/reports/{report_id}", response_model=ReportResponse, tags=["Administration"])
+async def admin_decide_report(report_id: str, body: AdminReportDecisionInput, current_user: CurrentUser = Depends(require_roles("admin")), repository: ModerationRepository = Depends(get_moderation_repository)):
+    try: return await repository.decide_report(current_user, report_id, body.status, body.note)
+    except ModerationError as exc: raise moderation_http_error(exc) from exc
+
+
+@app.patch("/admin/users/{user_id}/status", status_code=204, tags=["Administration"])
+async def admin_set_user_status(user_id: str, body: AdminUserStatusInput, current_user: CurrentUser = Depends(require_roles("admin")), repository: ModerationRepository = Depends(get_moderation_repository)):
+    try: await repository.set_user_status(current_user, user_id, body.status, body.reason)
+    except ModerationError as exc: raise moderation_http_error(exc) from exc
+    return Response(status_code=204)
+
+
+@app.get("/admin/audit-logs", response_model=AuditLogListResponse, tags=["Administration"])
+async def admin_list_audits(current_user: CurrentUser = Depends(require_roles("admin")), repository: ModerationRepository = Depends(get_moderation_repository)):
+    return {"items": await repository.list_audits(current_user)}
 
 
 @app.post("/users/{user_id}/block", response_model=BlockResponse, status_code=201, tags=["Safety"], summary="利用者をブロックまたは解除", description="blocked=trueでブロック、falseで解除する。セッション本人との関係として保存し、対象との依頼・応募・メッセージを非表示にする。自分自身は指定不可。", responses=api_errors(401, 404, 422, 500))
