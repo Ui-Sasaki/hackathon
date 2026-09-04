@@ -35,10 +35,10 @@
 | プロフィール取得・更新 | Memoryの共有store | #68に実装あり | #68統合 |
 | ブロック・解除 | Postgres実装済み | 同左 | Production適用・接続確認 |
 | 通報・高危険度依頼の停止 | Postgres実装済み | 同左 | 管理者による調査・解決・却下の状態遷移を追加 |
-| 利用者設定 | Memory Repositoryのみ | 未実装 | テーブル／migration、RLS、Postgres Repository、DBテスト |
-| 依頼カード非表示 | Memory Repositoryのみ | 未実装 | 関係テーブル／migration、RLS、Postgres Repository、DBテスト |
-| 依頼保存 | Memory Repositoryのみ | 未実装 | 関係テーブル／migration、RLS、Postgres Repository、DBテスト |
-| 依頼構造化の監査情報 | Memory Repositoryのみ | 未実装 | 保存項目を確定し、監査用migration／Repository／保持期間を実装 |
+| 利用者設定 | Postgres実装済み | 同左 | Production適用・接続確認 |
+| 依頼カード非表示 | Postgres実装済み | 同左 | Production適用・接続確認 |
+| 依頼保存 | Postgres実装済み | 同左 | Production適用・接続確認 |
+| 依頼構造化の監査情報 | Postgres実装済み | 同左 | 保持期間・管理画面の参照導線を決定 |
 | レビュー | APIはMemory store | 未実装 | 投稿RPCまたはtransaction、当事者・完了状態検証、Repository、DBテスト |
 | AI実績プロフィール | API・AIともモック、Memory store | 未実装 | Repository、生成履歴・本人承認・公開範囲の永続化、実AI境界 |
 | 本人確認申請・審査 | APIは開発用モック、Memory store | 未実装 | Repository、審査状態遷移、担当者認可、監査ログ |
@@ -68,13 +68,12 @@ FastAPIのPostgres Repositoryまで実装済みだが、レビュー、実績、
 
 優先度の目安は、既に画面またはAPIが使うMemoryデータの消失防止を先にする。
 
-1. 利用者設定、依頼非表示、依頼保存の永続化。
-2. レビューとAI実績プロフィールの永続化。
-3. 本人確認申請・審査とprivate Storage、署名URL、削除job。
-4. 通報の管理者処理、利用停止、監査ログの永続化。
-5. Supabase Realtimeの読み取り認可と再接続設計。
-6. 構造化監査情報の永続化と保持期間の決定。
-7. メッセージ等のカーソルページング、完了確認の72時間リマインドなど運用処理。
+1. レビューとAI実績プロフィールの永続化。
+2. 本人確認審査とprivate Storage、署名URL、削除job。
+3. 通報の管理者処理、利用停止、監査ログの永続化。
+4. Supabase Realtimeの読み取り認可と再接続設計。
+5. 構造化監査情報の保持期間の決定。
+6. メッセージ等のカーソルページング、完了確認の72時間リマインドなど運用処理。
 
 ## 統合・完了条件
 

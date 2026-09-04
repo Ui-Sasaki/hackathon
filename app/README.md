@@ -1,6 +1,6 @@
 # テトテFastAPI 開発ガイド
 
-地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼、応募、マッチ、チャット、完了処理、プロフィール、ブロック、通報の保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。レビュー、AI実績、本人確認は現在インメモリで模擬している。
+地域の困りごとと支援者をつなぐAPIである。認証・セッション管理にはSuperTokensを使う。依頼、応募、マッチ、チャット、完了処理、プロフィール、利用者設定、依頼保存・非表示、構造化監査、ブロック、通報、本人確認申請の保存先はRepositoryで分離され、開発・テストではメモリ、本番ではSupabase PostgreSQLを使う。レビュー、AI実績は現在インメモリで模擬している。
 
 ## セットアップと起動
 
@@ -176,9 +176,9 @@ Messages APIにはタイムアウトを設定し、JSON Schemaを指定した
 `structure_request`ツールだけを選択させたうえで、tool inputをPydanticでも再検証する。
 
 応答は常に`status: draft`、`requiresConfirmation: true`、`autoPublished: false`で、
-ユーザー確認なしに公開されない。監査用Memory Repositoryにはモデル名、プロンプト版、
+ユーザー確認なしに公開されない。監査用Repositoryにはモデル名、プロンプト版、
 処理日時、スキーマ版だけを保存し、依頼本文やマスキング前の個人情報は保存しない。
-この機能は`app/db.py`、Postgres Repository、migration、RLSへ依存しない。
+本番ではPostgresへ永続化し、管理者だけが監査メタデータを参照できる。
 
 ## エラーレスポンスとトレースID
 

@@ -28,15 +28,16 @@ from app.repositories.applications import (
 from app.repositories.matches import MemoryMatchRepository, PostgresMatchRepository
 from app.repositories.messages import MemoryMessageRepository, PostgresMessageRepository
 from app.repositories.user_settings import (
-    MemoryUserSettingsRepository, UserSettingsRepository,
+    MemoryUserSettingsRepository, PostgresUserSettingsRepository, UserSettingsRepository,
     get_user_settings_repository,
 )
 from app.repositories.request_dismissals import (
-    MemoryRequestDismissalRepository, RequestDismissalRepository,
+    MemoryRequestDismissalRepository, PostgresRequestDismissalRepository,
+    RequestDismissalRepository,
     get_request_dismissal_repository,
 )
 from app.repositories.saved_requests import (
-    MemorySavedRequestRepository, SavedRequestRepository,
+    MemorySavedRequestRepository, PostgresSavedRequestRepository, SavedRequestRepository,
     get_saved_request_repository,
 )
 from app.settings import load_settings
@@ -161,7 +162,8 @@ def test_user_settings_require_authentication() -> None:
 
 def test_user_settings_repository_contract() -> None:
     required: set[str] = {"get", "update", "reset"}
-    assert required <= set(dir(MemoryUserSettingsRepository))
+    for implementation in (MemoryUserSettingsRepository, PostgresUserSettingsRepository):
+        assert required <= set(dir(implementation))
     repository: UserSettingsRepository = get_user_settings_repository()
     assert required <= set(dir(repository))
 
@@ -207,7 +209,8 @@ def test_dismiss_hides_unavailable_request_existence() -> None:
 
 def test_request_dismissal_repository_contract() -> None:
     required = {"list_ids", "dismiss", "restore", "reset"}
-    assert required <= set(dir(MemoryRequestDismissalRepository))
+    for implementation in (MemoryRequestDismissalRepository, PostgresRequestDismissalRepository):
+        assert required <= set(dir(implementation))
     repository: RequestDismissalRepository = get_request_dismissal_repository()
     assert required <= set(dir(repository))
 
@@ -248,7 +251,8 @@ def test_saved_requests_hide_missing_blocked_and_cancelled_requests() -> None:
 
 def test_saved_request_repository_contract() -> None:
     required = {"list_ids", "save", "remove", "reset"}
-    assert required <= set(dir(MemorySavedRequestRepository))
+    for implementation in (MemorySavedRequestRepository, PostgresSavedRequestRepository):
+        assert required <= set(dir(implementation))
     repository: SavedRequestRepository = get_saved_request_repository()
     assert required <= set(dir(repository))
 
