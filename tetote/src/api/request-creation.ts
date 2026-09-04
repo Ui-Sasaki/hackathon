@@ -8,7 +8,8 @@ export type CreateRequestInput = {
   scheduledAt: string;
   estimatedMinutes: number;
   requiredHelpers: number;
-  areaCode: string;
+  /** 概算地域コード。省略時はサーバーが登録地域、無ければ既定地域を使う。 */
+  areaCode?: string;
   riskLevel: "low" | "medium";
   confirmed: true;
 };

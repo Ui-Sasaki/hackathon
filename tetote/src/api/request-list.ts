@@ -8,7 +8,7 @@ export type RequestListFilters = {
 
 export type RequestListOrigin = {
   areaCode: string;
-  source: "current_location" | "selected_region" | "registered_region";
+  source: "current_location" | "selected_region" | "registered_region" | "default_region";
 };
 
 type RequestListResponse = {

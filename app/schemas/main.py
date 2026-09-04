@@ -53,7 +53,7 @@ class LocationResolveInput(ContractModel):
 class LocationResolveResponse(ContractModel):
     areaCode: str = Field(description="概算地域コード")
     areaLabel: str = Field(description="表示用の概算地域名")
-    source: Literal["current_location", "selected_region", "registered_region"]
+    source: Literal["current_location", "selected_region", "registered_region", "default_region"]
     fallbackUsed: bool
 
 
@@ -157,7 +157,7 @@ class RequestInput(ContractModel):
     scheduledAt: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$", description="ISO 8601、タイムゾーン付き")
     estimatedMinutes: int = Field(ge=10, le=240)
     requiredHelpers: int = Field(1, ge=1, le=5)
-    areaCode: str = Field(min_length=1, max_length=30, description="概算地域コード")
+    areaCode: str | None = Field(None, min_length=1, max_length=30, description="概算地域コード。省略時は登録地域、無ければ既定地域を使う")
     riskLevel: Literal["low", "medium"] = "low"
     confirmed: Literal[True] = Field(description="利用者が内容を確認済み")
 
@@ -185,7 +185,7 @@ class RequestResponse(ContractModel):
 
 class ListOrigin(ContractModel):
     areaCode: str
-    source: Literal["current_location", "selected_region", "registered_region"]
+    source: Literal["current_location", "selected_region", "registered_region", "default_region"]
 
 
 class RequestListResponse(ContractModel):

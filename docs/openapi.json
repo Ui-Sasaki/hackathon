@@ -759,7 +759,8 @@
             "enum": [
               "current_location",
               "selected_region",
-              "registered_region"
+              "registered_region",
+              "default_region"
             ],
             "title": "Source",
             "type": "string"
@@ -858,7 +859,8 @@
             "enum": [
               "current_location",
               "selected_region",
-              "registered_region"
+              "registered_region",
+              "default_region"
             ],
             "title": "Source",
             "type": "string"
@@ -1809,11 +1811,18 @@
         ],
         "properties": {
           "areaCode": {
-            "description": "概算地域コード",
-            "maxLength": 30,
-            "minLength": 1,
-            "title": "Areacode",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "概算地域コード。省略時は登録地域、無ければ既定地域を使う",
+            "title": "Areacode"
           },
           "category": {
             "maxLength": 100,
@@ -1874,7 +1883,6 @@
           "category",
           "scheduledAt",
           "estimatedMinutes",
-          "areaCode",
           "confirmed"
         ],
         "title": "RequestInput",
@@ -4015,7 +4023,7 @@
     },
     "/locations/resolve": {
       "post": {
-        "description": "同意済み座標を概算地域へ変換する。座標は保存も返却もしない。取得失敗時は登録地域へフォールバックする。",
+        "description": "同意済み座標を概算地域へ変換する。座標は保存も返却もしない。取得失敗時は登録地域へ、登録地域も無ければ既定地域へフォールバックする（source=default_region）。",
         "operationId": "resolve_browser_location_locations_resolve_post",
         "requestBody": {
           "content": {
