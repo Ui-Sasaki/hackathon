@@ -99,9 +99,9 @@ app = FastAPI(
     description=(
         "地域の依頼と支援者をつなぐAPI契約。業務APIはSuperTokensのHttpOnly Cookie"
         "セッションが必須で、ユーザーID・ロール・送信日時はサーバーが決定する。"
-        "`/auth/*` はSuperTokensが提供する。依頼はRepositoryに保存されるが、応募以降、"
-        "AI、本人確認は現在開発用インメモリ実装である。`/_mock/reset` は明示的に有効化"
-        "した非本番環境だけで利用できる。"
+        "`/auth/*` はSuperTokensが提供する。業務データはRepository境界で本番Postgresへ"
+        "切り替える。レビューとAI実績は現在開発用インメモリ実装である。"
+        "`/_mock/reset` は明示的に有効化した非本番環境だけで利用できる。"
     ),
 )
 
