@@ -160,7 +160,8 @@ export default function RequestConfirmScreen() {
       requiredHelpers: draft.requiredHelpers as number,
       // 地域が取れていないときは送らず、サーバー側の登録地域・既定地域に任せる。
       areaCode: areaCode || undefined,
-      riskLevel: draft.riskLevel,
+      // validatePublishInput で high / prohibited を弾いている。
+      riskLevel: draft.riskLevel as "low" | "medium",
       confirmed: true,
     }));
     if (result.status === "created") {
