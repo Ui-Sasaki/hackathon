@@ -15,31 +15,26 @@ export default function HelpHomeScreen() {
     <View style={styles.screen}>
       <View style={styles.container}>
         <View style={styles.topRow}>
-        <Pressable
-  onPress={() =>
-    router.push("/help/profile")
-  }
-  style={({ pressed }) => [
-    styles.settingsButton,
-    pressed && styles.pressed,
-  ]}
->
+          <Pressable
+            onPress={() => router.push("/help/profile")}
+            style={({ pressed }) => [
+              styles.settingsButton,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Ionicons
+              name="person-circle"
+              size={38}
+              color="#F2A329"
+            />
 
-           <Ionicons
-  name="person-circle"
-  size={38}
-  color="#F2A329"
-/>
-
-<Text style={styles.settingsText}>
-  プロフィール
-</Text>
+            <Text style={styles.settingsText}>
+              プロフィール
+            </Text>
           </Pressable>
 
           <Pressable
-            onPress={() =>
-              router.replace("/helper")
-            }
+            onPress={() => router.replace("/helper")}
             style={({ pressed }) => [
               styles.switchButton,
               pressed && styles.pressed,
@@ -69,9 +64,7 @@ export default function HelpHomeScreen() {
           </View>
 
           <Pressable
-            onPress={() =>
-              router.push("/help/request")
-            }
+            onPress={() => router.push("/help/request")}
             style={({ pressed }) => [
               styles.mainButton,
               pressed && styles.pressed,
@@ -93,9 +86,7 @@ export default function HelpHomeScreen() {
           </View>
 
           <Pressable
-            onPress={() =>
-              router.push("/help/character")
-            }
+            onPress={() => router.push("/help/character")}
             style={({ pressed }) => [
               styles.characterButton,
               pressed && styles.pressed,
@@ -123,8 +114,8 @@ const styles = StyleSheet.create({
     width: "100%",
     maxWidth: 520,
     paddingHorizontal: 28,
-    paddingTop: 42,
-    paddingBottom: 20,
+    paddingTop: 26,
+    paddingBottom: 12,
     alignItems: "center",
   },
 
@@ -176,13 +167,13 @@ const styles = StyleSheet.create({
   mainContent: {
     width: "100%",
     alignItems: "center",
-    marginTop: 28,
+    marginTop: 18,
   },
 
   profileCircle: {
-    width: 142,
-    height: 142,
-    borderRadius: 71,
+    width: 136,
+    height: 136,
+    borderRadius: 68,
     backgroundColor: "#D9D9D9",
     alignItems: "center",
     justifyContent: "center",
@@ -195,7 +186,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#D9D9D9",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 24,
+    marginTop: 18,
   },
 
   mainButtonText: {
@@ -207,13 +198,13 @@ const styles = StyleSheet.create({
   mascotArea: {
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 25,
-    marginBottom: 22,
+    marginTop: 14,
+    marginBottom: 12,
   },
 
   mascot: {
-    width: 180,
-    height: 180,
+    width: 160,
+    height: 160,
   },
 
   characterButton: {
