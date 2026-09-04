@@ -1206,7 +1206,7 @@ async def list_requests(
     }
 
 
-@app.post("/requests", response_model=RequestResponse, status_code=201, tags=["Requests"], summary="依頼を作成", description="認証済み本人を依頼者としてdraftを作成する。Idempotency-Keyが同じ再送は同じ結果を返す。", responses=api_errors(401, 422, 500))
+@app.post("/requests", response_model=RequestResponse, status_code=201, tags=["Requests"], summary="依頼を作成", description="認証済み本人を依頼者として依頼を作成し、利用者が確認済みの内容はそのまま公開（published）する。危険度判定で審査対象になった依頼は pending_review で止まる。Idempotency-Keyが同じ再送は同じ結果を返す。", responses=api_errors(401, 422, 500))
 async def create_request(
     body: RequestInput,
     idempotency_key: str = Header(alias="Idempotency-Key"),
@@ -1238,6 +1238,13 @@ async def create_request(
         expected_version=item["version"], bump_version=False,
     ):
         item = {**item, "status": "pending_review"}
+    # 利用者が確認済み（confirmed=true）で送った依頼は、そのまま支援者へ公開する。
+    # draft で止めると一覧（published のみ）に載らず、依頼が誰にも届かない。
+    elif item["status"] == "draft" and await repository.set_status(
+        current_user, item["id"], "published",
+        expected_version=item["version"], bump_version=False,
+    ):
+        item = {**item, "status": "published"}
     if assessment.messages:
         item = {**item, "warnings": list(assessment.messages)}
     idempotency_store[cache_key] = item

@@ -5593,7 +5593,7 @@
         ]
       },
       "post": {
-        "description": "認証済み本人を依頼者としてdraftを作成する。Idempotency-Keyが同じ再送は同じ結果を返す。",
+        "description": "認証済み本人を依頼者として依頼を作成し、利用者が確認済みの内容はそのまま公開（published）する。危険度判定で審査対象になった依頼は pending_review で止まる。Idempotency-Keyが同じ再送は同じ結果を返す。",
         "operationId": "create_request_requests_post",
         "parameters": [
           {
