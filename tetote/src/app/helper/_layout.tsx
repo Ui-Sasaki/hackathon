@@ -131,34 +131,6 @@ export default function HelperLayout() {
           ),
         }}
       />
-
-      <Tabs.Screen
-        name="chat"
-        options={{
-          href: null,
-        }}
-      />
-
-      <Tabs.Screen
-        name="settings"
-        options={{
-          href: null,
-        }}
-      />
-
-      <Tabs.Screen
-        name="saved"
-        options={{
-          href: null,
-        }}
-      />
-
-      <Tabs.Screen
-        name="request"
-        options={{
-          href: null,
-        }}
-      />
     </Tabs>
   );
 }
