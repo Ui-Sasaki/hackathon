@@ -16,7 +16,7 @@ type LocationResolveInput =
 export type ApproximateLocation = {
   areaCode: string;
   areaLabel: string;
-  source: "current_location" | "selected_region" | "registered_region";
+  source: "current_location" | "selected_region" | "registered_region" | "default_region";
   fallbackUsed: boolean;
 };
 

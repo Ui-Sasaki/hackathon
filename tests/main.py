@@ -320,9 +320,38 @@ def test_location_rejects_invalid_coordinates(payload: dict) -> None:
     assert "43.0" not in response.text
 
 
-def test_location_requires_region_selection_without_fallback() -> None:
+def test_location_falls_back_to_default_region_without_registered_region() -> None:
     crud_module.users_store["usr_101"].pop("areaCode")
     response = client.post("/locations/resolve", json={"failureReason": "denied"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["areaCode"] == crud_module.DEFAULT_AREA_CODE
+    assert body["source"] == "default_region"
+    assert body["fallbackUsed"] is True
+
+
+def test_request_list_and_creation_work_without_registered_region() -> None:
+    crud_module.users_store["usr_101"].pop("areaCode")
+    listed = client.get("/requests")
+    assert listed.status_code == 200
+    assert listed.json()["origin"]["areaCode"] == crud_module.DEFAULT_AREA_CODE
+
+    created = client.post(
+        "/requests",
+        json={
+            "title": "庭の片付け", "description": "庭の落ち葉を一緒に片付けてください",
+            "category": "cleaning", "scheduledAt": "2026-09-10T10:00:00+09:00",
+            "estimatedMinutes": 30, "requiredHelpers": 1,
+            "riskLevel": "low", "confirmed": True,
+        },
+        headers={"Idempotency-Key": "no-region-1"},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["areaCode"] == crud_module.DEFAULT_AREA_CODE
+
+
+def test_unknown_selected_region_is_still_rejected() -> None:
+    response = client.get("/requests", params={"areaCode": "AREA-999"})
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "REGION_SELECTION_REQUIRED"
 

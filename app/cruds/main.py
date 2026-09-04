@@ -277,6 +277,8 @@ def prohibited_request_error(assessment: safety.RiskAssessment) -> HTTPException
         "ruleVersion": safety.RULE_VERSION,
     })
 
+DEFAULT_AREA_CODE = "AREA-001"
+
 REGIONS = {
     "AREA-001": {"label": "大学周辺", "latitude": 43.062, "longitude": 141.354},
     "AREA-002": {"label": "大学北側", "latitude": 43.082, "longitude": 141.350},
@@ -310,13 +312,17 @@ def resolve_location(
 ) -> tuple[str, str]:
     if location and location.latitude is not None and location.longitude is not None:
         return nearest_region(location.latitude, location.longitude), "current_location"
-    area_code = selected_area_code or users_store.get(current_user.user_id, {}).get(
-        "areaCode"
-    )
-    if not area_code or area_code not in REGIONS:
-        raise HTTPException(422, detail={"code": "REGION_SELECTION_REQUIRED"})
-    source = "selected_region" if selected_area_code else "registered_region"
-    return area_code, source
+    if selected_area_code:
+        if selected_area_code not in REGIONS:
+            raise HTTPException(422, detail={"code": "REGION_SELECTION_REQUIRED"})
+        return selected_area_code, "selected_region"
+    registered = users_store.get(current_user.user_id, {}).get("areaCode")
+    if registered in REGIONS:
+        return registered, "registered_region"
+    # 登録地域が無い利用者（オンボーディングは都道府県名しか保存しない）を
+    # 422 で止めると、依頼一覧も依頼作成も一切使えなくなる。地域を選べる画面が
+    # 整うまでは既定地域へ倒し、応答の source で既定地域だと分かるようにする。
+    return DEFAULT_AREA_CODE, "default_region"
 
 
 def request_id_for(request: Request) -> str:
@@ -903,7 +909,7 @@ async def update_user_settings(
     return await repository.update(current_user, changes)
 
 
-@app.post("/locations/resolve", response_model=LocationResolveResponse, tags=["Locations"], summary="現在地を概算地域へ変換", description="同意済み座標を概算地域へ変換する。座標は保存も返却もしない。取得失敗時は登録地域へフォールバックする。", responses=api_errors(401, 422, 500))
+@app.post("/locations/resolve", response_model=LocationResolveResponse, tags=["Locations"], summary="現在地を概算地域へ変換", description="同意済み座標を概算地域へ変換する。座標は保存も返却もしない。取得失敗時は登録地域へ、登録地域も無ければ既定地域へフォールバックする（source=default_region）。", responses=api_errors(401, 422, 500))
 async def resolve_browser_location(
     body: LocationResolveInput,
     current_user: CurrentUser = Depends(get_current_user),
@@ -913,7 +919,7 @@ async def resolve_browser_location(
         "areaCode": area_code,
         "areaLabel": REGIONS[area_code]["label"],
         "source": source,
-        "fallbackUsed": source == "registered_region",
+        "fallbackUsed": source in {"registered_region", "default_region"},
     }
 
 

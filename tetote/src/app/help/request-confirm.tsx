@@ -135,7 +135,6 @@ export default function RequestConfirmScreen() {
     if (!draft.requiredHelpers || draft.requiredHelpers < 1 || draft.requiredHelpers > 5) {
       return "必要人数は1人から5人の範囲で入力してください。";
     }
-    if (!areaCode) return "場所欄で概算地域を取得してから公開してください。";
     if (draft.riskLevel === "high" || draft.riskLevel === "prohibited") {
       return "危険度が高い依頼は公開できません。内容を修正してください。";
     }
@@ -155,11 +154,14 @@ export default function RequestConfirmScreen() {
       title: draft.title.trim(),
       description: draft.description.trim(),
       category: draft.category.trim(),
-      scheduledAt: draft.scheduledAt,
-      estimatedMinutes: draft.estimatedMinutes,
-      requiredHelpers: draft.requiredHelpers,
-      areaCode,
-      riskLevel: draft.riskLevel,
+      // validatePublishInput で null でないことを確認済み。
+      scheduledAt: draft.scheduledAt as string,
+      estimatedMinutes: draft.estimatedMinutes as number,
+      requiredHelpers: draft.requiredHelpers as number,
+      // 地域が取れていないときは送らず、サーバー側の登録地域・既定地域に任せる。
+      areaCode: areaCode || undefined,
+      // validatePublishInput で high / prohibited を弾いている。
+      riskLevel: draft.riskLevel as "low" | "medium",
       confirmed: true,
     }));
     if (result.status === "created") {

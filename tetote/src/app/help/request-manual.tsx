@@ -45,7 +45,7 @@ export default function RequestManualScreen() {
       setAreaCode(state.location.areaCode);
       setLocation(state.location.areaLabel ?? state.location.areaCode);
       setLocationMessage(state.location.fallbackUsed ? "登録地域を使用します" : "現在地から概算地域を取得しました");
-    } else setLocationMessage("地域を取得できませんでした。プロフィールの登録地域を確認してください");
+    } else setLocationMessage("地域を取得できませんでした。地域なしでも依頼は出せます");
     setLocationBusy(false);
   };
 
