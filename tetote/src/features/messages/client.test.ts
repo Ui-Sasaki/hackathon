@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ApiClient } from "../../api/client";
 import {
+  listChats,
   listMessages,
   mergeMessages,
   sendMessage,
@@ -24,6 +25,21 @@ const response = (body: unknown, status = 200) =>
     status,
     headers: { "Content-Type": "application/json" },
   });
+
+describe("chat list API", () => {
+  it("loads the authenticated user's chats and encodes the cursor", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response({ items: [], nextCursor: null }));
+    const client = new ApiClient({ baseUrl: "https://api.example.test", fetch: fetchMock });
+
+    await expect(listChats("match/previous", client)).resolves.toEqual({
+      items: [], nextCursor: null,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.example.test/matches?cursor=match%2Fprevious",
+    );
+    expect(fetchMock.mock.calls[0][1].credentials).toBe("include");
+  });
+});
 
 describe("message API polling", () => {
   it("loads messages for the encoded match id", async () => {

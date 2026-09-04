@@ -798,13 +798,13 @@ def test_repository_implementations_share_application_contract() -> None:
 
 
 def test_repository_implementations_share_match_contract() -> None:
-    operations = {"get", "create", "complete", "dispute", "reset"}
+    operations = {"list_for_user", "get", "create", "complete", "dispute", "reset"}
     for implementation in (MemoryMatchRepository, PostgresMatchRepository):
         assert operations <= set(dir(implementation))
 
 
 def test_repository_implementations_share_message_contract() -> None:
-    operations = {"list_for_match", "create", "reset"}
+    operations = {"peek_for_match", "list_for_match", "create", "reset"}
     for implementation in (MemoryMessageRepository, PostgresMessageRepository):
         assert operations <= set(dir(implementation))
 
@@ -1393,6 +1393,81 @@ def test_match_detail_is_available_only_to_participants() -> None:
     forbidden = client.get(f"/matches/{match_id}")
     assert forbidden.status_code == 403
     assert forbidden.json()["error"]["code"] == "ROLE_FORBIDDEN"
+
+
+def test_chat_list_returns_only_participant_matches_without_marking_read() -> None:
+    match_id = create_match()
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    sent = client.post(
+        f"/matches/{match_id}/messages", json={"body": "明日の14時に伺います"},
+    )
+    assert sent.status_code == 201
+
+    app.dependency_overrides[get_current_user] = requester_user
+    response = client.get("/matches")
+    assert response.status_code == 200
+    assert response.json()["nextCursor"] is None
+    assert response.json()["items"] == [{
+        "matchId": match_id,
+        "status": "matched",
+        "counterpart": {"id": HELPER.user_id, "displayName": "田中 悠"},
+        "request": {
+            "id": SEED_REQUEST_1024,
+            "title": "犬の散歩をお願いしたい",
+            "scheduledAt": "2026-08-19T17:00:00+09:00",
+            "areaLabel": "大学周辺・約1km",
+        },
+        "latestMessage": sent.json(),
+        "unreadCount": 1,
+        "updatedAt": sent.json()["sentAt"],
+    }]
+    assert crud_module.messages[match_id][0]["readAt"] is None
+
+    async def outsider_user() -> CurrentUser:
+        return CurrentUser(
+            user_id="usr_outsider", role="member", status="active",
+            email_verified=True, verification_status="approved",
+        )
+
+    app.dependency_overrides[get_current_user] = outsider_user
+    assert client.get("/matches").json()["items"] == []
+
+
+def test_chat_list_supports_cursor_and_hides_blocked_counterpart() -> None:
+    first_match_id = create_match()
+    crud_module.matches["match_second"] = {
+        **crud_module.matches[first_match_id],
+        "id": "match_second",
+        "matchedAt": "2099-08-20T10:00:00+09:00",
+    }
+    repository = crud_module.get_match_repository()
+    asyncio.run(repository.create(REQUESTER, crud_module.matches["match_second"]))
+    crud_module.messages["match_second"] = []
+
+    first_page = client.get("/matches", params={"limit": 1})
+    assert first_page.status_code == 200
+    assert first_page.json()["items"][0]["matchId"] == "match_second"
+    assert first_page.json()["nextCursor"] == "match_second"
+
+    second_page = client.get(
+        "/matches", params={"limit": 1, "cursor": "match_second"},
+    )
+    assert second_page.status_code == 200
+    assert second_page.json()["items"][0]["matchId"] == first_match_id
+    assert second_page.json()["nextCursor"] is None
+
+    invalid = client.get("/matches", params={"cursor": "missing"})
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "INVALID_CURSOR"
+
+    assert client.post(
+        f"/users/{HELPER.user_id}/block", json={"blocked": True},
+    ).status_code == 201
+    assert client.get("/matches").json()["items"] == []
 
 
 def test_match_detail_hides_missing_and_blocked_matches() -> None:
