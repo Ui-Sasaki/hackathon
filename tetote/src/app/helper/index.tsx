@@ -6,6 +6,7 @@ import {
   ScrollView,
   Animated,
   PanResponder,
+  ActivityIndicator,
 } from "react-native";
 import { useState, useRef } from "react";
 import { Ionicons } from "@expo/vector-icons";
@@ -480,8 +481,9 @@ const swipeLeft =
 
         {status === "loading" ? (
           <View style={styles.emptyState}>
+            <ActivityIndicator color="#245C2D" />
             <Text style={styles.emptyTitle}>
-              依頼を読み込んでいます...
+              依頼を読み込んでいます
             </Text>
           </View>
         ) : status === "error" ? (
@@ -508,6 +510,48 @@ const swipeLeft =
                 style={styles.reloadButtonText}
               >
                 もう一度読み込む
+              </Text>
+            </Pressable>
+          </View>
+        ) : requests.length === 0 ? (
+          <View style={styles.emptyState}>
+            <View
+              style={
+                styles.emptyIcon
+              }
+            >
+              <Ionicons
+                name="briefcase-outline"
+                size={38}
+                color="#245C2D"
+              />
+            </View>
+
+            <Text
+              style={
+                styles.emptyTitle
+              }
+            >
+              公開中の依頼はありません
+            </Text>
+
+            <Pressable
+              onPress={reload}
+              style={({ pressed }) => [
+                styles.reloadButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Ionicons
+                name="refresh"
+                size={18}
+                color="#FFFFFF"
+              />
+
+              <Text
+                style={styles.reloadButtonText}
+              >
+                読み込む
               </Text>
             </Pressable>
           </View>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   ActivityIndicator,
@@ -17,6 +17,11 @@ import {
   withdrawalErrorMessage,
   withdrawApplication,
 } from "../../features/applications/client";
+import {
+  getRequest,
+  requestListErrorMessage,
+  type PublicRequest,
+} from "../../features/requests/client";
 
 function firstParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
@@ -30,8 +35,11 @@ export default function ApplicationScreen() {
     description?: string | string[];
   }>();
   const requestId = firstParam(params.requestId);
-  const title = firstParam(params.title);
-  const description = firstParam(params.description);
+  const fallbackTitle = firstParam(params.title);
+  const fallbackDescription = firstParam(params.description);
+  const [request, setRequest] = useState<PublicRequest | null>(null);
+  const [requestLoading, setRequestLoading] = useState(requestId.length > 0);
+  const [requestError, setRequestError] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [availableAt, setAvailableAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -40,6 +48,33 @@ export default function ApplicationScreen() {
   const [withdrawing, setWithdrawing] = useState(false);
 
   const canSubmit = requestId.length > 0 && message.trim().length > 0 && availableAt.length > 0;
+  const title = request?.title ?? fallbackTitle;
+  const description = request?.description ?? fallbackDescription;
+
+  useEffect(() => {
+    if (!requestId) {
+      setRequestLoading(false);
+      return;
+    }
+    let active = true;
+    setRequestLoading(true);
+    setRequestError(null);
+    void getRequest(requestId)
+      .then((item) => {
+        if (!active) return;
+        setRequest(item);
+        setAvailableAt((current) => current || item.scheduledAt);
+        setRequestLoading(false);
+      })
+      .catch((loadError: unknown) => {
+        if (!active) return;
+        setRequestError(requestListErrorMessage(loadError));
+        setRequestLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [requestId]);
 
   const handleSubmit = async () => {
     if (!canSubmit || submitting) return;
@@ -80,6 +115,13 @@ export default function ApplicationScreen() {
         </Pressable>
 
         <Text style={styles.heading}>応募する</Text>
+        {requestLoading ? (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator color="#245C2D" />
+            <Text style={styles.loadingText}>依頼詳細を読み込んでいます</Text>
+          </View>
+        ) : null}
+        {requestError ? <Text style={styles.errorText}>{requestError}</Text> : null}
         <Text style={styles.requestTitle}>{title || "選択した依頼"}</Text>
         {description ? (
           <Text style={styles.requestDescription}>{description}</Text>
@@ -176,6 +218,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
   },
+  loadingRow: { alignItems: "center", flexDirection: "row", gap: 8, marginTop: 14 },
+  loadingText: { color: "#586259", fontSize: 13, fontWeight: "700" },
   label: { color: "#2D3A2E", fontSize: 16, fontWeight: "700", marginBottom: 8 },
   input: { backgroundColor: "#FFFFFF", borderColor: "#C8CEBD", borderRadius: 12, borderWidth: 1, fontSize: 16, marginBottom: 22, padding: 14 },
   messageInput: { minHeight: 120, textAlignVertical: "top" },
