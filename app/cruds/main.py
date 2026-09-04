@@ -628,6 +628,29 @@ def ensure_match_participant(match: dict, user_id: str) -> str:
     raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
 
 
+def helper_summary_for(helper_id: str, summary: dict | None = None) -> dict:
+    """応募者一覧に載せる支援者の要約を、どの利用者でも組み立てる。
+
+    本番の応募者は実在の利用者（SuperTokens の ID）で、開発用の種データ HELPERS には
+    存在しない。Repository が要約を返せばそれを使い、無ければ利用者ストア、それも無ければ
+    最小限の要約にして、一覧そのものが 500 で落ちないようにする。
+    """
+    if summary and summary.get("displayName"):
+        return summary
+    seeded = HELPERS.get(helper_id)
+    if seeded:
+        return seeded
+    user = users_store.get(helper_id) or {}
+    return {
+        "id": helper_id,
+        "displayName": user.get("displayName") or "支援者",
+        "verificationStatus": user.get("verificationStatus") or "unverified",
+        "universityVerified": bool(user.get("emailVerified", False)),
+        "skillTags": [],
+        "achievementCount": 0,
+    }
+
+
 def is_blocked_pair(first_user_id: str, second_user_id: str) -> bool:
     """Return whether either user has blocked the other."""
 
@@ -1464,7 +1487,7 @@ async def list_applications(
         raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
     items = await application_repository.list_for_request(current_user, request_id)
     return {"items": [
-        {**item, "helper": item.get("helper") or HELPERS[item["helperId"]]}
+        {**item, "helper": helper_summary_for(item["helperId"], item.get("helper"))}
         for item in items
         if not is_blocked_pair(current_user.user_id, item["helperId"])
     ]}
