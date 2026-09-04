@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from typing import Protocol
+import uuid
 
 from app.auth import CurrentUser
+from app.db import actor_connection, admin_connection
+from app.settings import settings
 
 
 class RequestDismissalRepository(Protocol):
@@ -38,10 +41,38 @@ class MemoryRequestDismissalRepository:
         self._relations.clear()
 
 
-request_dismissal_repository: RequestDismissalRepository = (
-    MemoryRequestDismissalRepository()
-)
+class PostgresRequestDismissalRepository:
+    async def list_ids(self, actor: CurrentUser) -> set[str]:
+        async with actor_connection(actor) as conn:
+            rows = await conn.fetch(
+                "select request_id from request_dismissals where user_id = app.current_actor()"
+            )
+        return {str(row["request_id"]) for row in rows}
+
+    async def dismiss(self, actor: CurrentUser, request_id: str) -> None:
+        async with actor_connection(actor) as conn:
+            await conn.execute(
+                """insert into request_dismissals (user_id, request_id)
+                   values (app.current_actor(), $1)
+                   on conflict do nothing""",
+                uuid.UUID(request_id),
+            )
+
+    async def restore(self, actor: CurrentUser, request_id: str) -> None:
+        async with actor_connection(actor) as conn:
+            await conn.execute(
+                "delete from request_dismissals where user_id = app.current_actor() and request_id = $1",
+                uuid.UUID(request_id),
+            )
+
+    async def reset(self) -> None:
+        async with admin_connection() as conn:
+            await conn.execute("delete from request_dismissals")
+
+
+_memory = MemoryRequestDismissalRepository()
+_postgres = PostgresRequestDismissalRepository()
 
 
 def get_request_dismissal_repository() -> RequestDismissalRepository:
-    return request_dismissal_repository
+    return _postgres if settings.request_repository == "postgres" else _memory

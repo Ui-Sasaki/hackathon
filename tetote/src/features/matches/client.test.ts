@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ApiClient } from "../../api/client";
 import { ApiError, ApiNetworkError } from "../../api/errors";
-import { getMatch, matchDetailLoadingState } from "./client";
+import { completeMatch, createReview, disputeMatch, getMatch, matchDetailLoadingState } from "./client";
 
 const response = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), {
@@ -82,5 +82,36 @@ describe("TODO 20: match detail API", () => {
     const result = await getMatch("match-1", client);
     expect(result).toMatchObject({ status: "error", matchId: "match-1", match: null });
     if (result.status === "error") expect(result.error).toBeInstanceOf(ApiNetworkError);
+  });
+});
+
+describe("match actions", () => {
+  it("connects completion, dispute, and review without sending actor identity", async () => {
+    const match = { id: "match/1", status: "matched" };
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify(match), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    const client = new ApiClient({ baseUrl: "http://api.test", fetch: fetchMock as never });
+
+    await completeMatch("match/1", "helper", client);
+    await disputeMatch("match/1", "予定と異なる作業を求められました", client);
+    await createReview("match/1", {
+      onTime: true,
+      polite: true,
+      safetyAware: true,
+      communicative: true,
+      comment: " ありがとうございました ",
+    }, client);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://api.test/matches/match%2F1/complete",
+      "http://api.test/matches/match%2F1/dispute",
+      "http://api.test/matches/match%2F1/reviews",
+    ]);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ completed: true, actorRole: "helper" });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ reason: "予定と異なる作業を求められました" });
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({
+      onTime: true, polite: true, safetyAware: true, communicative: true, comment: "ありがとうございました",
+    });
   });
 });

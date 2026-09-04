@@ -28,15 +28,16 @@ from app.repositories.applications import (
 from app.repositories.matches import MemoryMatchRepository, PostgresMatchRepository
 from app.repositories.messages import MemoryMessageRepository, PostgresMessageRepository
 from app.repositories.user_settings import (
-    MemoryUserSettingsRepository, UserSettingsRepository,
+    MemoryUserSettingsRepository, PostgresUserSettingsRepository, UserSettingsRepository,
     get_user_settings_repository,
 )
 from app.repositories.request_dismissals import (
-    MemoryRequestDismissalRepository, RequestDismissalRepository,
+    MemoryRequestDismissalRepository, PostgresRequestDismissalRepository,
+    RequestDismissalRepository,
     get_request_dismissal_repository,
 )
 from app.repositories.saved_requests import (
-    MemorySavedRequestRepository, SavedRequestRepository,
+    MemorySavedRequestRepository, PostgresSavedRequestRepository, SavedRequestRepository,
     get_saved_request_repository,
 )
 from app.settings import load_settings
@@ -161,7 +162,8 @@ def test_user_settings_require_authentication() -> None:
 
 def test_user_settings_repository_contract() -> None:
     required: set[str] = {"get", "update", "reset"}
-    assert required <= set(dir(MemoryUserSettingsRepository))
+    for implementation in (MemoryUserSettingsRepository, PostgresUserSettingsRepository):
+        assert required <= set(dir(implementation))
     repository: UserSettingsRepository = get_user_settings_repository()
     assert required <= set(dir(repository))
 
@@ -207,7 +209,8 @@ def test_dismiss_hides_unavailable_request_existence() -> None:
 
 def test_request_dismissal_repository_contract() -> None:
     required = {"list_ids", "dismiss", "restore", "reset"}
-    assert required <= set(dir(MemoryRequestDismissalRepository))
+    for implementation in (MemoryRequestDismissalRepository, PostgresRequestDismissalRepository):
+        assert required <= set(dir(implementation))
     repository: RequestDismissalRepository = get_request_dismissal_repository()
     assert required <= set(dir(repository))
 
@@ -248,7 +251,8 @@ def test_saved_requests_hide_missing_blocked_and_cancelled_requests() -> None:
 
 def test_saved_request_repository_contract() -> None:
     required = {"list_ids", "save", "remove", "reset"}
-    assert required <= set(dir(MemorySavedRequestRepository))
+    for implementation in (MemorySavedRequestRepository, PostgresSavedRequestRepository):
+        assert required <= set(dir(implementation))
     repository: SavedRequestRepository = get_saved_request_repository()
     assert required <= set(dir(repository))
 
@@ -794,13 +798,13 @@ def test_repository_implementations_share_application_contract() -> None:
 
 
 def test_repository_implementations_share_match_contract() -> None:
-    operations = {"get", "create", "complete", "dispute", "reset"}
+    operations = {"list_for_user", "get", "create", "complete", "dispute", "reset"}
     for implementation in (MemoryMatchRepository, PostgresMatchRepository):
         assert operations <= set(dir(implementation))
 
 
 def test_repository_implementations_share_message_contract() -> None:
-    operations = {"list_for_match", "create", "reset"}
+    operations = {"peek_for_match", "list_for_match", "create", "reset"}
     for implementation in (MemoryMessageRepository, PostgresMessageRepository):
         assert operations <= set(dir(implementation))
 
@@ -1013,6 +1017,51 @@ def test_session_dependency_returns_verified_user(monkeypatch) -> None:
     user = asyncio.run(get_current_user(request))
     assert user.user_id == "usr_101"
     assert user.verification_status == "approved"
+
+
+def test_session_dependency_supports_async_database_lookup(monkeypatch) -> None:
+    class FakeSession:
+        def get_user_id(self) -> str:
+            return "persisted-user"
+
+        def get_access_token_payload(self) -> dict:
+            return {}
+
+    def fake_verify_session(**_options):
+        async def verify(_request):
+            return FakeSession()
+        return verify
+
+    async def database_lookup(user_id: str) -> dict:
+        assert user_id == "persisted-user"
+        return {
+            "role": "member", "status": "active", "emailVerified": True,
+            "verificationStatus": "approved",
+        }
+
+    monkeypatch.setattr(auth_module, "SUPERTOKENS_ENABLED", True)
+    monkeypatch.setattr(auth_module, "verify_session", fake_verify_session, raising=False)
+    monkeypatch.setattr(auth_module, "_user_lookup", database_lookup)
+    request = Request({"type": "http", "method": "GET", "path": "/profile", "headers": []})
+
+    user = asyncio.run(get_current_user(request))
+    assert user.user_id == "persisted-user"
+    assert user.email_verified is True
+
+
+def test_suspended_database_user_is_rejected(monkeypatch) -> None:
+    async def suspended_lookup(_user_id: str) -> dict:
+        return {
+            "role": "member", "status": "suspended", "emailVerified": True,
+            "verificationStatus": "approved",
+        }
+
+    monkeypatch.setattr(auth_module, "AUTH_MOCK_ENABLED", True)
+    monkeypatch.setattr(auth_module, "_user_lookup", suspended_lookup)
+    request = Request({"type": "http", "method": "GET", "path": "/profile", "headers": []})
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(get_current_user(request))
+    assert exc_info.value.detail == {"code": "USER_SUSPENDED"}
 
 
 def test_auth_mock_returns_default_user_without_session(monkeypatch) -> None:
@@ -1344,6 +1393,81 @@ def test_match_detail_is_available_only_to_participants() -> None:
     forbidden = client.get(f"/matches/{match_id}")
     assert forbidden.status_code == 403
     assert forbidden.json()["error"]["code"] == "ROLE_FORBIDDEN"
+
+
+def test_chat_list_returns_only_participant_matches_without_marking_read() -> None:
+    match_id = create_match()
+
+    async def helper_user() -> CurrentUser:
+        return HELPER
+
+    app.dependency_overrides[get_current_user] = helper_user
+    sent = client.post(
+        f"/matches/{match_id}/messages", json={"body": "明日の14時に伺います"},
+    )
+    assert sent.status_code == 201
+
+    app.dependency_overrides[get_current_user] = requester_user
+    response = client.get("/matches")
+    assert response.status_code == 200
+    assert response.json()["nextCursor"] is None
+    assert response.json()["items"] == [{
+        "matchId": match_id,
+        "status": "matched",
+        "counterpart": {"id": HELPER.user_id, "displayName": "田中 悠"},
+        "request": {
+            "id": SEED_REQUEST_1024,
+            "title": "犬の散歩をお願いしたい",
+            "scheduledAt": "2026-08-19T17:00:00+09:00",
+            "areaLabel": "大学周辺・約1km",
+        },
+        "latestMessage": sent.json(),
+        "unreadCount": 1,
+        "updatedAt": sent.json()["sentAt"],
+    }]
+    assert crud_module.messages[match_id][0]["readAt"] is None
+
+    async def outsider_user() -> CurrentUser:
+        return CurrentUser(
+            user_id="usr_outsider", role="member", status="active",
+            email_verified=True, verification_status="approved",
+        )
+
+    app.dependency_overrides[get_current_user] = outsider_user
+    assert client.get("/matches").json()["items"] == []
+
+
+def test_chat_list_supports_cursor_and_hides_blocked_counterpart() -> None:
+    first_match_id = create_match()
+    crud_module.matches["match_second"] = {
+        **crud_module.matches[first_match_id],
+        "id": "match_second",
+        "matchedAt": "2099-08-20T10:00:00+09:00",
+    }
+    repository = crud_module.get_match_repository()
+    asyncio.run(repository.create(REQUESTER, crud_module.matches["match_second"]))
+    crud_module.messages["match_second"] = []
+
+    first_page = client.get("/matches", params={"limit": 1})
+    assert first_page.status_code == 200
+    assert first_page.json()["items"][0]["matchId"] == "match_second"
+    assert first_page.json()["nextCursor"] == "match_second"
+
+    second_page = client.get(
+        "/matches", params={"limit": 1, "cursor": "match_second"},
+    )
+    assert second_page.status_code == 200
+    assert second_page.json()["items"][0]["matchId"] == first_match_id
+    assert second_page.json()["nextCursor"] is None
+
+    invalid = client.get("/matches", params={"cursor": "missing"})
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "INVALID_CURSOR"
+
+    assert client.post(
+        f"/users/{HELPER.user_id}/block", json={"blocked": True},
+    ).status_code == 201
+    assert client.get("/matches").json()["items"] == []
 
 
 def test_match_detail_hides_missing_and_blocked_matches() -> None:

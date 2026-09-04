@@ -39,6 +39,10 @@ def _row_to_record(row: Any) -> MessageRecord:
 
 
 class MessageRepository(Protocol):
+    async def peek_for_match(
+        self, actor: CurrentUser, match_id: str, *, blocked_user_ids: Sequence[str] = ()
+    ) -> list[MessageRecord]: ...
+
     async def list_for_match(
         self, actor: CurrentUser, match_id: str, *, blocked_user_ids: Sequence[str] = ()
     ) -> list[MessageRecord]: ...
@@ -70,6 +74,15 @@ class MemoryMessageRepository:
             result.append(deepcopy(item))
         return result
 
+    async def peek_for_match(
+        self, actor: CurrentUser, match_id: str, *, blocked_user_ids: Sequence[str] = ()
+    ) -> list[MessageRecord]:
+        del actor
+        return [
+            deepcopy(item) for item in self._items.get(match_id, [])
+            if item["senderId"] not in blocked_user_ids
+        ]
+
     async def create(
         self, actor: CurrentUser, match_id: str, body: str,
         *, moderation_status: str = "allowed",
@@ -95,6 +108,25 @@ class PostgresMessageRepository:
                          msg.sent_at, msg.read_at,
                          app.auth_subject_of(msg.sender_id) as sender_auth_subject
                     from messages msg"""
+
+    async def peek_for_match(
+        self, actor: CurrentUser, match_id: str, *, blocked_user_ids: Sequence[str] = ()
+    ) -> list[MessageRecord]:
+        del blocked_user_ids
+        try:
+            parsed_id = uuid.UUID(match_id)
+        except ValueError:
+            return []
+        async with actor_connection(actor) as conn:
+            rows = await conn.fetch(
+                self._SELECT + """
+                 join matches m on m.id = msg.match_id
+                where msg.match_id = $1
+                  and app.match_is_visible(m.id)
+                order by msg.sent_at, msg.id""",
+                parsed_id,
+            )
+        return [_row_to_record(row) for row in rows]
 
     async def list_for_match(
         self, actor: CurrentUser, match_id: str, *, blocked_user_ids: Sequence[str] = ()

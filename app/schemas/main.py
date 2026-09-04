@@ -208,6 +208,8 @@ class RequestUpdateInput(ContractModel):
 
 
 class ProfileUpdateInput(ContractModel):
+    model_config = ConfigDict(extra="forbid")
+
     displayName: str | None = Field(None, min_length=1, max_length=50)
     areaCode: str | None = Field(None, min_length=1, max_length=30)
     region: str | None = Field(None, min_length=1, max_length=20)
@@ -226,6 +228,8 @@ class ProfileUpdateInput(ContractModel):
 
     @model_validator(mode="after")
     def validate_helper_details(self) -> "ProfileUpdateInput":
+        if "displayName" in self.model_fields_set and self.displayName is None:
+            raise ValueError("displayName cannot be null")
         if self.helperType == "student" and not all(
             (self.university, self.faculty, self.schoolYear)
         ):
@@ -376,6 +380,33 @@ class MessageResponse(ContractModel):
 class MessageListResponse(ContractModel):
     items: list[MessageResponse]
     nextCursor: str | None = Field(description="次ページなしの場合null。現行実装は常にnull")
+
+
+class ChatRequestSummary(ContractModel):
+    id: str
+    title: str
+    scheduledAt: datetime
+    areaLabel: str
+
+
+class ChatCounterpartSummary(ContractModel):
+    id: str
+    displayName: str
+
+
+class ChatSummary(ContractModel):
+    matchId: str
+    status: MatchStatus
+    counterpart: ChatCounterpartSummary
+    request: ChatRequestSummary
+    latestMessage: MessageResponse | None
+    unreadCount: int = Field(ge=0)
+    updatedAt: datetime
+
+
+class ChatListResponse(ContractModel):
+    items: list[ChatSummary]
+    nextCursor: str | None = Field(description="次ページなしの場合null")
 
 
 class CompletionInput(ContractModel):

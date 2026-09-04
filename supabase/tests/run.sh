@@ -10,7 +10,7 @@
 #    RLS を迂回するため、所有者で実行すると全件通ってしまい何も検証できない。
 set -euo pipefail
 
-PGBIN="${PGBIN:-/usr/lib/postgresql/18/bin}"
+PGBIN="${PGBIN:-$(pg_config --bindir)}"
 PGHOST="${PGHOST:-127.0.0.1}"
 PGPORT="${PGPORT:-55432}"
 PGSUPERUSER="${PGSUPERUSER:-tetote}"
@@ -82,6 +82,26 @@ echo "=== 10. チャット永続化・既読・認可検査（非特権ロール
 echo "=== 11. 完了確認・dispute原子処理検査（非特権ロール tetote_app）==="
 "$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
   -v ON_ERROR_STOP=1 -f "$HERE/atomic_match_completion.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
+echo "=== 11.1 チャット一覧・認可検査（非特権ロール tetote_app）==="
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/chat_list_persistence.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
+echo "=== 12. 認証境界・プロフィール永続化検査（非特権ロール tetote_app）==="
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/identity_profile_persistence.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
+echo "=== 13. ブロック永続化・監査検査（非特権ロール tetote_app）==="
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/block_persistence.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
+echo "=== 14. 通報・依頼停止・監査検査（非特権ロール tetote_app）==="
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/report_persistence.sql" 2>&1 \
   | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
 
 echo "=== 全検査を通過した ==="

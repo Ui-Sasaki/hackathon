@@ -46,6 +46,20 @@ from app.repositories.saved_requests import (
 from app.repositories.user_settings import (
     UserSettingsRepository, get_user_settings_repository,
 )
+from app.repositories.profiles import (
+    ProfileRepository, ProfileValidationError, configure_memory_profile_store,
+    get_profile_repository, resolve_authenticated_user,
+)
+from app.repositories.blocks import (
+    BlockRepository, BlockRepositoryError, get_block_repository,
+)
+from app.repositories.reports import (
+    ReportRepository, ReportRepositoryError, get_report_repository,
+)
+from app.repositories.verifications import (
+    VerificationRepository, VerificationRepositoryError, get_verification_repository,
+)
+from app.settings import settings
 from app.services.applications import (
     create_application as create_application_service,
     select_application as select_application_service,
@@ -65,7 +79,7 @@ from app.schemas import (
     AchievementInput, AchievementResponse, AchievementVisibilityInput,
     ApplicationInput, ApplicationListResponse, ApplicationResponse,
     CharacterProgressResponse,
-    BlockInput, BlockResponse, CompletionInput, DisputeInput, ErrorResponse,
+    BlockInput, BlockResponse, ChatListResponse, CompletionInput, DisputeInput, ErrorResponse,
     LocationResolveInput, LocationResolveResponse, MatchResponse, MessageInput,
     MaskingConfirmationResponse, MessageListResponse, MessageResponse,
     ProfileResponse, ProfileUpdateInput,
@@ -86,9 +100,9 @@ app = FastAPI(
     description=(
         "地域の依頼と支援者をつなぐAPI契約。業務APIはSuperTokensのHttpOnly Cookie"
         "セッションが必須で、ユーザーID・ロール・送信日時はサーバーが決定する。"
-        "`/auth/*` はSuperTokensが提供する。依頼はRepositoryに保存されるが、応募以降、"
-        "AI、本人確認は現在開発用インメモリ実装である。`/_mock/reset` は明示的に有効化"
-        "した非本番環境だけで利用できる。"
+        "`/auth/*` はSuperTokensが提供する。業務データはRepository境界で本番Postgresへ"
+        "切り替える。レビューとAI実績は現在開発用インメモリ実装である。"
+        "`/_mock/reset` は明示的に有効化した非本番環境だけで利用できる。"
     ),
 )
 
@@ -393,9 +407,11 @@ class RequestIdMiddleware:
 app.add_middleware(RequestIdMiddleware)
 # CORS must be the outermost middleware so responses produced directly by
 # SuperTokens (including refresh failures) receive the browser CORS headers.
+_origins_env = os.getenv("WEBSITE_DOMAIN", "http://localhost:3000")
+_allow_origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("WEBSITE_DOMAIN", "http://localhost:3000")],
+    allow_origins=_allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=cors_headers(),
@@ -432,6 +448,11 @@ async def request_dismissal_repository_dependency() -> RequestDismissalRepositor
 
 async def saved_request_repository_dependency() -> SavedRequestRepository:
     return get_saved_request_repository()
+
+
+async def profile_repository_dependency() -> ProfileRepository:
+    """Resolve the profile repository without a test-time threadpool hop."""
+    return get_profile_repository()
 
 
 def now_iso() -> str:
@@ -547,7 +568,11 @@ def reset_store() -> None:
 
 
 reset_store()
-configure_user_lookup(lambda user_id: users_store.get(user_id))
+configure_memory_profile_store(lambda: users_store)
+if settings.request_repository == "postgres":
+    configure_user_lookup(resolve_authenticated_user)
+else:
+    configure_user_lookup(lambda user_id: users_store.get(user_id))
 
 
 def create_user_profile(user_id: str) -> None:
@@ -566,7 +591,8 @@ def create_user_profile(user_id: str) -> None:
     )
 
 
-configure_user_creator(create_user_profile)
+if settings.request_repository == "memory":
+    configure_user_creator(create_user_profile)
 def match_or_404(match_id: str) -> dict:
     return get_or_404(matches, match_id, "MATCH_NOT_FOUND")
 
@@ -638,6 +664,8 @@ async def reset_mock(
     application_repository: ApplicationRepository = Depends(
         application_repository_dependency
     ),
+    match_repository: MatchRepository = Depends(match_repository_dependency),
+    message_repository: MessageRepository = Depends(message_repository_dependency),
     user_settings_repository: UserSettingsRepository = Depends(
         user_settings_repository_dependency
     ),
@@ -651,7 +679,8 @@ async def reset_mock(
     reset_store()
     await repository.reset()
     await application_repository.reset()
-    await get_match_repository().reset()
+    await match_repository.reset()
+    await message_repository.reset()
     await get_upload_repository().reset()
     await structure_audit_repository.reset()
     await user_settings_repository.reset()
@@ -661,29 +690,31 @@ async def reset_mock(
 
 
 @app.get("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを取得", description="Cookieセッションの本人の公開可能なプロフィールだけを返す。", responses=api_errors(401, 403, 500))
-async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
-    return users_store[current_user.user_id]
+async def get_profile(
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: ProfileRepository = Depends(profile_repository_dependency),
+):
+    profile = await repository.get(current_user)
+    if profile is None:
+        raise HTTPException(404, detail={"code": "USER_PROFILE_NOT_FOUND"})
+    return profile
 
 
 @app.patch("/profile", response_model=ProfileResponse, tags=["Profile"], summary="自分のプロフィールを更新", description="既存プロフィール画面の編集項目を更新する。ユーザーID、ロール、本人確認状態は入力できない。端末ローカルの画像URIは受け付けない。", responses=api_errors(401, 403, 422, 500))
 async def update_profile(
     body: ProfileUpdateInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: ProfileRepository = Depends(profile_repository_dependency),
 ):
     changes = body.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(422, detail={"code": "NO_CHANGES"})
-    profile = users_store[current_user.user_id]
-    candidate = {**profile, **changes}
-    if candidate.get("helperType") == "student" and not all(
-        candidate.get(field) for field in ("university", "faculty", "schoolYear")
-    ):
-        raise HTTPException(422, detail={"code": "STUDENT_PROFILE_INCOMPLETE"})
-    if candidate.get("helperType") == "worker" and not candidate.get("occupation"):
-        raise HTTPException(422, detail={"code": "WORKER_PROFILE_INCOMPLETE"})
-    profile.update(changes)
-    profile["updatedAt"] = now_iso()
-    return profile
+    try:
+        return await repository.update(current_user, changes)
+    except KeyError as exc:
+        raise HTTPException(404, detail={"code": "USER_PROFILE_NOT_FOUND"}) from exc
+    except ProfileValidationError as exc:
+        raise HTTPException(422, detail={"code": exc.code}) from exc
 
 
 def upload_repository_dependency() -> UploadRepository:
@@ -1477,6 +1508,69 @@ async def select_application(
     return match
 
 
+@app.get("/matches", response_model=ChatListResponse, tags=["Matches"], summary="自分のチャット一覧を取得", description="認証ユーザーが当事者であるマッチだけを最終更新の新しい順で返す。一覧取得ではメッセージを既読にしない。ブロック関係にある相手とのマッチは除外する。", responses=api_errors(401, 422, 500))
+async def list_chats(
+    cursor: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
+    match_repository: MatchRepository = Depends(match_repository_dependency),
+    message_repository: MessageRepository = Depends(message_repository_dependency),
+    request_repository: RequestRepository = Depends(request_repository_dependency),
+):
+    visible = []
+    for match in await match_repository.list_for_user(current_user):
+        other_id = match["helperId"] if match["requesterId"] == current_user.user_id else match["requesterId"]
+        if is_blocked_pair(current_user.user_id, other_id):
+            continue
+        if "requestTitle" in match:
+            request_item = {
+                "id": match["requestId"],
+                "title": match["requestTitle"],
+                "scheduledAt": match["requestScheduledAt"],
+                "areaLabel": REGIONS.get(
+                    match["requestAreaCode"], {"label": match["requestAreaCode"]},
+                )["label"],
+            }
+            counterpart_display_name = match["counterpartDisplayName"]
+        else:
+            request_item = await request_repository.get(current_user, match["requestId"])
+            counterpart = users_store.get(other_id)
+            if request_item is None or counterpart is None:
+                continue
+            counterpart_display_name = counterpart["displayName"]
+        chat_messages = await message_repository.peek_for_match(current_user, match["id"])
+        latest = chat_messages[-1] if chat_messages else None
+        unread_count = sum(
+            item["senderId"] != current_user.user_id and item["readAt"] is None
+            for item in chat_messages
+        )
+        visible.append({
+            "matchId": match["id"],
+            "status": match["status"],
+            "counterpart": {"id": other_id, "displayName": counterpart_display_name},
+            "request": {key: request_item[key] for key in ("id", "title", "scheduledAt", "areaLabel")},
+            "latestMessage": latest,
+            "unreadCount": unread_count,
+            "updatedAt": latest["sentAt"] if latest else match["matchedAt"],
+        })
+    visible.sort(
+        key=lambda item: (
+            datetime.fromisoformat(str(item["updatedAt"]).replace("Z", "+00:00")),
+            item["matchId"],
+        ),
+        reverse=True,
+    )
+    start = 0
+    if cursor is not None:
+        positions = [index for index, item in enumerate(visible) if item["matchId"] == cursor]
+        if not positions:
+            raise HTTPException(422, detail={"code": "INVALID_CURSOR"})
+        start = positions[0] + 1
+    page = visible[start:start + limit]
+    next_cursor = page[-1]["matchId"] if start + limit < len(visible) and page else None
+    return {"items": page, "nextCursor": next_cursor}
+
+
 @app.get("/matches/{match_id}", response_model=MatchResponse, tags=["Matches"], summary="マッチ詳細を取得", description="依頼者と選択された支援者本人だけが取得できる。", responses=api_errors(401, 403, 404, 500))
 async def get_match(
     match_id: str,
@@ -1705,14 +1799,12 @@ async def create_verification(
     body: VerificationInput,
     current_user: CurrentUser = Depends(get_current_user),
     repository: UploadRepository = Depends(upload_repository_dependency),
+    verification_repository: VerificationRepository = Depends(get_verification_repository),
 ):
     if body.method == "student_card" and not body.uploadId:
         raise HTTPException(422, detail={"code": "UPLOAD_REQUIRED"})
     # 重複確認を画像の確定より先に行い、二重申請でアップロードを消費させない。
-    if any(
-        item["status"] == "pending" and item["userId"] == current_user.user_id
-        for item in verifications.values()
-    ):
+    if await verification_repository.has_pending(current_user):
         raise HTTPException(409, detail={"code": "VERIFICATION_ALREADY_PENDING"})
     image = None
     if body.uploadId:
@@ -1722,57 +1814,34 @@ async def create_verification(
         image = await repository.promote_to_image(body.uploadId, current_user.user_id)
         if image is None:
             raise HTTPException(409, detail={"code": "UPLOAD_CONTENT_MISSING"})
-    item = {
-        "id": new_id("verification"),
-        "userId": current_user.user_id,
-        "method": body.method,
-        # 画像の参照はサーバー内部にだけ持つ。レスポンスにも監査ログにも出さない。
-        "_imageId": image["id"] if image else None,
-        "status": "pending",
-        "createdAt": now_iso(),
-    }
-    verifications[item["id"]] = item
-    users_store[current_user.user_id]["verificationStatus"] = "pending"
-    return item
+    try:
+        return await verification_repository.create(
+            current_user, method=body.method,
+            storage_object_key=image["storageObjectKey"] if image else None,
+            image_id=image["id"] if image else None,
+        )
+    except VerificationRepositoryError as exc:
+        if exc.code == "VERIFICATION_ALREADY_PENDING":
+            raise HTTPException(409, detail={"code": exc.code}) from exc
+        raise HTTPException(422, detail={"code": exc.code}) from exc
 
 
-@app.post("/reports", response_model=ReportResponse, status_code=201, tags=["Safety"], summary="違反・危険行為を通報", description="通報者はセッションから決定する。詐欺または危険作業の依頼通報はhighとなり、対象依頼をsuspendedへ自動遷移する。", responses=api_errors(401, 422, 500))
+@app.post("/reports", response_model=ReportResponse, status_code=201, tags=["Safety"], summary="違反・危険行為を通報", description="通報者はセッションから決定する。詐欺または危険作業の依頼通報はhighとなり、対象依頼をsuspendedへ自動遷移する。", responses=api_errors(401, 404, 422, 500))
 async def create_report(
     body: ReportInput,
     current_user: CurrentUser = Depends(get_current_user),
-    repository: RequestRepository = Depends(request_repository_dependency),
+    repository: ReportRepository = Depends(get_report_repository),
 ):
-    item = {
-        "id": new_id("report"),
-        "reporterId": current_user.user_id,
-        **body.model_dump(),
-        "severity": "high" if body.reason in {"fraud", "dangerous_work"} else "medium",
-        "status": "open",
-        "createdAt": now_iso(),
-    }
-    reports[item["id"]] = item
-    record_audit_event(
-        actor_id=current_user.user_id,
-        event_type="report_created",
-        target_type=body.targetType,
-        target_id=body.targetId,
-        detail={"reportId": item["id"], "severity": item["severity"]},
-    )
-    if item["severity"] == "high" and body.targetType == "request":
-        try:
-            target_id = UUID(body.targetId)
-        except ValueError:
-            target_id = None
-        if target_id is not None:
-            await repository.set_status(current_user, str(target_id), "suspended")
-            record_audit_event(
-                actor_id=current_user.user_id,
-                event_type="request_auto_suspended",
-                target_type="request",
-                target_id=body.targetId,
-                detail={"reportId": item["id"]},
-            )
-    return item
+    try:
+        return await repository.create(
+            current_user,
+            target_type=body.targetType,
+            target_id=body.targetId,
+            reason=body.reason,
+            description=body.description,
+        )
+    except ReportRepositoryError as exc:
+        raise HTTPException(404, detail={"code": exc.code}) from exc
 
 
 @app.post("/users/{user_id}/block", response_model=BlockResponse, status_code=201, tags=["Safety"], summary="利用者をブロックまたは解除", description="blocked=trueでブロック、falseで解除する。セッション本人との関係として保存し、対象との依頼・応募・メッセージを非表示にする。自分自身は指定不可。", responses=api_errors(401, 404, 422, 500))
@@ -1780,20 +1849,12 @@ async def set_user_block(
     user_id: str,
     body: BlockInput,
     current_user: CurrentUser = Depends(get_current_user),
+    repository: BlockRepository = Depends(get_block_repository),
 ):
-    if user_id == current_user.user_id:
-        raise HTTPException(422, detail={"code": "SELF_BLOCK_NOT_ALLOWED"})
-    if user_id not in users_store:
-        raise HTTPException(404, detail={"code": "USER_PROFILE_NOT_FOUND"})
-    relation = (current_user.user_id, user_id)
-    if body.blocked:
-        blocks.add(relation)
-    else:
-        blocks.discard(relation)
-    record_audit_event(
-        actor_id=current_user.user_id,
-        event_type="user_blocked" if body.blocked else "user_unblocked",
-        target_type="user",
-        target_id=user_id,
-    )
-    return {"userId": user_id, "blocked": relation in blocks, "updatedAt": now_iso()}
+    try:
+        return await repository.set(current_user, user_id, body.blocked)
+    except BlockRepositoryError as exc:
+        status_code = 422 if exc.code == "SELF_BLOCK_NOT_ALLOWED" else 404
+        if exc.code in {"ROLE_FORBIDDEN", "USER_SUSPENDED"}:
+            status_code = 403
+        raise HTTPException(status_code, detail={"code": exc.code}) from exc

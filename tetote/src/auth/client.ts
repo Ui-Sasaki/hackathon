@@ -8,6 +8,7 @@ import Session, {
   doesSessionExist,
   signOut as superTokensSignOut,
 } from "supertokens-web-js/recipe/session";
+import { setUnauthorizedHandler } from "./unauthorized";
 
 export type VerificationStatus =
   | "unverified"
@@ -98,6 +99,9 @@ export function initializeAuthClient(onUnauthorized?: () => void): void {
     ],
   });
   initialized = true;
+  // also register a handler that other parts of the app (API client)
+  // can call when they observe a 401 response.
+  setUnauthorizedHandler(onUnauthorized ?? null);
 }
 
 async function getProfile(): Promise<AuthProfile> {
@@ -201,4 +205,5 @@ export const browserAuthClient: AuthClient = {
 
 export function resetAuthClientForTests(): void {
   initialized = false;
+  setUnauthorizedHandler(null);
 }

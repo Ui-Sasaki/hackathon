@@ -56,38 +56,38 @@
 
 関連Draft: [#68](https://github.com/Ui-Sasaki/hackathon/pull/68)
 
-- [ ] SuperTokens subjectから内部の`users.id`を解決する。
-- [ ] role、利用停止、メール確認、本人確認状態をDBから取得する。
-- [ ] 再認証時にプロフィール情報を上書きしない。
-- [ ] actor contextなしの業務クエリをRLSで拒否する。
+- [x] SuperTokens subjectから内部の`users.id`を解決する。
+- [x] role、利用停止、メール確認、本人確認状態をDBから取得する。
+- [x] 再認証時にプロフィール情報を上書きしない。
+- [x] actor contextなしの業務クエリをRLSで拒否する。
 - [ ] 実SuperTokensとの結合確認を行う。
 
 ### 06. プロフィールの永続化
 
 関連Draft: [#68](https://github.com/Ui-Sasaki/hackathon/pull/68)
 
-- [ ] Profile RepositoryのPostgres実装を統合する。
-- [ ] 本人だけがプロフィールを更新できるようにする。
-- [ ] role、本人確認状態などの保護フィールドを更新入力から除外する。
-- [ ] 活動地域マスタとプロフィール項目の制約を適用する。
-- [ ] 公開プロフィールへ機微情報を含めない。
+- [x] Profile RepositoryのPostgres実装を統合する。
+- [x] 本人だけがプロフィールを更新できるようにする。
+- [x] role、本人確認状態などの保護フィールドを更新入力から除外する。
+- [x] 活動地域マスタとプロフィール項目の制約を適用する。
+- [x] 公開プロフィールへ機微情報を含めない。
 
 ### 07. ブロック関係の永続化
 
 関連Draft: [#69](https://github.com/Ui-Sasaki/hackathon/pull/69)
 
-- [ ] ブロックと解除をPostgresへ保存する。
-- [ ] 自己ブロックと存在しない対象を拒否する。
-- [ ] ブロック関係と監査ログを同一transactionで更新する。
-- [ ] 依頼、応募、マッチ、メッセージの取得・送信へ反映する。
-- [ ] ブロックと解除を冪等にする。
+- [x] ブロックと解除をPostgresへ保存する。
+- [x] 自己ブロックと存在しない対象を拒否する。
+- [x] ブロック関係と監査ログを同一transactionで更新する。
+- [x] 依頼、応募、マッチ、メッセージの取得・送信へ反映する。
+- [x] ブロックと解除を冪等にする。
 
 ### 08. 通報と依頼停止の永続化
 
-- [ ] Report RepositoryのPostgres実装を追加する。
-- [ ] 通報対象の存在と閲覧権限を検証する。
-- [ ] reporter IDを認証セッションから決定する。
-- [ ] high risk依頼の停止と監査ログを同一transactionで保存する。
+- [x] Report RepositoryのPostgres実装を追加する。
+- [x] 通報対象の存在と閲覧権限を検証する。
+- [x] reporter IDを認証セッションから決定する。
+- [x] high risk依頼の停止と監査ログを同一transactionで保存する。
 - [ ] 管理者による調査、解決、却下の状態遷移を実装する。
 
 ### 09. 本人確認申請と証明画像管理

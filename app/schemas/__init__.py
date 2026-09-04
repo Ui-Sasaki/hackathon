@@ -9,6 +9,8 @@ from .main import (
     BlockInput,
     BlockResponse,
     CharacterProgressResponse,
+    ChatListResponse,
+    ChatSummary,
     CompletionInput,
     DisputeInput,
     ErrorResponse,

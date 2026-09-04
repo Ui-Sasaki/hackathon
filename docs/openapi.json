@@ -473,6 +473,138 @@
         "title": "CharacterProgressResponse",
         "type": "object"
       },
+      "ChatCounterpartSummary": {
+        "properties": {
+          "displayName": {
+            "title": "Displayname",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "displayName"
+        ],
+        "title": "ChatCounterpartSummary",
+        "type": "object"
+      },
+      "ChatListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChatSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "次ページなしの場合null",
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "ChatListResponse",
+        "type": "object"
+      },
+      "ChatRequestSummary": {
+        "properties": {
+          "areaLabel": {
+            "title": "Arealabel",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "scheduledAt": {
+            "format": "date-time",
+            "title": "Scheduledat",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "scheduledAt",
+          "areaLabel"
+        ],
+        "title": "ChatRequestSummary",
+        "type": "object"
+      },
+      "ChatSummary": {
+        "properties": {
+          "counterpart": {
+            "$ref": "#/components/schemas/ChatCounterpartSummary"
+          },
+          "latestMessage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "matchId": {
+            "title": "Matchid",
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ChatRequestSummary"
+          },
+          "status": {
+            "enum": [
+              "matched",
+              "in_progress",
+              "completion_pending",
+              "completed",
+              "disputed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "unreadCount": {
+            "minimum": 0.0,
+            "title": "Unreadcount",
+            "type": "integer"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "matchId",
+          "status",
+          "counterpart",
+          "request",
+          "latestMessage",
+          "unreadCount",
+          "updatedAt"
+        ],
+        "title": "ChatSummary",
+        "type": "object"
+      },
       "CompletionInput": {
         "properties": {
           "actorRole": {
@@ -1291,6 +1423,7 @@
         "type": "object"
       },
       "ProfileUpdateInput": {
+        "additionalProperties": false,
         "properties": {
           "age": {
             "anyOf": [
@@ -2899,7 +3032,7 @@
     }
   },
   "info": {
-    "description": "地域の依頼と支援者をつなぐAPI契約。業務APIはSuperTokensのHttpOnly Cookieセッションが必須で、ユーザーID・ロール・送信日時はサーバーが決定する。`/auth/*` はSuperTokensが提供する。依頼はRepositoryに保存されるが、応募以降、AI、本人確認は現在開発用インメモリ実装である。`/_mock/reset` は明示的に有効化した非本番環境だけで利用できる。",
+    "description": "地域の依頼と支援者をつなぐAPI契約。業務APIはSuperTokensのHttpOnly Cookieセッションが必須で、ユーザーID・ロール・送信日時はサーバーが決定する。`/auth/*` はSuperTokensが提供する。業務データはRepository境界で本番Postgresへ切り替える。レビューとAI実績は現在開発用インメモリ実装である。`/_mock/reset` は明示的に有効化した非本番環境だけで利用できる。",
     "title": "たすけの輪 API",
     "version": "0.1.0"
   },
@@ -3759,6 +3892,117 @@
         "summary": "現在地を概算地域へ変換",
         "tags": [
           "Locations"
+        ]
+      }
+    },
+    "/matches": {
+      "get": {
+        "description": "認証ユーザーが当事者であるマッチだけを最終更新の新しい順で返す。一覧取得ではメッセージを既読にしない。ブロック関係にある相手とのマッチは除外する。",
+        "operationId": "list_chats_matches_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "VALIDATION_ERROR",
+                    "details": {},
+                    "message": "入力内容を確認してください",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "入力内容を確認してください"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "自分のチャット一覧を取得",
+        "tags": [
+          "Matches"
         ]
       }
     },
@@ -5135,6 +5379,24 @@
               }
             },
             "description": "認証が必要です"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
           },
           "422": {
             "content": {

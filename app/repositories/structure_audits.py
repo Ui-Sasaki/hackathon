@@ -1,6 +1,10 @@
 """依頼構造化の監査メタデータを保存するRepository境界。"""
 
+import json
 from typing import Protocol
+
+from app.db import admin_connection
+from app.settings import settings
 
 
 class StructureAuditRepository(Protocol):
@@ -21,7 +25,24 @@ class MemoryStructureAuditRepository:
         self.items.clear()
 
 
-structure_audit_repository = MemoryStructureAuditRepository()
+class PostgresStructureAuditRepository:
+    async def save(self, audit: dict[str, str]) -> None:
+        async with admin_connection() as conn:
+            await conn.execute(
+                "select app.save_request_structure_audit($1::jsonb)",
+                json.dumps(audit),
+            )
+
+    async def reset(self) -> None:
+        async with admin_connection() as conn:
+            await conn.execute("delete from request_structure_audits")
+
+
+_memory = MemoryStructureAuditRepository()
+_postgres = PostgresStructureAuditRepository()
+structure_audit_repository: StructureAuditRepository = (
+    _postgres if settings.request_repository == "postgres" else _memory
+)
 
 
 def get_structure_audit_repository() -> StructureAuditRepository:

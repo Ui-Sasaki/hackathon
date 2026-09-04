@@ -5,6 +5,7 @@ import {
   ApiTimeoutError,
   toApiError,
 } from "./errors";
+import { triggerUnauthorized } from "../auth/unauthorized";
 
 export type ApiRequestOptions = Omit<RequestInit, "body" | "credentials" | "headers"> & {
   body?: unknown;
@@ -117,7 +118,16 @@ export class ApiClient {
         headers,
         signal: controller.signal,
       });
-      if (!response.ok) throw await toApiError(response);
+      if (!response.ok) {
+        if (response.status === 401) {
+          try {
+            triggerUnauthorized();
+          } catch {
+            /* ignore */
+          }
+        }
+        throw await toApiError(response);
+      }
       if (response.status === 204) return undefined as T;
       return (await response.json()) as T;
     } catch (error) {

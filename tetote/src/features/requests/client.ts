@@ -9,6 +9,7 @@ import { ApiError } from "../../api/errors";
 
 export type PublicRequest = {
   id: string;
+  requesterId?: string;
   title: string;
   description: string;
   category: string;
@@ -20,6 +21,7 @@ export type PublicRequest = {
   acceptedHelpers: number;
   status: string;
   warnings: string[];
+  version?: number;
 };
 
 export type RequestListPage = {
