@@ -1507,7 +1507,7 @@ async def select_application(
     return match
 
 
-@app.get("/matches", response_model=ChatListResponse, tags=["Matches"], summary="自分のチャット一覧を取得", description="認証ユーザーが当事者であるマッチだけを最終更新の新しい順で返す。一覧取得ではメッセージを既読にしない。ブロック関係にある相手とのマッチは除外する。", responses=api_errors(401, 422, 500, 503))
+@app.get("/matches", response_model=ChatListResponse, tags=["Matches"], summary="自分のチャット一覧を取得", description="認証ユーザーが当事者であるマッチだけを最終更新の新しい順で返す。一覧取得ではメッセージを既読にしない。ブロック関係にある相手とのマッチは除外する。", responses=api_errors(401, 422, 500))
 async def list_chats(
     cursor: str | None = Query(None),
     limit: int = Query(20, ge=1, le=100),
@@ -1516,17 +1516,27 @@ async def list_chats(
     message_repository: MessageRepository = Depends(message_repository_dependency),
     request_repository: RequestRepository = Depends(request_repository_dependency),
 ):
-    if not isinstance(match_repository, MemoryMatchRepository) or not isinstance(message_repository, MemoryMessageRepository):
-        raise HTTPException(503, detail={"code": "CHAT_LIST_UNAVAILABLE"})
     visible = []
     for match in await match_repository.list_for_user(current_user):
         other_id = match["helperId"] if match["requesterId"] == current_user.user_id else match["requesterId"]
         if is_blocked_pair(current_user.user_id, other_id):
             continue
-        request_item = await request_repository.get(current_user, match["requestId"])
-        counterpart = users_store.get(other_id)
-        if request_item is None or counterpart is None:
-            continue
+        if "requestTitle" in match:
+            request_item = {
+                "id": match["requestId"],
+                "title": match["requestTitle"],
+                "scheduledAt": match["requestScheduledAt"],
+                "areaLabel": REGIONS.get(
+                    match["requestAreaCode"], {"label": match["requestAreaCode"]},
+                )["label"],
+            }
+            counterpart_display_name = match["counterpartDisplayName"]
+        else:
+            request_item = await request_repository.get(current_user, match["requestId"])
+            counterpart = users_store.get(other_id)
+            if request_item is None or counterpart is None:
+                continue
+            counterpart_display_name = counterpart["displayName"]
         chat_messages = await message_repository.peek_for_match(current_user, match["id"])
         latest = chat_messages[-1] if chat_messages else None
         unread_count = sum(
@@ -1536,7 +1546,7 @@ async def list_chats(
         visible.append({
             "matchId": match["id"],
             "status": match["status"],
-            "counterpart": {"id": other_id, "displayName": counterpart["displayName"]},
+            "counterpart": {"id": other_id, "displayName": counterpart_display_name},
             "request": {key: request_item[key] for key in ("id", "title", "scheduledAt", "areaLabel")},
             "latestMessage": latest,
             "unreadCount": unread_count,

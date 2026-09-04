@@ -115,8 +115,19 @@ class MemoryMatchRepository:
 
 class PostgresMatchRepository:
     async def list_for_user(self, actor: CurrentUser) -> list[MatchRecord]:
-        del actor
-        raise NotImplementedError("chat list persistence is not implemented")
+        async with actor_connection(actor) as conn:
+            rows = await conn.fetch("select * from app.list_own_chat_matches()")
+        result = []
+        for row in rows:
+            item = _row_to_record(row)
+            item.update({
+                "counterpartDisplayName": row["counterpart_display_name"],
+                "requestTitle": row["request_title"],
+                "requestScheduledAt": _iso(row["request_scheduled_at"]),
+                "requestAreaCode": row["request_area_code"],
+            })
+            result.append(item)
+        return result
 
     async def get(self, actor: CurrentUser, match_id: str) -> MatchRecord | None:
         try:

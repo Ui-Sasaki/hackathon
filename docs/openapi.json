@@ -3848,24 +3848,6 @@
               }
             },
             "description": "サーバー内部でエラーが発生しました"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "example": {
-                  "error": {
-                    "code": "STRUCTURE_SERVICE_UNAVAILABLE",
-                    "details": {},
-                    "message": "構造化サービスを利用できません",
-                    "requestId": "trace_0123abcd"
-                  }
-                },
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "構造化サービスを利用できません"
           }
         },
         "security": [

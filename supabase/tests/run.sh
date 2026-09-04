@@ -84,6 +84,11 @@ echo "=== 11. 完了確認・dispute原子処理検査（非特権ロール teto
   -v ON_ERROR_STOP=1 -f "$HERE/atomic_match_completion.sql" 2>&1 \
   | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
 
+echo "=== 11.1 チャット一覧・認可検査（非特権ロール tetote_app）==="
+"$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
+  -v ON_ERROR_STOP=1 -f "$HERE/chat_list_persistence.sql" 2>&1 \
+  | grep -E 'OK |FAIL' | sed 's/^psql:[^ ]* //'
+
 echo "=== 12. 認証境界・プロフィール永続化検査（非特権ロール tetote_app）==="
 "$PGBIN/psql" -h "$PGHOST" -p "$PGPORT" -U tetote_app -d "$PGDATABASE" \
   -v ON_ERROR_STOP=1 -f "$HERE/identity_profile_persistence.sql" 2>&1 \
