@@ -5593,7 +5593,7 @@
         ]
       },
       "post": {
-        "description": "認証済み本人を依頼者としてdraftを作成する。Idempotency-Keyが同じ再送は同じ結果を返す。",
+        "description": "認証済み本人を依頼者として依頼を作成し、利用者が確認済みの内容はそのまま公開（published）する。危険度判定で審査対象になった依頼は pending_review で止まる。Idempotency-Keyが同じ再送は同じ結果を返す。",
         "operationId": "create_request_requests_post",
         "parameters": [
           {
@@ -6828,6 +6828,144 @@
           }
         ],
         "summary": "依頼を自分の一覧から非表示",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/requests/{request_id}/publish": {
+      "post": {
+        "description": "依頼者本人がdraftの依頼をpublishedへ遷移させ、支援者の一覧に載せる。審査待ち(pending_review)は409 REQUEST_UNDER_REVIEW、draft以外は409 INVALID_REQUEST_TRANSITION。",
+        "operationId": "publish_request_requests__request_id__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ROLE_FORBIDDEN",
+                    "details": {},
+                    "message": "この操作を行う権限がありません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "この操作を行う権限がありません"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_NOT_FOUND",
+                    "details": {},
+                    "message": "対象が見つかりません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "対象が見つかりません"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REQUEST_STATE_CONFLICT",
+                    "details": {},
+                    "message": "依頼の状態が更新されているため処理できません",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "依頼の状態が更新されているため処理できません"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "下書きの依頼を公開",
         "tags": [
           "Requests"
         ]

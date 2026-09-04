@@ -65,7 +65,9 @@ from app.services.applications import (
     select_application as select_application_service,
     withdraw_application as withdraw_application_service,
 )
-from app.services.requests import cancel_owned_request, require_request, update_owned_request
+from app.services.requests import (
+    cancel_owned_request, publish_owned_request, require_request, update_owned_request,
+)
 from app.services import images
 from app.repositories.uploads import (
     MemoryUploadRepository, UploadRepository, get_upload_repository,
@@ -1204,7 +1206,7 @@ async def list_requests(
     }
 
 
-@app.post("/requests", response_model=RequestResponse, status_code=201, tags=["Requests"], summary="依頼を作成", description="認証済み本人を依頼者としてdraftを作成する。Idempotency-Keyが同じ再送は同じ結果を返す。", responses=api_errors(401, 422, 500))
+@app.post("/requests", response_model=RequestResponse, status_code=201, tags=["Requests"], summary="依頼を作成", description="認証済み本人を依頼者として依頼を作成し、利用者が確認済みの内容はそのまま公開（published）する。危険度判定で審査対象になった依頼は pending_review で止まる。Idempotency-Keyが同じ再送は同じ結果を返す。", responses=api_errors(401, 422, 500))
 async def create_request(
     body: RequestInput,
     idempotency_key: str = Header(alias="Idempotency-Key"),
@@ -1236,6 +1238,13 @@ async def create_request(
         expected_version=item["version"], bump_version=False,
     ):
         item = {**item, "status": "pending_review"}
+    # 利用者が確認済み（confirmed=true）で送った依頼は、そのまま支援者へ公開する。
+    # draft で止めると一覧（published のみ）に載らず、依頼が誰にも届かない。
+    elif item["status"] == "draft" and await repository.set_status(
+        current_user, item["id"], "published",
+        expected_version=item["version"], bump_version=False,
+    ):
+        item = {**item, "status": "published"}
     if assessment.messages:
         item = {**item, "warnings": list(assessment.messages)}
     idempotency_store[cache_key] = item
@@ -1395,6 +1404,15 @@ async def update_request(
     if assessment is not None and assessment.messages:
         item = {**item, "warnings": list(assessment.messages)}
     return item
+
+
+@app.post("/requests/{request_id}/publish", response_model=RequestResponse, tags=["Requests"], summary="下書きの依頼を公開", description="依頼者本人がdraftの依頼をpublishedへ遷移させ、支援者の一覧に載せる。審査待ち(pending_review)は409 REQUEST_UNDER_REVIEW、draft以外は409 INVALID_REQUEST_TRANSITION。", responses=api_errors(401, 403, 404, 409, 500))
+async def publish_request(
+    request_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+):
+    return await publish_owned_request(repository, current_user, request_id)
 
 
 @app.delete("/requests/{request_id}", status_code=204, tags=["Requests"], summary="自分の依頼を取消", description="依頼者本人が取消可能な状態の依頼をcancelledへ遷移させ、未処理応募もcancelledにする。レスポンス本文はない。", responses=api_errors(401, 403, 404, 409, 500))
