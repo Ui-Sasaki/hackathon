@@ -13,7 +13,7 @@ import { useRouter } from "expo-router";
 const characters = [
   {
     id: 1,
-    image: require("../../../../assets/onboarding_asset/c1.png"),
+    image: require("../../../../assets/onboarding_asset/c2.png"),
     name: "犬-Dog-",
     type: "Caring type（寄り添う）",
     description: "そばに寄り添って、優しく見守ってくれるよ",
@@ -21,7 +21,7 @@ const characters = [
   },
   {
     id: 2,
-    image: require("../../../../assets/onboarding_asset/c2.png"),
+    image: require("../../../../assets/onboarding_asset/c1.png"),
     name: "ウサギ-Rabbit-",
     type: "Cute type（一緒に成長する）",
     description: "おどおどしてるけど一生懸命な性格",
