@@ -25,16 +25,19 @@ from app.repositories.applications import (
     MemoryApplicationRepository, PostgresApplicationRepository,
     get_application_repository,
 )
+from app.repositories.matches import MemoryMatchRepository, PostgresMatchRepository
+from app.repositories.messages import MemoryMessageRepository, PostgresMessageRepository
 from app.repositories.user_settings import (
-    MemoryUserSettingsRepository, UserSettingsRepository,
+    MemoryUserSettingsRepository, PostgresUserSettingsRepository, UserSettingsRepository,
     get_user_settings_repository,
 )
 from app.repositories.request_dismissals import (
-    MemoryRequestDismissalRepository, RequestDismissalRepository,
+    MemoryRequestDismissalRepository, PostgresRequestDismissalRepository,
+    RequestDismissalRepository,
     get_request_dismissal_repository,
 )
 from app.repositories.saved_requests import (
-    MemorySavedRequestRepository, SavedRequestRepository,
+    MemorySavedRequestRepository, PostgresSavedRequestRepository, SavedRequestRepository,
     get_saved_request_repository,
 )
 from app.settings import load_settings
@@ -159,7 +162,8 @@ def test_user_settings_require_authentication() -> None:
 
 def test_user_settings_repository_contract() -> None:
     required: set[str] = {"get", "update", "reset"}
-    assert required <= set(dir(MemoryUserSettingsRepository))
+    for implementation in (MemoryUserSettingsRepository, PostgresUserSettingsRepository):
+        assert required <= set(dir(implementation))
     repository: UserSettingsRepository = get_user_settings_repository()
     assert required <= set(dir(repository))
 
@@ -205,7 +209,8 @@ def test_dismiss_hides_unavailable_request_existence() -> None:
 
 def test_request_dismissal_repository_contract() -> None:
     required = {"list_ids", "dismiss", "restore", "reset"}
-    assert required <= set(dir(MemoryRequestDismissalRepository))
+    for implementation in (MemoryRequestDismissalRepository, PostgresRequestDismissalRepository):
+        assert required <= set(dir(implementation))
     repository: RequestDismissalRepository = get_request_dismissal_repository()
     assert required <= set(dir(repository))
 
@@ -246,7 +251,8 @@ def test_saved_requests_hide_missing_blocked_and_cancelled_requests() -> None:
 
 def test_saved_request_repository_contract() -> None:
     required = {"list_ids", "save", "remove", "reset"}
-    assert required <= set(dir(MemorySavedRequestRepository))
+    for implementation in (MemorySavedRequestRepository, PostgresSavedRequestRepository):
+        assert required <= set(dir(implementation))
     repository: SavedRequestRepository = get_saved_request_repository()
     assert required <= set(dir(repository))
 
@@ -788,6 +794,19 @@ def test_repository_implementations_share_application_contract() -> None:
     for implementation in (MemoryApplicationRepository, PostgresApplicationRepository):
         assert operations <= set(dir(implementation))
     assert "select" in dir(MemoryApplicationRepository)
+    assert "select_atomically" in dir(PostgresApplicationRepository)
+
+
+def test_repository_implementations_share_match_contract() -> None:
+    operations = {"get", "create", "complete", "dispute", "reset"}
+    for implementation in (MemoryMatchRepository, PostgresMatchRepository):
+        assert operations <= set(dir(implementation))
+
+
+def test_repository_implementations_share_message_contract() -> None:
+    operations = {"list_for_match", "create", "reset"}
+    for implementation in (MemoryMessageRepository, PostgresMessageRepository):
+        assert operations <= set(dir(implementation))
 
 
 def test_memory_request_repository_supports_selection_capacity_reservation() -> None:
@@ -998,6 +1017,51 @@ def test_session_dependency_returns_verified_user(monkeypatch) -> None:
     user = asyncio.run(get_current_user(request))
     assert user.user_id == "usr_101"
     assert user.verification_status == "approved"
+
+
+def test_session_dependency_supports_async_database_lookup(monkeypatch) -> None:
+    class FakeSession:
+        def get_user_id(self) -> str:
+            return "persisted-user"
+
+        def get_access_token_payload(self) -> dict:
+            return {}
+
+    def fake_verify_session(**_options):
+        async def verify(_request):
+            return FakeSession()
+        return verify
+
+    async def database_lookup(user_id: str) -> dict:
+        assert user_id == "persisted-user"
+        return {
+            "role": "member", "status": "active", "emailVerified": True,
+            "verificationStatus": "approved",
+        }
+
+    monkeypatch.setattr(auth_module, "SUPERTOKENS_ENABLED", True)
+    monkeypatch.setattr(auth_module, "verify_session", fake_verify_session, raising=False)
+    monkeypatch.setattr(auth_module, "_user_lookup", database_lookup)
+    request = Request({"type": "http", "method": "GET", "path": "/profile", "headers": []})
+
+    user = asyncio.run(get_current_user(request))
+    assert user.user_id == "persisted-user"
+    assert user.email_verified is True
+
+
+def test_suspended_database_user_is_rejected(monkeypatch) -> None:
+    async def suspended_lookup(_user_id: str) -> dict:
+        return {
+            "role": "member", "status": "suspended", "emailVerified": True,
+            "verificationStatus": "approved",
+        }
+
+    monkeypatch.setattr(auth_module, "AUTH_MOCK_ENABLED", True)
+    monkeypatch.setattr(auth_module, "_user_lookup", suspended_lookup)
+    request = Request({"type": "http", "method": "GET", "path": "/profile", "headers": []})
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(get_current_user(request))
+    assert exc_info.value.detail == {"code": "USER_SUSPENDED"}
 
 
 def test_auth_mock_returns_default_user_without_session(monkeypatch) -> None:
@@ -1343,7 +1407,7 @@ def test_match_detail_hides_missing_and_blocked_matches() -> None:
     assert blocked.json()["error"]["code"] == "MATCH_NOT_FOUND"
 
 
-def test_complete_match_needs_both_parties_and_tolerates_repeat() -> None:
+def test_complete_match_needs_both_parties_and_rejects_repeat() -> None:
     async def helper_user() -> CurrentUser:
         return HELPER
 
@@ -1359,8 +1423,8 @@ def test_complete_match_needs_both_parties_and_tolerates_repeat() -> None:
         f"/matches/{match_id}/complete",
         json={"completed": True, "actorRole": "requester"},
     )
-    assert repeated.status_code == 200
-    assert repeated.json()["status"] == "completion_pending"
+    assert repeated.status_code == 409
+    assert repeated.json()["error"]["code"] == "COMPLETION_ALREADY_CONFIRMED"
 
     app.dependency_overrides[get_current_user] = helper_user
     second = client.post(

@@ -65,7 +65,7 @@ async def select_application(
     *,
     blocked: bool,
     helper_verified: bool,
-) -> tuple[ApplicationRecord, RequestRecord]:
+) -> tuple[ApplicationRecord, RequestRecord, dict | None]:
     item = await application_repository.get(actor, application_id)
     if item is None or blocked:
         raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
@@ -86,6 +86,26 @@ async def select_application(
     if request_item["acceptedHelpers"] >= request_item["requiredHelpers"]:
         raise HTTPException(409, detail={"code": "CAPACITY_REACHED"})
 
+    select_atomically = getattr(application_repository, "select_atomically", None)
+    if callable(select_atomically):
+        result = await select_atomically(actor, application_id, expected_version)
+        code = result.get("code")
+        if code != "SELECTED":
+            status_code = (
+                403 if code == "ROLE_FORBIDDEN"
+                else 404 if code == "APPLICATION_NOT_FOUND"
+                else 409
+            )
+            detail = {"code": code or "REQUEST_STATE_CONFLICT"}
+            if result.get("currentVersion") is not None:
+                detail["currentVersion"] = result["currentVersion"]
+            raise HTTPException(status_code, detail=detail)
+        updated_application = await application_repository.get(actor, application_id)
+        updated_request = await request_repository.get(actor, item["requestId"])
+        if updated_application is None or updated_request is None:
+            raise HTTPException(500, detail={"code": "SELECTION_RESULT_UNAVAILABLE"})
+        return updated_application, updated_request, result
+
     reserve_helper = getattr(request_repository, "reserve_helper", None)
     select = getattr(application_repository, "select", None)
     if not callable(reserve_helper) or not callable(select):
@@ -104,4 +124,4 @@ async def select_application(
     updated_application = await application_repository.get(actor, application_id)
     if updated_application is None:
         raise HTTPException(404, detail={"code": "APPLICATION_NOT_FOUND"})
-    return updated_application, updated_request
+    return updated_application, updated_request, None

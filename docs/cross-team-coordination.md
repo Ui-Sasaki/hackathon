@@ -14,7 +14,42 @@ FastAPI実装やAPI接続だけでは確定できない事項を記録する。�
 
 ## 未確認
 
-### COORD-003: 応募者選択のPostgres原子操作
+### COORD-006: 自分の依頼・マッチ一覧API
+
+- 対象: 依頼一覧・詳細・更新・取消、マッチ詳細への画面導線
+- 調整先: FastAPI担当、Supabase担当
+- 現状とずれ:
+  - `GET /requests` は公開依頼の検索APIであり、依頼者本人の `pending_review`、`matched`、`completed`、`cancelled` などを一括取得する契約がない。
+  - `GET /matches/{match_id}` はあるが、ログイン利用者のマッチ一覧APIがないため、チャット一覧をAPIレスポンスへ置き換えられない。
+  - 接続側は公開一覧に含まれる自分の依頼から、詳細・更新・取消・応募者一覧・応募者選択へ進める範囲まで実装した。
+- 確認・決定が必要な内容:
+  - `GET /me/requests` 相当の状態フィルタ・カーソル・表示項目。
+  - `GET /me/matches` 相当の相手表示名、依頼概要、最新メッセージ、未読数、状態、カーソル。
+  - ブロック済み利用者に関する一覧除外と、完了・紛争中データの保持期間。
+- 接続・引き継ぎ条件:
+  - actor IDはクエリで受け取らず、検証済みセッションから決定する。
+  - 一覧レスポンスに `requestId`、`matchId`、`version` を含め、既存の詳細・チャット・楽観ロックへ引き継げるようにする。
+- 状態: 未確認（個別リソースの画面接続は実装済み、一覧API待ち）
+
+### COORD-005: 本番の認証ユーザープロフィール自動作成
+
+- 対象: 公開環境の `GET /profile` が新規登録直後に403を返す問題
+- 調整先: Supabase担当、デプロイ担当
+- 現状とずれ:
+  - FastAPIはSuperTokensのsubjectを`app.resolve_authenticated_user`へ渡し、アプリ側プロフィールを解決する。
+  - `20260903040000_identity_profile_persistence.sql`では、未登録subjectを安全な既定値（`member`、`active`）で自動作成する。
+  - 公開環境で`USER_PROFILE_NOT_FOUND`が返る場合、APIコードと本番DB migrationの適用状態が一致していない。
+- FastAPI・接続側で完了している範囲:
+  - クライアント入力のユーザーIDやroleを信用せず、検証済みセッションsubjectだけを使用する。
+  - 認証復元完了前に依頼APIを呼ばないため、初期401とセッション復元の競合を防止する。
+  - Memory RepositoryとPostgres Repositoryで同じプロフィールAPI契約を提供する。
+- 接続・引き継ぎ条件:
+  - 本番Supabaseへ`20260903040000_identity_profile_persistence.sql`までを順番どおり適用する。
+  - 適用後、新規アカウントで登録し、`GET /profile`が200、続く`GET /requests`が200になることを確認する。
+  - 既存アカウントが403の場合はレスポンスの`error.code`を確認し、`USER_SUSPENDED`を自動解除しない。
+- 状態: 未確認（コード実装済み、本番migration適用と結合確認待ち）
+
+### COORD-003: 応募者選択のPostgres原子操作（実装済み）
 
 - 対象TODO: 19 応募者選択API接続
 - 調整先: Supabase担当
@@ -32,7 +67,11 @@ FastAPI実装やAPI接続だけでは確定できない事項を記録する。�
   - 応募ID、依頼者、`expectedVersion`を検証し、応募状態更新、定員予約、依頼状態更新、未選択応募終了、マッチ作成を単一トランザクションまたはPostgreSQL関数で行う。
   - version不一致、定員到達、選択済み応募は409へ変換できる結果を返す。
   - ブロック関係と依頼所有者はFastAPIでも引き続き検証する。
-- 状態: 未確認（Memory RepositoryとAPI契約を先行し、Postgres実装は本番で選択不能）
+- 実装結果:
+  - `app.select_application(uuid, integer)`が依頼行をロックし、応募選択、定員予約、match作成、依頼更新、残応募終了を同一transactionで行う。
+  - `PostgresApplicationRepository.select_atomically`がRPCを呼び、FastAPIが結果コードを403/404/409へ変換する。
+  - migration、RLS経由のDBテスト、複数接続による同時選択テストを追加した。
+- 状態: 実装済み（Production適用は人間の承認待ち）
 
 ### COORD-001: 位置情報利用の明示同意UI
 

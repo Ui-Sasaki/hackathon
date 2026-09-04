@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Awaitable, Callable, Literal, cast
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request, Security
 from fastapi.security import APIKeyCookie
 
+from app.http_middleware import website_origin
 from app.settings import reject_unsafe_in_production, settings
 
 
@@ -72,6 +75,36 @@ def _env_bool(name: str, default: bool) -> bool:
     return os.getenv(name, str(default)).lower() in {"1", "true", "yes", "on"}
 
 
+CookieSameSite = Literal["lax", "none", "strict"]
+
+
+def _origin_from_url(value: str) -> str:
+    parsed = urlsplit(value.strip().rstrip("/"))
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError("API_DOMAIN must be an http(s) origin without a path")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def auth_cookie_same_site() -> CookieSameSite:
+    configured = os.getenv("AUTH_COOKIE_SAME_SITE")
+    if configured:
+        value = configured.strip().lower()
+        if value not in {"lax", "none", "strict"}:
+            raise RuntimeError("AUTH_COOKIE_SAME_SITE must be lax, none, or strict")
+        return cast(CookieSameSite, value)
+
+    api_origin = _origin_from_url(os.getenv("API_DOMAIN", "http://localhost:8000"))
+    if api_origin != website_origin() and _env_bool("AUTH_COOKIE_SECURE", True):
+        return "none"
+    return "lax"
+
+
 _user_creator: Callable[[str], None] = lambda _user_id: None
 
 
@@ -129,7 +162,7 @@ def initialise_supertokens() -> None:
             ),
             session.init(
                 cookie_secure=_env_bool("AUTH_COOKIE_SECURE", True),
-                cookie_same_site=os.getenv("AUTH_COOKIE_SAME_SITE", "lax"),
+                cookie_same_site=auth_cookie_same_site(),
                 anti_csrf="VIA_CUSTOM_HEADER",
             ),
             # Enables adding TOTP/passwordless second factors without changing
@@ -153,12 +186,20 @@ def cors_headers() -> list[str]:
 
 # Supabase will replace this lookup. Keeping it injectable makes session tests
 # independent from a running SuperTokens Core and application database.
-_user_lookup: Callable[[str], dict[str, Any] | None] = lambda _user_id: None
+UserLookupResult = dict[str, Any] | None | Awaitable[dict[str, Any] | None]
+_user_lookup: Callable[[str], UserLookupResult] = lambda _user_id: None
 
 
-def configure_user_lookup(lookup: Callable[[str], dict[str, Any] | None]) -> None:
+def configure_user_lookup(lookup: Callable[[str], UserLookupResult]) -> None:
     global _user_lookup
     _user_lookup = lookup
+
+
+async def _lookup_user(user_id: str) -> dict[str, Any] | None:
+    record = _user_lookup(user_id)
+    if inspect.isawaitable(record):
+        return await record
+    return record
 
 
 def _current_user_from_record(
@@ -190,7 +231,7 @@ async def get_current_user(
         user_id = request.headers.get(AUTH_MOCK_USER_HEADER, AUTH_MOCK_USER_ID)
         return _current_user_from_record(
             user_id,
-            _user_lookup(user_id),
+            await _lookup_user(user_id),
             mfa_completed=True,
         )
 
@@ -212,7 +253,7 @@ async def get_current_user(
     mfa_claim = payload.get("st-mfa", {})
     return _current_user_from_record(
         user_id,
-        _user_lookup(user_id),
+        await _lookup_user(user_id),
         mfa_completed=bool(mfa_claim.get("v", False)),
     )
 

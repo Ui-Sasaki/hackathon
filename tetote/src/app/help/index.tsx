@@ -57,6 +57,7 @@ export default function HelpHomeScreen() {
               />
             </View>
           </Pressable>
+
         </View>
 
         <View style={styles.mainContent}>
@@ -82,10 +83,17 @@ export default function HelpHomeScreen() {
             </Text>
           </Pressable>
 
+          <Pressable
+            onPress={() => router.push("/help/requests")}
+            style={({ pressed }) => [styles.characterButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.characterButtonText}>自分の依頼・応募者を確認する</Text>
+          </Pressable>
+
           <View style={styles.mascotArea}>
             <Image
               source={require(
-                "../../../assets/onboarding_asset/c1.jpg"
+                "../../../assets/onboarding_asset/c1.png"
               )}
               style={styles.mascot}
               resizeMode="contain"

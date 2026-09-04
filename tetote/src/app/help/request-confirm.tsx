@@ -73,11 +73,13 @@ export default function RequestConfirmScreen() {
   const {
     content,
     location,
+    areaCode,
     time,
     deadline,
   } = useLocalSearchParams<{
     content?: string;
     location?: string;
+    areaCode?: string;
     time?: string;
     deadline?: string;
   }>();
@@ -117,7 +119,11 @@ export default function RequestConfirmScreen() {
   // 下書きを作成APIへ送り、審査対象でなければ公開まで進めて完了画面へ移る。
   const handlePublish = async () => {
     if (!structuringState?.draft || submitting) return;
-    const built = buildCreateRequestInput(structuringState.draft, { time, deadline });
+    const built = buildCreateRequestInput(
+      structuringState.draft,
+      { time, deadline },
+      { fallbackAreaCode: areaCode || undefined },
+    );
     if (built.input === null) {
       setSubmissionMessage(built.problem);
       return;
@@ -245,6 +251,30 @@ export default function RequestConfirmScreen() {
                   style={styles.draftInput}
                   value={structuringState.draft.category}
                 />
+                <Text style={styles.draftLabel}>希望日時（ISO形式）</Text>
+                <TextInput
+                  accessibilityLabel="希望日時"
+                  placeholder="2026-09-10T10:00:00+09:00"
+                  onChangeText={(scheduledAt) => setStructuringState((state) => state ? updateStructuredDraft(state, { scheduledAt }) : state)}
+                  style={styles.draftInput}
+                  value={structuringState.draft.scheduledAt ?? ""}
+                />
+                <Text style={styles.draftLabel}>所要時間（分）</Text>
+                <TextInput
+                  accessibilityLabel="所要時間"
+                  keyboardType="number-pad"
+                  onChangeText={(value) => setStructuringState((state) => state ? updateStructuredDraft(state, { estimatedMinutes: Number(value) || null }) : state)}
+                  style={styles.draftInput}
+                  value={structuringState.draft.estimatedMinutes?.toString() ?? ""}
+                />
+                <Text style={styles.draftLabel}>必要人数</Text>
+                <TextInput
+                  accessibilityLabel="必要人数"
+                  keyboardType="number-pad"
+                  onChangeText={(value) => setStructuringState((state) => state ? updateStructuredDraft(state, { requiredHelpers: Number(value) || null }) : state)}
+                  style={styles.draftInput}
+                  value={structuringState.draft.requiredHelpers?.toString() ?? ""}
+                />
                 <Text style={styles.unpublishedText}>
                   この下書きはまだ公開されていません。
                 </Text>
@@ -336,16 +366,14 @@ export default function RequestConfirmScreen() {
               disabled={
                 !canProceedAfterMasking(maskingState)
                 || structuringLoading
-                || structuringState?.status === "draft"
-                || structuringState?.status === "manual"
+                || hasDraft
               }
               onPress={() => void handleSubmit()}
               style={({ pressed }) => [
                 styles.submitButton,
                 (!canProceedAfterMasking(maskingState)
                   || structuringLoading
-                  || structuringState?.status === "draft"
-                  || structuringState?.status === "manual") && styles.disabledButton,
+                  || hasDraft) && styles.disabledButton,
                 pressed && styles.pressed,
               ]}
             >
@@ -353,9 +381,7 @@ export default function RequestConfirmScreen() {
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <Text style={styles.submitButtonText}>
-                  {structuringState?.status === "draft" || structuringState?.status === "manual"
-                    ? "下書きを編集中"
-                    : "AIで内容を整理する"}
+                  {hasDraft ? "下書きを編集中" : "AIで内容を整理する"}
                 </Text>
               )}
             </Pressable>

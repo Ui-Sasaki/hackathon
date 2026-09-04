@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   View,
   Text,
   TextInput,
@@ -11,80 +12,131 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-
-type Message = {
-  id: number;
-  sender: "requester" | "helper";
-  text: string;
-  time: string;
-};
+import { useAuth } from "../auth/AuthContext";
+import {
+  mergeMessages,
+  sendMessage as sendMessageToApi,
+  startMessagePolling,
+  type Message,
+} from "../features/messages/client";
+import {
+  completeMatch,
+  createReview,
+  disputeMatch,
+  getMatch,
+  matchActionErrorMessage,
+  type Match,
+} from "../features/matches/client";
+import {
+  generateAchievement,
+  publishAchievement,
+  type Achievement,
+} from "../features/achievements/client";
 
 type TalkScreenProps = {
   role: "requester" | "helper";
+  matchId?: string;
 };
 
-export default function TalkScreen({ role }: TalkScreenProps) {
+export default function TalkScreen({ role, matchId }: TalkScreenProps) {
   const router = useRouter();
-
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      sender: "requester",
-      text: "応募ありがとうございます！明日の14時ごろでも大丈夫でしょうか？",
-      time: "10:32",
-    },
-    {
-      id: 2,
-      sender: "helper",
-      text: "はい、大丈夫です！どのあたりに伺えばいいですか？",
-      time: "10:34",
-    },
-    {
-      id: 3,
-      sender: "requester",
-      text: "赤坂駅の7番出口付近でお願いします！",
-      time: "10:35",
-    },
-    {
-      id: 4,
-      sender: "helper",
-      text: "了解です！荷物はどれくらいありますか？",
-      time: "10:36",
-    },
-    {
-      id: 5,
-      sender: "requester",
-      text: "段ボールが3箱です。15分くらいで終わると思います！",
-      time: "10:37",
-    },
-  ]);
-
+  const { profile } = useAuth();
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [completed, setCompleted] = useState(false);
+  const [match, setMatch] = useState<Match | null>(null);
+  const [loading, setLoading] = useState(Boolean(matchId));
+  const [pollKey, setPollKey] = useState(0);
+  const [loadError, setLoadError] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [disputeReason, setDisputeReason] = useState("");
+  const [reviewComment, setReviewComment] = useState("");
+  const [reviewed, setReviewed] = useState(false);
+  const [achievement, setAchievement] = useState<Achievement | null>(null);
 
-  const sendMessage = () => {
-    const trimmed = input.trim();
-
-    if (!trimmed) return;
-
-    const now = new Date();
-
-    const time = now.toLocaleTimeString("ja-JP", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    setMessages((previousMessages) => [
-      ...previousMessages,
-      {
-        id: Date.now(),
-        sender: role,
-        text: trimmed,
-        time,
+  useEffect(() => {
+    if (!matchId) return;
+    return startMessagePolling({
+      matchId,
+      onMessages: (incoming) => {
+        setMessages(mergeMessages([], incoming));
+        setLoading(false);
+        setLoadError(false);
       },
-    ]);
+      onError: () => {
+        setLoading(false);
+        setLoadError(true);
+      },
+    });
+  }, [matchId, pollKey]);
 
-    setInput("");
+  useEffect(() => {
+    if (!matchId) return;
+    let active = true;
+    void getMatch(matchId).then((state) => {
+      if (!active) return;
+      if (state.status === "ready") setMatch(state.match);
+      else setActionError(matchActionErrorMessage(state.error));
+    });
+    return () => { active = false; };
+  }, [matchId]);
+
+  const sendMessage = useCallback(async () => {
+    const trimmed = input.trim();
+    if (!trimmed || !matchId || sending) return;
+    setSending(true);
+    setSendError(false);
+    try {
+      const sent = await sendMessageToApi(matchId, trimmed);
+      setMessages((current) => mergeMessages(current, [sent]));
+      setInput("");
+    } catch {
+      setSendError(true);
+    } finally {
+      setSending(false);
+    }
+  }, [input, matchId, sending]);
+
+  const runMatchAction = async (action: () => Promise<Match>) => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try { setMatch(await action()); }
+    catch (error) { setActionError(matchActionErrorMessage(error)); }
+    finally { setActionBusy(false); }
+  };
+
+  const submitReview = async () => {
+    if (!matchId || !reviewComment.trim() || actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await createReview(matchId, {
+        onTime: true, polite: true, safetyAware: true, communicative: true,
+        comment: reviewComment,
+      });
+      setReviewed(true);
+    } catch (error) { setActionError(matchActionErrorMessage(error)); }
+    finally { setActionBusy(false); }
+  };
+
+  const createAchievement = async () => {
+    if (!matchId || actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try { setAchievement(await generateAchievement(matchId)); }
+    catch (error) { setActionError(matchActionErrorMessage(error)); }
+    finally { setActionBusy(false); }
+  };
+
+  const approveAchievement = async () => {
+    if (!achievement || actionBusy) return;
+    setActionBusy(true);
+    try { setAchievement(await publishAchievement(achievement.id, "members")); }
+    catch (error) { setActionError(matchActionErrorMessage(error)); }
+    finally { setActionBusy(false); }
   };
 
   return (
@@ -116,7 +168,7 @@ export default function TalkScreen({ role }: TalkScreenProps) {
                 size={14}
                 color="#4E8B62"
               />
-              <Text style={styles.matchText}>マッチング成立</Text>
+              <Text style={styles.matchText}>{match?.status ?? "マッチング成立"}</Text>
             </View>
           </View>
 
@@ -167,10 +219,40 @@ export default function TalkScreen({ role }: TalkScreenProps) {
           contentContainerStyle={styles.messagesContent}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.date}>8月29日</Text>
+          {!matchId ? (
+            <View style={styles.statusContainer}>
+              <Text style={styles.errorText}>チャットを開くためのマッチ情報がありません。</Text>
+            </View>
+          ) : loading && messages.length === 0 ? (
+            <View style={styles.statusContainer}>
+              <ActivityIndicator color="#4E8B62" />
+              <Text style={styles.statusText}>メッセージを取得しています...</Text>
+            </View>
+          ) : loadError && messages.length === 0 ? (
+            <View style={styles.statusContainer}>
+              <Text style={styles.errorText}>メッセージを取得できませんでした。</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setLoading(true);
+                  setLoadError(false);
+                  setPollKey((key) => key + 1);
+                }}
+              >
+                <Text style={styles.retryText}>再試行</Text>
+              </TouchableOpacity>
+            </View>
+          ) : messages.length === 0 ? (
+            <Text style={styles.date}>まだメッセージはありません</Text>
+          ) : null}
+
+          {loadError && messages.length > 0 ? (
+            <Text style={styles.syncErrorText}>
+              最新メッセージを取得できません。自動的に再試行します。
+            </Text>
+          ) : null}
 
           {messages.map((message) => {
-            const mine = message.sender === role;
+            const mine = message.senderId === profile?.id;
 
             return (
               <View
@@ -206,12 +288,15 @@ export default function TalkScreen({ role }: TalkScreenProps) {
                           : styles.otherMessageText,
                       ]}
                     >
-                      {message.text}
+                      {message.body}
                     </Text>
                   </View>
 
                   <Text style={styles.time}>
-                    {message.time}
+                    {new Date(message.sentAt).toLocaleTimeString("ja-JP", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
                   </Text>
                 </View>
               </View>
@@ -219,7 +304,7 @@ export default function TalkScreen({ role }: TalkScreenProps) {
           })}
         </ScrollView>
 
-        {completed ? (
+        {match?.status === "completed" ? (
           <View style={styles.completedContainer}>
             <Ionicons
               name="checkmark-circle"
@@ -230,6 +315,40 @@ export default function TalkScreen({ role }: TalkScreenProps) {
             <Text style={styles.completedText}>
               この依頼は完了しました
             </Text>
+            {!reviewed ? (
+              <>
+                <TextInput
+                  accessibilityLabel="感謝コメント"
+                  value={reviewComment}
+                  onChangeText={setReviewComment}
+                  placeholder="感謝コメントを入力"
+                  style={styles.actionInput}
+                  multiline
+                />
+                <TouchableOpacity
+                  disabled={!reviewComment.trim() || actionBusy}
+                  onPress={() => void submitReview()}
+                  style={[styles.completeButton, (!reviewComment.trim() || actionBusy) && styles.sendButtonDisabled]}
+                >
+                  <Text style={styles.completeButtonText}>評価と感謝を送る</Text>
+                </TouchableOpacity>
+              </>
+            ) : <Text style={styles.completedText}>レビューを送信しました</Text>}
+            {role === "helper" && !achievement ? (
+              <TouchableOpacity disabled={actionBusy} onPress={() => void createAchievement()} style={styles.completeButton}>
+                <Text style={styles.completeButtonText}>AI実績を作成する</Text>
+              </TouchableOpacity>
+            ) : null}
+            {achievement ? (
+              <View style={styles.achievementBox}>
+                <Text style={styles.completedText}>{achievement.generatedText}</Text>
+                {achievement.status !== "approved" ? (
+                  <TouchableOpacity disabled={actionBusy} onPress={() => void approveAchievement()} style={styles.completeButton}>
+                    <Text style={styles.completeButtonText}>確認してプロフィールに公開</Text>
+                  </TouchableOpacity>
+                ) : <Text style={styles.completedText}>プロフィールに公開しました</Text>}
+              </View>
+            ) : null}
           </View>
         ) : (
           <View style={styles.bottomContainer}>
@@ -256,22 +375,42 @@ export default function TalkScreen({ role }: TalkScreenProps) {
               <TouchableOpacity
                 style={[
                   styles.sendButton,
-                  !input.trim() && styles.sendButtonDisabled,
+                  (!input.trim() || !matchId || sending) && styles.sendButtonDisabled,
                 ]}
                 onPress={sendMessage}
-                disabled={!input.trim()}
+                disabled={!input.trim() || !matchId || sending}
               >
-                <Ionicons
-                  name="send"
-                  size={18}
-                  color="#FFFFFF"
-                />
+                {sending ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Ionicons name="send" size={18} color="#FFFFFF" />
+                )}
               </TouchableOpacity>
             </View>
+            {sendError ? (
+              <Text style={styles.sendErrorText}>送信できませんでした。もう一度お試しください。</Text>
+            ) : null}
+
+            <TextInput
+              accessibilityLabel="キャンセル申告理由"
+              value={disputeReason}
+              onChangeText={setDisputeReason}
+              placeholder="問題がある場合は理由を10文字以上で入力"
+              style={styles.actionInput}
+            />
+            <TouchableOpacity
+              disabled={!matchId || disputeReason.trim().length < 10 || actionBusy}
+              onPress={() => matchId && void runMatchAction(() => disputeMatch(matchId, disputeReason))}
+              style={[styles.disputeButton, (!matchId || disputeReason.trim().length < 10 || actionBusy) && styles.sendButtonDisabled]}
+            >
+              <Text style={styles.disputeButtonText}>キャンセル・問題を申告する</Text>
+            </TouchableOpacity>
+            {actionError ? <Text style={styles.sendErrorText}>{actionError}</Text> : null}
 
             <TouchableOpacity
               style={styles.completeButton}
-              onPress={() => setCompleted(true)}
+              disabled={!matchId || actionBusy || match?.status === "disputed"}
+              onPress={() => matchId && void runMatchAction(() => completeMatch(matchId, role))}
             >
               <Ionicons
                 name="checkmark-circle-outline"
@@ -421,6 +560,36 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
 
+  statusContainer: {
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 28,
+  },
+
+  statusText: {
+    color: "#777777",
+    fontSize: 13,
+  },
+
+  errorText: {
+    color: "#A23B32",
+    fontSize: 13,
+    textAlign: "center",
+  },
+
+  retryText: {
+    color: "#4E8B62",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+
+  syncErrorText: {
+    color: "#A23B32",
+    fontSize: 12,
+    marginBottom: 12,
+    textAlign: "center",
+  },
+
   messageRow: {
     width: "100%",
     marginBottom: 13,
@@ -531,6 +700,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#CCCCCC",
   },
 
+  sendErrorText: {
+    color: "#A23B32",
+    fontSize: 12,
+    marginLeft: 50,
+    marginTop: 6,
+  },
+
   completeButton: {
     height: 46,
     borderRadius: 13,
@@ -549,8 +725,42 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
+  actionInput: {
+    minHeight: 42,
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: "#D8D8D2",
+    borderRadius: 12,
+    backgroundColor: "#FAFAF7",
+  },
+
+  disputeButton: {
+    minHeight: 42,
+    marginTop: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    backgroundColor: "#A23B32",
+  },
+
+  disputeButtonText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+
+  achievementBox: {
+    width: "100%",
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: "#FFFFFF",
+  },
+
   completedContainer: {
-    flexDirection: "row",
+    flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
     gap: 7,

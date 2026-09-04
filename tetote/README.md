@@ -71,9 +71,18 @@ Chrome、Safari、Edgeの開発者ツールで次を確認する。
 
 - 登録・ログイン後にHttpOnlyのセッションCookieが発行され、再読み込み後も復元される
 - API通信が `credentials: include` で行われ、SuperTokens SDKがanti-CSRFヘッダーを付与する
-- CookieのSameSite設定がフロント/APIの配置に合い、本番CookieにSecure属性がある
+- APIとフロントが別オリジンの場合はCookieのSameSiteが`None`で、本番CookieにSecure属性がある
 - ログアウト後または期限切れ後に保護画面へ戻れず、ログイン画面へ1回だけ遷移する
 - パスワード、Cookie、セッショントークン、anti-CSRF値がURL・Storage・ログへ出ない
 
 認証テストは `npm test`、静的検査は `npm run lint`、Web成果物は
 `npx expo export --platform web` で確認する。
+
+## チャットのAPI接続
+
+チャット画面はURLクエリの`matchId`を使って
+`GET /matches/{matchId}/messages`を3秒間隔で取得する。画面を閉じると取得を停止し、
+取得失敗時も直前のメッセージを保持する。送信は
+`POST /matches/{matchId}/messages`へ本文だけを渡す。
+
+例：`/help/chat?matchId=match_123`、`/helper/chat?matchId=match_123`
