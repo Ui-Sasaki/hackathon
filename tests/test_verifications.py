@@ -20,6 +20,15 @@ from tests.test_uploads import (
 
 client = ASGITestClient()
 
+VERIFIER = CurrentUser(
+    user_id="usr_verifier", role="verifier", status="active",
+    email_verified=True, verification_status="approved", mfa_completed=True,
+)
+VERIFIER_WITHOUT_MFA = CurrentUser(
+    user_id="usr_verifier", role="verifier", status="active",
+    email_verified=True, verification_status="approved", mfa_completed=False,
+)
+
 
 def setup_function() -> None:
     act_as(OWNER)
@@ -196,3 +205,104 @@ def test_application_requires_authentication() -> None:
     assert client.post(
         "/verifications", json={"method": "university_email"}
     ).status_code == 401
+
+
+def test_verifier_can_list_pending_requests_without_private_references() -> None:
+    upload_id = stored_upload()
+    created = client.post(
+        "/verifications", json={"method": "student_card", "uploadId": upload_id}
+    ).json()
+    act_as(VERIFIER)
+
+    response = client.get("/verification-reviews")
+
+    assert response.status_code == 200
+    assert response.json()["items"] == [{
+        "id": created["id"], "userId": OWNER.user_id, "method": "student_card",
+        "status": "pending", "createdAt": created["createdAt"],
+        "reviewedAt": None, "deletionDueAt": None,
+        "deletedAt": None, "hasDocument": True,
+    }]
+    assert "storageObjectKey" not in response.text
+    assert "imageId" not in response.text
+
+
+def test_only_mfa_completed_reviewer_can_access_review_api() -> None:
+    client.post("/verifications", json={"method": "university_email"})
+
+    act_as(OWNER)
+    assert client.get("/verification-reviews").status_code == 403
+    act_as(VERIFIER_WITHOUT_MFA)
+    response = client.get("/verification-reviews")
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "MFA_REQUIRED"
+
+
+def test_document_access_is_short_lived_scoped_and_audited() -> None:
+    created = client.post(
+        "/verifications", json={"method": "student_card", "uploadId": stored_upload()}
+    ).json()
+    act_as(VERIFIER)
+
+    access = client.post(
+        f"/verification-reviews/{created['id']}/document-access"
+    )
+    assert access.status_code == 200
+    assert set(access.json()) == {"url", "expiresAt"}
+    assert "private/" not in access.text
+
+    viewed = client.get(access.json()["url"])
+    assert viewed.status_code == 200
+    assert viewed.headers["cache-control"] == "no-store"
+    assert viewed.headers["content-type"] == "image/png"
+    assert [event["eventType"] for event in crud_module.audit_logs[-2:]] == [
+        "verification_document_access_granted", "verification_document_viewed",
+    ]
+
+    act_as(CurrentUser(
+        user_id="other_verifier", role="verifier", status="active",
+        email_verified=True, verification_status="approved", mfa_completed=True,
+    ))
+    assert client.get(access.json()["url"]).status_code == 404
+
+
+def test_reviewer_decision_updates_user_and_rejects_second_decision() -> None:
+    created = client.post(
+        "/verifications", json={"method": "university_email"}
+    ).json()
+    act_as(VERIFIER)
+
+    approved = client.post(
+        f"/verification-reviews/{created['id']}/decision",
+        json={"decision": "approved"},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+    assert "reviewerId" not in approved.json()
+    assert crud_module.users_store[OWNER.user_id]["verificationStatus"] == "approved"
+    assert crud_module.audit_logs[-1]["eventType"] == "verification_approved"
+
+    conflict = client.post(
+        f"/verification-reviews/{created['id']}/decision",
+        json={"decision": "rejected"},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "VERIFICATION_STATE_CONFLICT"
+
+
+def test_reviewed_document_can_be_deleted_and_is_audited() -> None:
+    created = client.post(
+        "/verifications", json={"method": "student_card", "uploadId": stored_upload()}
+    ).json()
+    act_as(VERIFIER)
+    client.post(
+        f"/verification-reviews/{created['id']}/decision",
+        json={"decision": "rejected"},
+    )
+
+    deleted = client.delete(f"/verification-reviews/{created['id']}/document")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["hasDocument"] is False
+    assert deleted.json()["deletedAt"] is not None
+    assert crud_module.audit_logs[-1]["eventType"] == "verification_document_deleted"

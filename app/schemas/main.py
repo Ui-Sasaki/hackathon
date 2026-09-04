@@ -478,6 +478,27 @@ class VerificationResponse(ContractModel):
     createdAt: datetime
 
 
+class VerificationReviewItem(VerificationResponse):
+    reviewedAt: datetime | None = None
+    deletionDueAt: datetime | None = None
+    deletedAt: datetime | None = None
+    hasDocument: bool
+
+
+class VerificationReviewListResponse(ContractModel):
+    items: list[VerificationReviewItem]
+
+
+class VerificationDecisionInput(ContractModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["approved", "rejected"]
+
+
+class VerificationDocumentAccessResponse(ContractModel):
+    url: str
+    expiresAt: datetime
+
+
 class ReportInput(ContractModel):
     targetType: Literal["user", "request", "match", "message", "review"]
     targetId: str = Field(min_length=1, max_length=100)

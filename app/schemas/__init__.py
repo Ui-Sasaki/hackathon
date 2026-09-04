@@ -46,6 +46,10 @@ from .main import (
     UserSettingsUpdateInput,
     VerificationInput,
     VerificationResponse,
+    VerificationDecisionInput,
+    VerificationDocumentAccessResponse,
+    VerificationReviewItem,
+    VerificationReviewListResponse,
     RecommendedRequestItem,
     RecommendedRequestListResponse,
 )

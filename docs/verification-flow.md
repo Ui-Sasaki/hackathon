@@ -88,7 +88,21 @@ GET  /profile                    verificationStatus が pending になる
 ## 6. 未確定事項
 
 Storage、Postgres、RLS、削除期限は `docs/cross-team-coordination.md` の COORD-004 を参照。
-現在の実装は Memory のみで、審査そのもの（承認・却下）を行う管理APIは未実装である。
+現在の審査実装は Memory のみである。本人確認担当者または管理者（MFA必須）は、
+`GET /verification-reviews`、書類閲覧URLの発行、承認・否認、審査済み書類の削除を行える。
+閲覧URLは5分間かつ発行先の担当者だけに有効で、発行・閲覧・判断・削除を監査する。
+Postgres、private Storage、期限到来時の定期削除は
+`docs/cross-team-coordination.md` の COORD-004 を参照する。
+
+### 審査API
+
+| API | 用途 |
+|---|---|
+| `GET /verification-reviews` | 審査待ち一覧（画像・内部キーは含まない） |
+| `POST /verification-reviews/{id}/document-access` | 5分間の閲覧URLを発行 |
+| `GET /verification-documents/{token}` | 発行先担当者が書類を閲覧。`no-store` |
+| `POST /verification-reviews/{id}/decision` | `approved` または `rejected` へ遷移 |
+| `DELETE /verification-reviews/{id}/document` | 審査済み書類を削除 |
 
 ## 7. テスト
 
