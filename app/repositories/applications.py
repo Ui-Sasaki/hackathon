@@ -39,14 +39,16 @@ def _row_to_record(row: Any) -> ApplicationRecord:
         "createdAt": _iso(row["created_at"]),
         "updatedAt": _iso(row["updated_at"]),
     }
-    if "helper_display_name" in row:
+    # asyncpg.Record の `in` は列名ではなく値を見るため、列の有無は keys() で判定する。
+    if "helper_display_name" in row.keys():
+        # 利用者行が引けない・列が空のときも、一覧そのものは返せる形にする。
         record["helper"] = {
             "id": row["helper_auth_subject"],
-            "displayName": row["helper_display_name"],
-            "verificationStatus": row["helper_verification_status"],
-            "universityVerified": row["helper_email_verified"],
+            "displayName": row["helper_display_name"] or "支援者",
+            "verificationStatus": row["helper_verification_status"] or "unverified",
+            "universityVerified": bool(row["helper_email_verified"]),
             "skillTags": [],
-            "achievementCount": row["achievement_count"],
+            "achievementCount": int(row["achievement_count"] or 0),
         }
     return record
 
