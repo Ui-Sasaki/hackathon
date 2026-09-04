@@ -1,4 +1,4 @@
-"""依頼の公開（draft -> published）と、公開後の取消のテスト。"""
+"""依頼の公開（作成時の自動公開、draft からの公開API）と、公開後の取消のテスト。"""
 
 import asyncio
 import os
@@ -72,14 +72,21 @@ def setup_function() -> None:
     client.post("/_mock/reset")
 
 
-def create_draft(key: str = "publish-test-1") -> dict:
+def create_request(key: str = "publish-test-1") -> dict:
     response = client.post(
         "/requests", json=REQUEST_BODY, headers={"Idempotency-Key": key}
     )
     assert response.status_code == 201, response.text
-    body = response.json()
-    assert body["status"] == "draft"
-    return body
+    return response.json()
+
+
+def force_status(request_id: str, status: str) -> None:
+    moved = asyncio.run(
+        get_request_repository().set_status(
+            REQUESTER, request_id, status, bump_version=False,
+        )
+    )
+    assert moved
 
 
 def listed_ids_for_helper() -> set[str]:
@@ -91,56 +98,66 @@ def listed_ids_for_helper() -> set[str]:
     return {item["id"] for item in response.json()["items"]}
 
 
-def test_publishing_a_draft_makes_it_visible_to_helpers() -> None:
-    draft = create_draft()
-    assert draft["id"] not in listed_ids_for_helper()
+def test_a_confirmed_request_is_published_on_creation() -> None:
+    created = create_request()
 
-    response = client.post(f"/requests/{draft['id']}/publish")
+    assert created["status"] == "published"
+    assert created["requesterId"] == REQUESTER.user_id
+    assert created["id"] in listed_ids_for_helper()
+
+
+def test_creation_is_idempotent_and_stays_published() -> None:
+    first = create_request("same-key")
+    second = create_request("same-key")
+
+    assert second["id"] == first["id"]
+    assert second["status"] == "published"
+
+
+def test_a_draft_can_be_published_by_its_requester() -> None:
+    created = create_request()
+    force_status(created["id"], "draft")
+    assert created["id"] not in listed_ids_for_helper()
+
+    response = client.post(f"/requests/{created['id']}/publish")
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["id"] == draft["id"]
     assert body["status"] == "published"
-    assert body["version"] == draft["version"] + 1
-    assert body["requesterId"] == REQUESTER.user_id
-    assert draft["id"] in listed_ids_for_helper()
+    assert body["version"] == created["version"] + 1
+    assert created["id"] in listed_ids_for_helper()
 
 
 def test_only_the_requester_can_publish() -> None:
-    draft = create_draft()
+    created = create_request()
+    force_status(created["id"], "draft")
 
     act_as(HELPER)
-    response = client.post(f"/requests/{draft['id']}/publish")
+    response = client.post(f"/requests/{created['id']}/publish")
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "ROLE_FORBIDDEN"
-    assert draft["id"] not in listed_ids_for_helper()
+    assert created["id"] not in listed_ids_for_helper()
 
 
-def test_publishing_twice_is_rejected() -> None:
-    draft = create_draft()
-    assert client.post(f"/requests/{draft['id']}/publish").status_code == 200
+def test_publishing_an_already_published_request_is_rejected() -> None:
+    created = create_request()
 
-    response = client.post(f"/requests/{draft['id']}/publish")
+    response = client.post(f"/requests/{created['id']}/publish")
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "INVALID_REQUEST_TRANSITION"
 
 
 def test_requests_under_review_cannot_be_published_by_the_requester() -> None:
-    draft = create_draft()
-    moved = asyncio.run(
-        get_request_repository().set_status(
-            REQUESTER, draft["id"], "pending_review", bump_version=False,
-        )
-    )
-    assert moved
+    created = create_request()
+    force_status(created["id"], "pending_review")
 
-    response = client.post(f"/requests/{draft['id']}/publish")
+    response = client.post(f"/requests/{created['id']}/publish")
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "REQUEST_UNDER_REVIEW"
-    assert draft["id"] not in listed_ids_for_helper()
+    assert created["id"] not in listed_ids_for_helper()
 
 
 def test_unknown_request_returns_404() -> None:
@@ -151,29 +168,28 @@ def test_unknown_request_returns_404() -> None:
 
 
 def test_cancelling_a_published_request_removes_it_from_the_list() -> None:
-    draft = create_draft()
-    assert client.post(f"/requests/{draft['id']}/publish").status_code == 200
-    assert draft["id"] in listed_ids_for_helper()
+    created = create_request()
+    assert created["id"] in listed_ids_for_helper()
 
-    response = client.delete(f"/requests/{draft['id']}")
+    response = client.delete(f"/requests/{created['id']}")
 
     assert response.status_code == 204
-    assert draft["id"] not in listed_ids_for_helper()
-    detail = client.get(f"/requests/{draft['id']}")
+    assert created["id"] not in listed_ids_for_helper()
+    detail = client.get(f"/requests/{created['id']}")
     assert detail.status_code == 200
     assert detail.json()["status"] == "cancelled"
 
     # 取消済みは公開へ戻せない。
-    republish = client.post(f"/requests/{draft['id']}/publish")
+    republish = client.post(f"/requests/{created['id']}/publish")
     assert republish.status_code == 409
     assert republish.json()["error"]["code"] == "INVALID_REQUEST_TRANSITION"
 
 
 def test_cancelling_twice_is_rejected() -> None:
-    draft = create_draft()
-    assert client.delete(f"/requests/{draft['id']}").status_code == 204
+    created = create_request()
+    assert client.delete(f"/requests/{created['id']}").status_code == 204
 
-    response = client.delete(f"/requests/{draft['id']}")
+    response = client.delete(f"/requests/{created['id']}")
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "INVALID_REQUEST_TRANSITION"

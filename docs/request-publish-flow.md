@@ -1,34 +1,25 @@
-# 依頼の投稿・公開・取消フロー
+# 依頼の公開と取消
 
-依頼者が確認画面から依頼を出し、支援者の一覧に載せ、必要なら取り消すまでの流れ。
+依頼者が確認画面から依頼を出し、支援者の一覧に載せ、必要なら取り消すまでの状態遷移。
 
 ## 状態遷移
 
 ```
-POST /requests            -> draft（危険度判定で審査対象なら pending_review）
+POST /requests              -> published（利用者が confirmed=true で送った依頼）
+                            -> pending_review（危険度判定で審査対象になった依頼）
 POST /requests/{id}/publish -> published（draft からのみ。本人のみ）
-DELETE /requests/{id}     -> cancelled（本人のみ。completed / cancelled からは不可）
+DELETE /requests/{id}       -> cancelled（本人のみ。completed / cancelled からは不可）
 ```
 
-- `pending_review` は管理者の判断待ちなので、本人が公開しようとすると `409 REQUEST_UNDER_REVIEW` を返す。
-- 公開済みや取消済みをもう一度公開しようとすると `409 INVALID_REQUEST_TRANSITION`。
-- 公開すると `version` が1つ進む。取消は現在の `version` を前提に行うため、同時操作は `409 REQUEST_STATE_CONFLICT` になる。
+- 作成API は、利用者が確認済み（`confirmed: true`）の依頼を **そのまま公開** する。以前は draft で止まり、
+  支援者の一覧（`GET /requests` は published のみ返す）に一度も載らなかった。
+- 審査対象（`pending_review`）は管理者の判断待ちなので、本人が公開しようとすると `409 REQUEST_UNDER_REVIEW`。
+- 公開済み・取消済みをもう一度公開しようとすると `409 INVALID_REQUEST_TRANSITION`。
+- `POST /requests/{id}/publish` は、将来「下書き保存」を画面に足したときのために残している。
 
 ## 画面の流れ（tetote/）
 
 1. `help/request-manual` または `help/request-voice` で内容を入力する。
-2. `help/request-confirm` でマスキング確認 → 「AIで内容を整理する」 → 下書きを編集する。
-3. 「この内容で依頼する」を押す。
-   - `features/requests/submit.ts` の `buildCreateRequestInput` が下書きを作成APIの形に整える。
-     AI が返さなかった所要時間・日時は、手入力画面で選んだ「必要な時間」「いつまで」のラベルから補い、無ければ 30分・3日後を使う。地域は下書きの `approximateArea`、無ければ `AREA-001`。
-   - `submitAndPublishRequest` が `POST /requests` → `POST /requests/{id}/publish` を続けて呼ぶ。審査対象（`pending_review`）なら公開は呼ばない。
-4. `help/request-done` に移り、公開状態を伝える。
-   - `published`: 支援者に公開された。
-   - `pending_review`: 確認が終わると公開される。
-   - `draft`: 保存はできたが公開に失敗した。
-5. 「この依頼を取り消す」→「はい、取り消す」の2段階で `DELETE /requests/{id}` を呼ぶ。成功すると「依頼を取り消しました」を表示する。
-
-## 未接続の範囲
-
-- 依頼者が過去に出した依頼の一覧・詳細画面はまだ無い。取消は完了画面からのみ行える（Issue #84 の「更新」は未対応）。
-- Postgres 実装の `set_status` は `app.set_request_status` を使うため、公開遷移も既存の関数で動く。RLS で本人以外が更新できないことは Supabase 担当の設定に依存する。
+2. `help/request-confirm` でマスキング確認 → AI整理 → 下書きを編集 → 「内容を確認して公開する」。
+   作成API が公開まで行うので、画面は作成の成功をそのまま「公開しました」として扱ってよい。
+3. `help/requests`（自分の依頼一覧）で内容の更新と取消ができる。
