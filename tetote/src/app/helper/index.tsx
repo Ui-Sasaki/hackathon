@@ -12,7 +12,6 @@ import { useState, useRef } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useRequests } from "../../context/RequestsContext";
-import { useMode } from "../../context/ModeContext";
 import { useFontSize } from "../../context/FontSizeContext";
 
 const tagOptions = [
@@ -46,7 +45,7 @@ const styles = createStyles(scale);
     isRequestSaved,
   } = useRequests();
 
-  const { mode, toggleMode } = useMode();
+  const { mode } = useMode();
 
   const [selectedTags, setSelectedTags] =
     useState<string[]>([]);
@@ -444,39 +443,24 @@ const swipeLeft =
           </View>
 
           <Pressable
-  onPress={() => {
-    toggleMode();
-    router.replace("/help");
-  }}
+  onPress={() => router.replace("/help")}
   style={({ pressed }) => [
     styles.modeSwitch,
-    pressed &&
-      styles.modeSwitchPressed,
+    pressed && styles.modeSwitchPressed,
   ]}
 >
+  <Text style={styles.modeSwitchText}>
+    手伝ってもらう側に切り替える
+  </Text>
 
-            <Text
-              style={
-                styles.modeSwitchText
-              }
-            >
-              {mode === "helper"
-                ? "手伝ってほしい側に切り替える"
-                : "手伝いたい側に切り替える"}
-            </Text>
-
-            <View
-              style={
-                styles.switchCircle
-              }
-            >
-              <Ionicons
-                name="sync-outline"
-                size={26}
-                color="#111111"
-              />
-            </View>
-          </Pressable>
+  <View style={styles.switchCircle}>
+    <Ionicons
+      name="sync-outline"
+      size={26}
+      color="#111111"
+    />
+  </View>
+</Pressable>
         </View>
 
         {status === "loading" ? (
