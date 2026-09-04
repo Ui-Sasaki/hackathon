@@ -1462,12 +1462,29 @@ async def list_applications(
     request_item = await request_or_404(repository, current_user, request_id)
     if request_item["requesterId"] != current_user.user_id:
         raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+    
     items = await application_repository.list_for_request(current_user, request_id)
-    return {"items": [
-        {**item, "helper": item.get("helper") or HELPERS[item["helperId"]]}
-        for item in items
-        if not is_blocked_pair(current_user.user_id, item["helperId"])
-    ]}
+    
+    # 修正部分: HELPERSの決め打ちをやめ、全ユーザー情報から動的に生成する
+    formatted_items = []
+    for item in items:
+        if is_blocked_pair(current_user.user_id, item["helperId"]):
+            continue
+            
+        helper_data = item.get("helper")
+        if not helper_data:
+            user_data = users_store.get(item["helperId"], {})
+            helper_data = {
+                "id": item["helperId"],
+                "displayName": user_data.get("displayName", "名称未設定"),
+                "verificationStatus": user_data.get("verificationStatus", "unverified"),
+                "universityVerified": user_data.get("emailVerified", False),
+                "skillTags": user_data.get("skillTags", []),
+                "achievementCount": user_data.get("achievementCount", 0),
+            }
+        formatted_items.append({**item, "helper": helper_data})
+        
+    return {"items": formatted_items}
 
 
 @app.post("/requests/{request_id}/applications", response_model=ApplicationResponse, status_code=201, tags=["Applications"], summary="公開依頼へ応募", description="認証済み本人を支援者として応募する。自分の依頼、重複応募、公開中でない依頼には応募できない。", responses=api_errors(401, 403, 404, 409, 422, 500))
