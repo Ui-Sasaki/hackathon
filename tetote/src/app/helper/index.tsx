@@ -46,8 +46,6 @@ const styles = createStyles(scale);
     isRequestSaved,
   } = useRequests();
 
-  const { mode } = useMode();
-
   const [selectedTags, setSelectedTags] =
     useState<string[]>([]);
 

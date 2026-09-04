@@ -203,12 +203,12 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 
-  mascotArea: {
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 14,
-    marginBottom: 12,
-  },
+mascotArea: {
+  alignItems: "center",
+  justifyContent: "center",
+  marginTop: 20,
+  marginBottom: 12,
+},
 
   mascot: {
     width: 160,
