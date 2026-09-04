@@ -52,14 +52,13 @@ export default function HelpHomeScreen() {
               />
             </View>
           </Pressable>
-
         </View>
 
         <View style={styles.mainContent}>
           <View style={styles.profileCircle}>
             <Ionicons
               name="person"
-              size={50}
+              size={46}
               color="#FFFFFF"
             />
           </View>
@@ -78,9 +77,14 @@ export default function HelpHomeScreen() {
 
           <Pressable
             onPress={() => router.push("/help/requests")}
-            style={({ pressed }) => [styles.characterButton, pressed && styles.pressed]}
+            style={({ pressed }) => [
+              styles.requestStatusButton,
+              pressed && styles.pressed,
+            ]}
           >
-            <Text style={styles.characterButtonText}>自分の依頼・応募者を確認する</Text>
+            <Text style={styles.characterButtonText}>
+              自分の依頼・応募者を確認する
+            </Text>
           </Pressable>
 
           <View style={styles.mascotArea}>
@@ -172,16 +176,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
- mainContent: {
-  width: "100%",
-  alignItems: "center",
-  marginTop: 42,
-},
+  mainContent: {
+    width: "100%",
+    alignItems: "center",
+    marginTop: 72,
+  },
 
   profileCircle: {
-    width: 136,
-    height: 136,
-    borderRadius: 68,
+    width: 122,
+    height: 122,
+    borderRadius: 61,
     backgroundColor: "#D9D9D9",
     alignItems: "center",
     justifyContent: "center",
@@ -194,7 +198,17 @@ const styles = StyleSheet.create({
     backgroundColor: "#D9D9D9",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 18,
+    marginTop: 20,
+  },
+
+  requestStatusButton: {
+    width: "84%",
+    height: 52,
+    borderRadius: 999,
+    backgroundColor: "#D9D9D9",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 10,
   },
 
   mainButtonText: {
@@ -203,16 +217,16 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 
-mascotArea: {
-  alignItems: "center",
-  justifyContent: "center",
-  marginTop: 34,
-  marginBottom: 12,
-},
+  mascotArea: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 28,
+    marginBottom: 10,
+  },
 
   mascot: {
-    width: 160,
-    height: 160,
+    width: 150,
+    height: 150,
   },
 
   characterButton: {
