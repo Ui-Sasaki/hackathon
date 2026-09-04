@@ -19,6 +19,19 @@ import {
   startMessagePolling,
   type Message,
 } from "../features/messages/client";
+import {
+  completeMatch,
+  createReview,
+  disputeMatch,
+  getMatch,
+  matchActionErrorMessage,
+  type Match,
+} from "../features/matches/client";
+import {
+  generateAchievement,
+  publishAchievement,
+  type Achievement,
+} from "../features/achievements/client";
 
 type TalkScreenProps = {
   role: "requester" | "helper";
@@ -30,12 +43,18 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
   const { profile } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [completed, setCompleted] = useState(false);
+  const [match, setMatch] = useState<Match | null>(null);
   const [loading, setLoading] = useState(Boolean(matchId));
   const [pollKey, setPollKey] = useState(0);
   const [loadError, setLoadError] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [disputeReason, setDisputeReason] = useState("");
+  const [reviewComment, setReviewComment] = useState("");
+  const [reviewed, setReviewed] = useState(false);
+  const [achievement, setAchievement] = useState<Achievement | null>(null);
 
   useEffect(() => {
     if (!matchId) return;
@@ -53,6 +72,17 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
     });
   }, [matchId, pollKey]);
 
+  useEffect(() => {
+    if (!matchId) return;
+    let active = true;
+    void getMatch(matchId).then((state) => {
+      if (!active) return;
+      if (state.status === "ready") setMatch(state.match);
+      else setActionError(matchActionErrorMessage(state.error));
+    });
+    return () => { active = false; };
+  }, [matchId]);
+
   const sendMessage = useCallback(async () => {
     const trimmed = input.trim();
     if (!trimmed || !matchId || sending) return;
@@ -68,6 +98,46 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
       setSending(false);
     }
   }, [input, matchId, sending]);
+
+  const runMatchAction = async (action: () => Promise<Match>) => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try { setMatch(await action()); }
+    catch (error) { setActionError(matchActionErrorMessage(error)); }
+    finally { setActionBusy(false); }
+  };
+
+  const submitReview = async () => {
+    if (!matchId || !reviewComment.trim() || actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await createReview(matchId, {
+        onTime: true, polite: true, safetyAware: true, communicative: true,
+        comment: reviewComment,
+      });
+      setReviewed(true);
+    } catch (error) { setActionError(matchActionErrorMessage(error)); }
+    finally { setActionBusy(false); }
+  };
+
+  const createAchievement = async () => {
+    if (!matchId || actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try { setAchievement(await generateAchievement(matchId)); }
+    catch (error) { setActionError(matchActionErrorMessage(error)); }
+    finally { setActionBusy(false); }
+  };
+
+  const approveAchievement = async () => {
+    if (!achievement || actionBusy) return;
+    setActionBusy(true);
+    try { setAchievement(await publishAchievement(achievement.id, "members")); }
+    catch (error) { setActionError(matchActionErrorMessage(error)); }
+    finally { setActionBusy(false); }
+  };
 
   return (
     <View style={styles.page}>
@@ -98,7 +168,7 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
                 size={14}
                 color="#4E8B62"
               />
-              <Text style={styles.matchText}>マッチング成立</Text>
+              <Text style={styles.matchText}>{match?.status ?? "マッチング成立"}</Text>
             </View>
           </View>
 
@@ -234,7 +304,7 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
           })}
         </ScrollView>
 
-        {completed ? (
+        {match?.status === "completed" ? (
           <View style={styles.completedContainer}>
             <Ionicons
               name="checkmark-circle"
@@ -245,6 +315,40 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
             <Text style={styles.completedText}>
               この依頼は完了しました
             </Text>
+            {!reviewed ? (
+              <>
+                <TextInput
+                  accessibilityLabel="感謝コメント"
+                  value={reviewComment}
+                  onChangeText={setReviewComment}
+                  placeholder="感謝コメントを入力"
+                  style={styles.actionInput}
+                  multiline
+                />
+                <TouchableOpacity
+                  disabled={!reviewComment.trim() || actionBusy}
+                  onPress={() => void submitReview()}
+                  style={[styles.completeButton, (!reviewComment.trim() || actionBusy) && styles.sendButtonDisabled]}
+                >
+                  <Text style={styles.completeButtonText}>評価と感謝を送る</Text>
+                </TouchableOpacity>
+              </>
+            ) : <Text style={styles.completedText}>レビューを送信しました</Text>}
+            {role === "helper" && !achievement ? (
+              <TouchableOpacity disabled={actionBusy} onPress={() => void createAchievement()} style={styles.completeButton}>
+                <Text style={styles.completeButtonText}>AI実績を作成する</Text>
+              </TouchableOpacity>
+            ) : null}
+            {achievement ? (
+              <View style={styles.achievementBox}>
+                <Text style={styles.completedText}>{achievement.generatedText}</Text>
+                {achievement.status !== "approved" ? (
+                  <TouchableOpacity disabled={actionBusy} onPress={() => void approveAchievement()} style={styles.completeButton}>
+                    <Text style={styles.completeButtonText}>確認してプロフィールに公開</Text>
+                  </TouchableOpacity>
+                ) : <Text style={styles.completedText}>プロフィールに公開しました</Text>}
+              </View>
+            ) : null}
           </View>
         ) : (
           <View style={styles.bottomContainer}>
@@ -287,9 +391,26 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
               <Text style={styles.sendErrorText}>送信できませんでした。もう一度お試しください。</Text>
             ) : null}
 
+            <TextInput
+              accessibilityLabel="キャンセル申告理由"
+              value={disputeReason}
+              onChangeText={setDisputeReason}
+              placeholder="問題がある場合は理由を10文字以上で入力"
+              style={styles.actionInput}
+            />
+            <TouchableOpacity
+              disabled={!matchId || disputeReason.trim().length < 10 || actionBusy}
+              onPress={() => matchId && void runMatchAction(() => disputeMatch(matchId, disputeReason))}
+              style={[styles.disputeButton, (!matchId || disputeReason.trim().length < 10 || actionBusy) && styles.sendButtonDisabled]}
+            >
+              <Text style={styles.disputeButtonText}>キャンセル・問題を申告する</Text>
+            </TouchableOpacity>
+            {actionError ? <Text style={styles.sendErrorText}>{actionError}</Text> : null}
+
             <TouchableOpacity
               style={styles.completeButton}
-              onPress={() => setCompleted(true)}
+              disabled={!matchId || actionBusy || match?.status === "disputed"}
+              onPress={() => matchId && void runMatchAction(() => completeMatch(matchId, role))}
             >
               <Ionicons
                 name="checkmark-circle-outline"
@@ -604,8 +725,42 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
+  actionInput: {
+    minHeight: 42,
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: "#D8D8D2",
+    borderRadius: 12,
+    backgroundColor: "#FAFAF7",
+  },
+
+  disputeButton: {
+    minHeight: 42,
+    marginTop: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    backgroundColor: "#A23B32",
+  },
+
+  disputeButtonText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+
+  achievementBox: {
+    width: "100%",
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: "#FFFFFF",
+  },
+
   completedContainer: {
-    flexDirection: "row",
+    flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
     gap: 7,

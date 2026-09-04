@@ -57,6 +57,7 @@ export default function HelpHomeScreen() {
               />
             </View>
           </Pressable>
+
         </View>
 
         <View style={styles.mainContent}>
@@ -80,6 +81,13 @@ export default function HelpHomeScreen() {
             <Text style={styles.mainButtonText}>
               お手伝いをしてもらう
             </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => router.push("/help/requests")}
+            style={({ pressed }) => [styles.characterButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.characterButtonText}>自分の依頼・応募者を確認する</Text>
           </Pressable>
 
           <View style={styles.mascotArea}>

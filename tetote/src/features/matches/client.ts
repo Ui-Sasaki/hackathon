@@ -1,4 +1,5 @@
 import { apiClient, type ApiClient } from "../../api/client";
+import { ApiError } from "../../api/errors";
 
 export type Match = {
   id: string;
@@ -34,4 +35,67 @@ export async function getMatch(
   } catch (error) {
     return { status: "error", matchId, match: null, error };
   }
+}
+
+export type MatchRole = "requester" | "helper";
+
+export type ReviewInput = {
+  onTime: boolean;
+  polite: boolean;
+  safetyAware: boolean;
+  communicative: boolean;
+  comment: string;
+};
+
+export type Review = ReviewInput & {
+  id: string;
+  matchId: string;
+  reviewerId: string;
+  revieweeId: string;
+  createdAt: string;
+};
+
+export function completeMatch(
+  matchId: string,
+  actorRole: MatchRole,
+  client: ApiClient = apiClient,
+): Promise<Match> {
+  return client.post<Match>(`/matches/${encodeURIComponent(matchId)}/complete`, {
+    completed: true,
+    actorRole,
+  });
+}
+
+export function disputeMatch(
+  matchId: string,
+  reason: string,
+  client: ApiClient = apiClient,
+): Promise<Match> {
+  return client.post<Match>(`/matches/${encodeURIComponent(matchId)}/dispute`, {
+    reason: reason.trim(),
+  });
+}
+
+export function createReview(
+  matchId: string,
+  input: ReviewInput,
+  client: ApiClient = apiClient,
+): Promise<Review> {
+  return client.post<Review>(`/matches/${encodeURIComponent(matchId)}/reviews`, {
+    ...input,
+    comment: input.comment.trim(),
+  });
+}
+
+const matchErrorMessages: Record<string, string> = {
+  AUTHENTICATION_REQUIRED: "セッションの有効期限が切れました。もう一度ログインしてください。",
+  ROLE_FORBIDDEN: "この操作を行う権限がありません。",
+  MATCH_NOT_FOUND: "マッチ情報が見つかりません。",
+  MATCH_STATE_CONFLICT: "状態が更新されています。最新の情報を読み込んでください。",
+  REVIEW_ALREADY_EXISTS: "このマッチにはレビュー済みです。",
+};
+
+export function matchActionErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) return matchErrorMessages[error.code] ?? error.message;
+  return "操作を完了できませんでした。通信環境を確認して、もう一度お試しください。";
 }
