@@ -22,6 +22,10 @@ Issue #86、TODO 29 に対応する。要件定義書 11.3、12 を前提とす�
 
 ## 2. 流れ
 
+大学メール方式では `POST /verification-email/challenges` で`.ac.jp`宛てに6桁コードを送り、
+`POST /verification-email/verify`で照合する。コードは10分有効、5回失敗でロックされ、
+DBにはHMAC-SHA256ダイジェストだけを保存する。送信はCloudflare Email Service REST APIを使う。
+
 ```
 （学生証方式のみ）
 POST /uploads                    purpose: verification_document
