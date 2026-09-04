@@ -14,9 +14,11 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useAuth } from "../auth/AuthContext";
 import {
+  getChatSummary,
   mergeMessages,
   sendMessage as sendMessageToApi,
   startMessagePolling,
+  type ChatSummary,
   type Message,
 } from "../features/messages/client";
 import {
@@ -38,12 +40,32 @@ type TalkScreenProps = {
   matchId?: string;
 };
 
+const matchStatusLabels: Record<Match["status"], string> = {
+  matched: "マッチング成立",
+  in_progress: "進行中",
+  completion_pending: "完了確認中",
+  completed: "完了",
+  disputed: "確認中",
+};
+
+function formatScheduledAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("ja-JP", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export default function TalkScreen({ role, matchId }: TalkScreenProps) {
   const router = useRouter();
   const { profile } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [match, setMatch] = useState<Match | null>(null);
+  const [chatSummary, setChatSummary] = useState<ChatSummary | null>(null);
   const [loading, setLoading] = useState(Boolean(matchId));
   const [pollKey, setPollKey] = useState(0);
   const [loadError, setLoadError] = useState(false);
@@ -75,10 +97,20 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
   useEffect(() => {
     if (!matchId) return;
     let active = true;
-    void getMatch(matchId).then((state) => {
+    void Promise.allSettled([getMatch(matchId), getChatSummary(matchId)]).then((results) => {
       if (!active) return;
-      if (state.status === "ready") setMatch(state.match);
-      else setActionError(matchActionErrorMessage(state.error));
+      const [matchResult, chatsResult] = results;
+      if (matchResult.status !== "fulfilled") {
+        setActionError(matchActionErrorMessage(matchResult.reason));
+      } else if (matchResult.value.status === "ready") {
+        setMatch(matchResult.value.match);
+      } else {
+        setActionError(matchActionErrorMessage(matchResult.value.error));
+      }
+
+      if (chatsResult.status === "fulfilled") {
+        setChatSummary(chatsResult.value);
+      }
     });
     return () => { active = false; };
   }, [matchId]);
@@ -160,7 +192,9 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
 </TouchableOpacity>
 
           <View style={styles.headerCenter}>
-            <Text style={styles.name}>山田さん</Text>
+            <Text style={styles.name}>
+              {chatSummary?.counterpart.displayName ?? "チャット"}
+            </Text>
 
             <View style={styles.matchRow}>
               <Ionicons
@@ -168,7 +202,9 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
                 size={14}
                 color="#4E8B62"
               />
-              <Text style={styles.matchText}>{match?.status ?? "マッチング成立"}</Text>
+              <Text style={styles.matchText}>
+                {match ? matchStatusLabels[match.status] : "マッチ情報を確認中"}
+              </Text>
             </View>
           </View>
 
@@ -189,11 +225,11 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
 
             <View style={styles.requestContent}>
               <Text style={styles.requestTitle}>
-                重い荷物を運んでほしい
+                {chatSummary?.request.title ?? "依頼情報を確認中"}
               </Text>
 
               <Text style={styles.requestInfo}>
-                8/30 14:00 ・ 約15分
+                {chatSummary ? formatScheduledAt(chatSummary.request.scheduledAt) : "--"}
               </Text>
 
               <View style={styles.locationRow}>
@@ -202,7 +238,9 @@ export default function TalkScreen({ role, matchId }: TalkScreenProps) {
                   size={15}
                   color="#777777"
                 />
-                <Text style={styles.requestInfo}>赤坂駅周辺</Text>
+                <Text style={styles.requestInfo}>
+                  {chatSummary?.request.areaLabel ?? "--"}
+                </Text>
               </View>
 
               <TouchableOpacity>
