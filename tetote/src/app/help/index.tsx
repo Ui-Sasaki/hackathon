@@ -172,11 +172,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
-  mainContent: {
-    width: "100%",
-    alignItems: "center",
-    marginTop: 18,
-  },
+ mainContent: {
+  width: "100%",
+  alignItems: "center",
+  marginTop: 42,
+},
 
   profileCircle: {
     width: 136,
@@ -206,7 +206,7 @@ const styles = StyleSheet.create({
 mascotArea: {
   alignItems: "center",
   justifyContent: "center",
-  marginTop: 48,
+  marginTop: 34,
   marginBottom: 12,
 },
 
