@@ -20,16 +20,17 @@ FastAPI実装やAPI接続だけでは確定できない事項を記録する。�
 - 調整先: FastAPI担当、Supabase担当
 - 現状とずれ:
   - `GET /requests` は公開依頼の検索APIであり、依頼者本人の `pending_review`、`matched`、`completed`、`cancelled` などを一括取得する契約がない。
-  - `GET /matches/{match_id}` はあるが、ログイン利用者のマッチ一覧APIがないため、チャット一覧をAPIレスポンスへ置き換えられない。
+  - `GET /matches` の共通契約、Memory Repository、APIテスト、画面接続を追加した。
+  - Postgres Repositoryと `app.list_own_chat_matches()` を追加し、当事者認可とブロック除外をDBでも保証した。
   - 接続側は公開一覧に含まれる自分の依頼から、詳細・更新・取消・応募者一覧・応募者選択へ進める範囲まで実装した。
 - 確認・決定が必要な内容:
   - `GET /me/requests` 相当の状態フィルタ・カーソル・表示項目。
-  - `GET /me/matches` 相当の相手表示名、依頼概要、最新メッセージ、未読数、状態、カーソル。
+  - 本番Supabaseへ `20260904040000_chat_list_persistence.sql` を適用する手順と時期。
   - ブロック済み利用者に関する一覧除外と、完了・紛争中データの保持期間。
 - 接続・引き継ぎ条件:
   - actor IDはクエリで受け取らず、検証済みセッションから決定する。
   - 一覧レスポンスに `requestId`、`matchId`、`version` を含め、既存の詳細・チャット・楽観ロックへ引き継げるようにする。
-- 状態: 未確認（個別リソースの画面接続は実装済み、一覧API待ち）
+- 状態: 実装済み（本番migration適用は人間の承認待ち）
 
 ### COORD-005: 本番の認証ユーザープロフィール自動作成
 

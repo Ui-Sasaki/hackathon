@@ -2,10 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ApiClient } from "../../api/client";
 import {
+  getChatSummary,
+  listChats,
   listMessages,
   mergeMessages,
   sendMessage,
   startMessagePolling,
+  type ChatSummary,
   type Message,
 } from "./client";
 
@@ -19,11 +22,57 @@ const message = (id: string, sentAt: string): Message => ({
   moderationStatus: "allowed",
 });
 
+const chatSummary = (matchId: string): ChatSummary => ({
+  matchId,
+  status: "matched",
+  counterpart: { id: "user-2", displayName: "佐藤さん" },
+  request: {
+    id: "request-1",
+    title: "荷物運び",
+    scheduledAt: "2026-09-03T10:00:00Z",
+    areaLabel: "赤坂駅周辺",
+  },
+  latestMessage: null,
+  unreadCount: 0,
+  updatedAt: "2026-09-03T10:00:00Z",
+});
+
 const response = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
   });
+
+describe("chat list API", () => {
+  it("loads the authenticated user's chats and encodes the cursor", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response({ items: [], nextCursor: null }));
+    const client = new ApiClient({ baseUrl: "https://api.example.test", fetch: fetchMock });
+
+    await expect(listChats("match/previous", client)).resolves.toEqual({
+      items: [], nextCursor: null,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.example.test/matches?cursor=match%2Fprevious",
+    );
+    expect(fetchMock.mock.calls[0][1].credentials).toBe("include");
+  });
+
+  it("finds a chat summary across paginated chat lists", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ items: [chatSummary("match-1")], nextCursor: "match-1" }))
+      .mockResolvedValueOnce(response({ items: [chatSummary("match-2")], nextCursor: null }));
+    const client = new ApiClient({ baseUrl: "https://api.example.test", fetch: fetchMock });
+
+    await expect(getChatSummary("match-2", client)).resolves.toMatchObject({
+      matchId: "match-2",
+      request: { title: "荷物運び" },
+    });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://api.example.test/matches",
+      "https://api.example.test/matches?cursor=match-1",
+    ]);
+  });
+});
 
 describe("message API polling", () => {
   it("loads messages for the encoded match id", async () => {

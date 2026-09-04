@@ -15,6 +15,43 @@ export type MessageListResponse = {
   nextCursor: string | null;
 };
 
+export type ChatSummary = {
+  matchId: string;
+  status: "matched" | "in_progress" | "completion_pending" | "completed" | "disputed";
+  counterpart: { id: string; displayName: string };
+  request: { id: string; title: string; scheduledAt: string; areaLabel: string };
+  latestMessage: Message | null;
+  unreadCount: number;
+  updatedAt: string;
+};
+
+export type ChatListResponse = {
+  items: ChatSummary[];
+  nextCursor: string | null;
+};
+
+export function listChats(
+  cursor?: string,
+  client: ApiClient = apiClient,
+): Promise<ChatListResponse> {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+  return client.get<ChatListResponse>(`/matches${query}`);
+}
+
+export async function getChatSummary(
+  matchId: string,
+  client: ApiClient = apiClient,
+): Promise<ChatSummary | null> {
+  let cursor: string | undefined;
+  do {
+    const response = await listChats(cursor, client);
+    const match = response.items.find((item) => item.matchId === matchId);
+    if (match) return match;
+    cursor = response.nextCursor ?? undefined;
+  } while (cursor);
+  return null;
+}
+
 export const MESSAGE_POLL_INTERVAL_MS = 3_000;
 
 export function listMessages(

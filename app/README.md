@@ -115,6 +115,7 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | GET | `/requests/{id}/applications` | 応募者一覧 |
 | POST | `/applications/{id}/select` | 応募者選択 |
 | POST | `/applications/{id}/withdraw` | 応募取り下げ |
+| GET | `/matches` | 自分のチャット一覧（最新メッセージ・未読数） |
 | GET / POST | `/matches/{id}/messages` | チャット取得・送信 |
 | POST | `/matches/{id}/complete` | 完了確認 |
 | POST | `/matches/{id}/dispute` | マッチングキャンセル |

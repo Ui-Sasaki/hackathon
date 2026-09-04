@@ -8,6 +8,8 @@ from .main import (
     AuthInput,
     BlockInput,
     BlockResponse,
+    ChatListResponse,
+    ChatSummary,
     CompletionInput,
     DisputeInput,
     ErrorResponse,

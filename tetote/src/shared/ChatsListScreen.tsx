@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   View,
   Text,
   TouchableOpacity,
@@ -8,42 +9,52 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { listChats, type ChatSummary } from "../features/messages/client";
+import { requestListErrorMessage } from "../features/requests/client";
 
 type ChatsListScreenProps = {
   role: "requester" | "helper";
 };
 
-const chats = [
-  {
-    id: 1,
-    initials: "T.O",
-    preview: "あなたの依頼を引き受けました！...",
-    unread: 1,
-  },
-  {
-    id: 2,
-    initials: "T.S",
-    preview: "依頼が完了しました...",
-    unread: 0,
-  },
-  {
-    id: 3,
-    initials: "M.K",
-    preview: "明日の14時で大丈夫です！",
-    unread: 0,
-  },
-];
-
 export default function ChatsListScreen({
   role,
 }: ChatsListScreenProps) {
   const router = useRouter();
+  const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [errorMessage, setErrorMessage] = useState("");
 
-  const openChat = () => {
+  const load = useCallback(async () => {
+    setStatus("loading");
+    try {
+      const response = await listChats();
+      setChats(response.items);
+      setStatus("ready");
+    } catch (error) {
+      setErrorMessage(requestListErrorMessage(error));
+      setStatus("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void listChats().then((response) => {
+      if (!active) return;
+      setChats(response.items);
+      setStatus("ready");
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setErrorMessage(requestListErrorMessage(error));
+      setStatus("error");
+    });
+    return () => { active = false; };
+  }, []);
+
+  const openChat = (matchId: string) => {
     if (role === "requester") {
-      router.push("/help/chat");
+      router.push({ pathname: "/help/chat", params: { matchId } });
     } else {
-      router.push("/helper/chat");
+      router.push({ pathname: "/helper/chat", params: { matchId } });
     }
   };
 
@@ -58,11 +69,20 @@ export default function ChatsListScreen({
           style={styles.list}
           contentContainerStyle={styles.listContent}
         >
-          {chats.map((chat) => (
+          {status === "loading" ? (
+            <View style={styles.stateBox}><ActivityIndicator color="#4E8B62" /><Text>チャットを読み込んでいます...</Text></View>
+          ) : status === "error" ? (
+            <View style={styles.stateBox}>
+              <Text style={styles.errorText}>{errorMessage}</Text>
+              <TouchableOpacity onPress={() => void load()}><Text style={styles.retryText}>もう一度読み込む</Text></TouchableOpacity>
+            </View>
+          ) : chats.length === 0 ? (
+            <View style={styles.stateBox}><Text>進行中または過去のチャットはありません。</Text></View>
+          ) : chats.map((chat) => (
             <TouchableOpacity
-              key={chat.id}
+              key={chat.matchId}
               style={styles.chatRow}
-              onPress={openChat}
+              onPress={() => openChat(chat.matchId)}
               activeOpacity={0.7}
             >
               <View style={styles.avatar}>
@@ -75,21 +95,21 @@ export default function ChatsListScreen({
 
               <View style={styles.chatContent}>
                 <Text style={styles.name}>
-                  {chat.initials}
+                  {chat.counterpart.displayName}
                 </Text>
 
                 <Text
                   style={styles.preview}
                   numberOfLines={1}
                 >
-                  {chat.preview}
+                  {chat.latestMessage?.body ?? chat.request.title}
                 </Text>
               </View>
 
-              {chat.unread > 0 && (
+              {chat.unreadCount > 0 && (
                 <View style={styles.unreadBadge}>
                   <Text style={styles.unreadText}>
-                    {chat.unread}
+                    {chat.unreadCount}
                   </Text>
                 </View>
               )}
@@ -135,6 +155,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingBottom: 24,
   },
+  stateBox: { alignItems: "center", gap: 12, paddingVertical: 48 },
+  errorText: { color: "#A23B32", textAlign: "center" },
+  retryText: { color: "#245C2D", fontWeight: "700" },
 
   chatRow: {
     flexDirection: "row",
