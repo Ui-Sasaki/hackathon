@@ -12,6 +12,7 @@ import { useState, useRef } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useRequests } from "../../context/RequestsContext";
+import { useMode } from "../../context/ModeContext";
 import { useFontSize } from "../../context/FontSizeContext";
 
 const tagOptions = [
