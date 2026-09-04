@@ -63,6 +63,7 @@ from app.repositories.verifications import (
 from app.repositories.verification_reviews import (
     VerificationReviewRepository, get_verification_review_repository,
 )
+from app.repositories.verification_email import get_verification_email_repository
 from app.settings import settings
 from app.services.applications import (
     create_application as create_application_service,
@@ -76,6 +77,7 @@ from app.repositories.uploads import (
 )
 from app.services import request_structuring, safety
 from app.services import verification_reviews as verification_review_service
+from app.services import verification_email
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
@@ -93,6 +95,8 @@ from app.schemas import (
     StructureInput, StructuredRequestResponse, VerificationInput, VerificationResponse,
     VerificationDecisionInput, VerificationDocumentAccessResponse,
     VerificationReviewItem, VerificationReviewListResponse,
+    UniversityEmailChallengeInput, UniversityEmailChallengeResponse,
+    UniversityEmailCodeInput, UniversityEmailVerificationResponse,
     ProfileImageInput, ProfileImageResponse, UploadSessionInput, UploadSessionResponse,
     UploadedContentResponse,
     UserSettingsResponse, UserSettingsUpdateInput,
@@ -160,6 +164,7 @@ STATUS_ERROR_CODES = {
     413: "IMAGE_TOO_LARGE",
     415: "UNSUPPORTED_MEDIA_TYPE",
     422: "VALIDATION_ERROR",
+    429: "RATE_LIMITED",
     500: "INTERNAL_SERVER_ERROR",
 }
 
@@ -175,6 +180,7 @@ def api_errors(*statuses: int) -> dict[int, dict[str, Any]]:
         413: ("IMAGE_TOO_LARGE", "ファイルが大きすぎます"),
         415: ("UNSUPPORTED_MEDIA_TYPE", "対応していない形式です"),
         422: ("VALIDATION_ERROR", "入力内容を確認してください"),
+        429: ("RATE_LIMITED", "しばらく待ってからもう一度お試しください"),
         500: ("INTERNAL_SERVER_ERROR", "サーバー内部でエラーが発生しました"),
         502: ("STRUCTURE_INVALID_RESPONSE", "構造化サービスの応答を検証できません"),
         503: ("STRUCTURE_SERVICE_UNAVAILABLE", "構造化サービスを利用できません"),
@@ -1813,6 +1819,50 @@ async def create_verification(
         if exc.code == "VERIFICATION_ALREADY_PENDING":
             raise HTTPException(409, detail={"code": exc.code}) from exc
         raise HTTPException(422, detail={"code": exc.code}) from exc
+
+
+@app.post("/verification-email/challenges", response_model=UniversityEmailChallengeResponse,
+          status_code=201, tags=["Verification"], summary="大学メールへ確認コードを送信",
+          responses=api_errors(401, 422, 429, 500))
+async def create_university_email_challenge(
+    body: UniversityEmailChallengeInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        email = verification_email.normalize_university_email(body.email)
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": str(exc)}) from exc
+    challenge_id = str(uuid4())
+    code = verification_email.generate_code()
+    digest = verification_email.code_digest(challenge_id, code)
+    repository = get_verification_email_repository()
+    try:
+        await repository.create(current_user, email, digest, challenge_id)
+    except Exception as exc:
+        if "RATE_LIMITED" in str(exc):
+            raise HTTPException(429, detail={"code": "VERIFICATION_CODE_RATE_LIMITED"}) from exc
+        raise
+    await verification_email.send_code(email, code)
+    return {"challengeId": challenge_id, "expiresInSeconds": 600}
+
+
+@app.post("/verification-email/verify", response_model=UniversityEmailVerificationResponse,
+          tags=["Verification"], summary="大学メール確認コードを照合",
+          responses=api_errors(401, 404, 409, 422, 429, 500))
+async def verify_university_email_code(
+    body: UniversityEmailCodeInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    digest = verification_email.code_digest(body.challengeId, body.code)
+    result = await get_verification_email_repository().verify(
+        current_user, body.challengeId, digest
+    )
+    errors = {"CHALLENGE_NOT_FOUND": (404, result), "CODE_EXPIRED": (409, result),
+              "TOO_MANY_ATTEMPTS": (429, result), "INVALID_CODE": (422, result)}
+    if result != "APPROVED":
+        status, code = errors.get(result, (409, "VERIFICATION_STATE_CONFLICT"))
+        raise HTTPException(status, detail={"code": code})
+    return {"verificationStatus": "approved"}
 
 
 def require_verification_reviewer(user: CurrentUser) -> None:

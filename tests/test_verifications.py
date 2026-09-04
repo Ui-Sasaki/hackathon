@@ -306,3 +306,33 @@ def test_reviewed_document_can_be_deleted_and_is_audited() -> None:
     assert deleted.json()["hasDocument"] is False
     assert deleted.json()["deletedAt"] is not None
     assert crud_module.audit_logs[-1]["eventType"] == "verification_document_deleted"
+
+
+def test_ac_jp_confirmation_code_approves_verification(monkeypatch) -> None:
+    sent = {}
+    monkeypatch.setattr("app.services.verification_email.generate_code", lambda: "123456")
+    async def capture(email, code): sent.update(email=email, code=code)
+    monkeypatch.setattr("app.services.verification_email.send_code", capture)
+
+    challenge = client.post(
+        "/verification-email/challenges", json={"email": "student@u-tokyo.ac.jp"}
+    )
+    assert challenge.status_code == 201
+    assert sent == {"email": "student@u-tokyo.ac.jp", "code": "123456"}
+
+    verified = client.post("/verification-email/verify", json={
+        "challengeId": challenge.json()["challengeId"], "code": "123456",
+    })
+    assert verified.status_code == 200
+    assert verified.json() == {"verificationStatus": "approved"}
+    assert crud_module.users_store[OWNER.user_id]["emailVerified"] is True
+
+
+def test_non_ac_jp_email_is_rejected_without_sending(monkeypatch) -> None:
+    async def fail(*_args): raise AssertionError("must not send")
+    monkeypatch.setattr("app.services.verification_email.send_code", fail)
+    response = client.post(
+        "/verification-email/challenges", json={"email": "student@example.com"}
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "UNIVERSITY_EMAIL_REQUIRED"

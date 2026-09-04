@@ -470,6 +470,26 @@ class VerificationInput(ContractModel):
     uploadId: str | None = Field(None, min_length=1, max_length=100, description="学生証方式のみ。用途 verification_document のアップロード識別子。ストレージ内部キーは受け取らない")
 
 
+class UniversityEmailChallengeInput(ContractModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=6, max_length=254)
+
+
+class UniversityEmailChallengeResponse(ContractModel):
+    challengeId: str
+    expiresInSeconds: int = 600
+
+
+class UniversityEmailCodeInput(ContractModel):
+    model_config = ConfigDict(extra="forbid")
+    challengeId: str = Field(min_length=1, max_length=100)
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class UniversityEmailVerificationResponse(ContractModel):
+    verificationStatus: Literal["approved"]
+
+
 class VerificationResponse(ContractModel):
     id: str
     userId: str
