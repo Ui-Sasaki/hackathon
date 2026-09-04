@@ -70,12 +70,14 @@ from app.services.applications import (
     select_application as select_application_service,
     withdraw_application as withdraw_application_service,
 )
-from app.services.requests import cancel_owned_request, require_request, update_owned_request
+from app.services.requests import (
+    cancel_owned_request, publish_owned_request, require_request, update_owned_request,
+)
 from app.services import images
 from app.repositories.uploads import (
     MemoryUploadRepository, UploadRepository, get_upload_repository,
 )
-from app.services import request_structuring, safety
+from app.services import character, request_structuring, safety
 from app.services import verification_reviews as verification_review_service
 from app.services import verification_email
 if SUPERTOKENS_ENABLED:
@@ -85,6 +87,7 @@ from app.settings import reject_unsafe_in_production, settings
 from app.schemas import (
     AchievementInput, AchievementResponse, AchievementVisibilityInput,
     ApplicationInput, ApplicationListResponse, ApplicationResponse,
+    CharacterProgressResponse,
     BlockInput, BlockResponse, ChatListResponse, CompletionInput, DisputeInput, ErrorResponse,
     LocationResolveInput, LocationResolveResponse, MatchResponse, MessageInput,
     MaskingConfirmationResponse, MessageListResponse, MessageResponse,
@@ -1219,7 +1222,7 @@ async def list_requests(
     }
 
 
-@app.post("/requests", response_model=RequestResponse, status_code=201, tags=["Requests"], summary="依頼を作成", description="認証済み本人を依頼者としてdraftを作成する。Idempotency-Keyが同じ再送は同じ結果を返す。", responses=api_errors(401, 422, 500))
+@app.post("/requests", response_model=RequestResponse, status_code=201, tags=["Requests"], summary="依頼を作成", description="認証済み本人を依頼者として依頼を作成し、利用者が確認済みの内容はそのまま公開（published）する。危険度判定で審査対象になった依頼は pending_review で止まる。Idempotency-Keyが同じ再送は同じ結果を返す。", responses=api_errors(401, 422, 500))
 async def create_request(
     body: RequestInput,
     idempotency_key: str = Header(alias="Idempotency-Key"),
@@ -1251,6 +1254,13 @@ async def create_request(
         expected_version=item["version"], bump_version=False,
     ):
         item = {**item, "status": "pending_review"}
+    # 利用者が確認済み（confirmed=true）で送った依頼は、そのまま支援者へ公開する。
+    # draft で止めると一覧（published のみ）に載らず、依頼が誰にも届かない。
+    elif item["status"] == "draft" and await repository.set_status(
+        current_user, item["id"], "published",
+        expected_version=item["version"], bump_version=False,
+    ):
+        item = {**item, "status": "published"}
     if assessment.messages:
         item = {**item, "warnings": list(assessment.messages)}
     idempotency_store[cache_key] = item
@@ -1410,6 +1420,15 @@ async def update_request(
     if assessment is not None and assessment.messages:
         item = {**item, "warnings": list(assessment.messages)}
     return item
+
+
+@app.post("/requests/{request_id}/publish", response_model=RequestResponse, tags=["Requests"], summary="下書きの依頼を公開", description="依頼者本人がdraftの依頼をpublishedへ遷移させ、支援者の一覧に載せる。審査待ち(pending_review)は409 REQUEST_UNDER_REVIEW、draft以外は409 INVALID_REQUEST_TRANSITION。", responses=api_errors(401, 403, 404, 409, 500))
+async def publish_request(
+    request_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+):
+    return await publish_owned_request(repository, current_user, request_id)
 
 
 @app.delete("/requests/{request_id}", status_code=204, tags=["Requests"], summary="自分の依頼を取消", description="依頼者本人が取消可能な状態の依頼をcancelledへ遷移させ、未処理応募もcancelledにする。レスポンス本文はない。", responses=api_errors(401, 403, 404, 409, 500))
@@ -1787,6 +1806,25 @@ async def update_achievement_visibility(
         item["approvedAt"] = now_iso()
         item["status"] = "approved"
     return item
+
+
+@app.get("/character-progress", response_model=CharacterProgressResponse, tags=["Character"], summary="自分のキャラクター進捗を取得", description="認証済み本人が支援者として完了したマッチだけを集計し、累計ポイント・支援回数・段階・次段階までのポイント・表示キャラクター識別子を返す。集計値はクライアント入力を使わない。", responses=api_errors(401, 500))
+async def get_character_progress(
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: RequestRepository = Depends(request_repository_dependency),
+    match_repository: MatchRepository = Depends(match_repository_dependency),
+):
+    # マッチは Repository（本番は Postgres）が正本。インメモリの辞書は見ない。
+    helps: list[character.CompletedHelp] = []
+    for completed in await match_repository.list_completed_for_helper(current_user):
+        minutes = completed.get("estimatedMinutes")
+        if minutes is None:
+            # Memory実装は活動時間を持たないので依頼から引く。
+            # 依頼が読めないとき（削除済みなど）は0として回数だけ数える。
+            request_item = await repository.get(current_user, completed["requestId"])
+            minutes = request_item["estimatedMinutes"] if request_item else 0
+        helps.append({"matchId": completed["matchId"], "estimatedMinutes": minutes})
+    return character.build_progress(current_user.user_id, helps)
 
 
 @app.post("/verifications", response_model=VerificationResponse, status_code=201, tags=["Verification"], summary="本人確認を申請", description="大学メールまたは学生証で申請する開発用モック。学生証方式は非公開ストレージキーが必須だが、キーや画像はレスポンスに含めない。審査中の重複申請は409。", responses=api_errors(401, 409, 422, 500))

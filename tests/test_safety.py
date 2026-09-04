@@ -303,7 +303,7 @@ def test_create_request_sends_review_targets_to_pending_review() -> None:
     assert body["warnings"]
 
 
-def test_create_request_keeps_ordinary_requests_as_draft() -> None:
+def test_create_request_publishes_ordinary_requests() -> None:
     response = client.post(
         "/requests",
         json=create_payload(),
@@ -311,7 +311,7 @@ def test_create_request_keeps_ordinary_requests_as_draft() -> None:
     )
     assert response.status_code == 201
     body = response.json()
-    assert body["status"] == "draft"
+    assert body["status"] == "published"
     assert body["riskLevel"] == "low"
 
 
@@ -378,5 +378,5 @@ def test_update_without_text_changes_keeps_the_current_state() -> None:
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "draft"
+    assert body["status"] == "published"
     assert body["estimatedMinutes"] == 60
