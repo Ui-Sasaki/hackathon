@@ -10,6 +10,7 @@ import {
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useFontSize } from "../../context/FontSizeContext";
+import { resolveApproximateLocation } from "../../api/location";
 
 const timeOptions = [
   "15分以内",
@@ -28,10 +29,25 @@ export default function RequestManualScreen() {
 
   const [content, setContent] = useState("");
   const [location, setLocation] = useState("");
+  const [areaCode, setAreaCode] = useState("");
+  const [locationBusy, setLocationBusy] = useState(false);
+  const [locationMessage, setLocationMessage] = useState("");
   const [time, setTime] = useState("");
   const [timeDropdownOpen, setTimeDropdownOpen] =
     useState(false);
   const [deadline, setDeadline] = useState("3日後");
+
+  const resolveLocation = async (consentGranted: boolean) => {
+    if (locationBusy) return;
+    setLocationBusy(true); setLocationMessage("");
+    const state = await resolveApproximateLocation({ consentGranted });
+    if (state.status === "resolved") {
+      setAreaCode(state.location.areaCode);
+      setLocation(state.location.areaLabel ?? state.location.areaCode);
+      setLocationMessage(state.location.fallbackUsed ? "登録地域を使用します" : "現在地から概算地域を取得しました");
+    } else setLocationMessage("地域を取得できませんでした。プロフィールの登録地域を確認してください");
+    setLocationBusy(false);
+  };
 
   return (
     <View style={styles.screen}>
@@ -98,6 +114,18 @@ export default function RequestManualScreen() {
               multiline
               style={styles.locationInput}
             />
+            <Text style={styles.locationConsentText}>
+              現在地は概算地域への変換にだけ使用し、正確な座標は画面に保持しません。
+            </Text>
+            <View style={styles.locationActions}>
+              <Pressable disabled={locationBusy} onPress={() => void resolveLocation(true)} style={styles.locationButton}>
+                <Text style={styles.locationButtonText}>同意して現在地を使う</Text>
+              </Pressable>
+              <Pressable disabled={locationBusy} onPress={() => void resolveLocation(false)} style={styles.locationFallbackButton}>
+                <Text style={styles.locationFallbackText}>現在地を使わず登録地域を使う</Text>
+              </Pressable>
+            </View>
+            {locationMessage ? <Text style={styles.locationConsentText}>{locationMessage}</Text> : null}
 
             <Text style={styles.question}>
               3　必要な時間は？
@@ -234,6 +262,7 @@ export default function RequestManualScreen() {
                   params: {
                     content,
                     location,
+                    areaCode,
                     time,
                     deadline,
                   },
@@ -349,8 +378,15 @@ const createStyles = (scale: number) =>
       fontSize: 14 * scale,
       lineHeight: 21 * scale,
       fontWeight: "600",
-      marginBottom: 20,
+      marginBottom: 10,
     },
+
+    locationConsentText: { color: "#555555", fontSize: 12 * scale, lineHeight: 18 * scale, marginBottom: 8 },
+    locationActions: { gap: 8, marginBottom: 8 },
+    locationButton: { alignItems: "center", borderRadius: 12, padding: 11, backgroundColor: "#245C2D" },
+    locationButtonText: { color: "#FFFFFF", fontWeight: "800", fontSize: 13 * scale },
+    locationFallbackButton: { alignItems: "center", borderRadius: 12, padding: 11, borderWidth: 1, borderColor: "#245C2D" },
+    locationFallbackText: { color: "#245C2D", fontWeight: "800", fontSize: 13 * scale },
 
     timeSection: {
       width: "100%",

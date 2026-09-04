@@ -26,6 +26,7 @@ import {
   updateStructuredDraft,
   type RequestStructuringState,
 } from "../../api/request-structuring";
+import { beginRequestCreation, submitRequestCreation } from "../../api/request-creation";
 
 function maskingErrorMessage(error: unknown): string {
   if (error instanceof ApiAuthenticationError) {
@@ -60,15 +61,19 @@ export default function RequestConfirmScreen() {
     useState<RequestStructuringState | null>(null);
   const [structuringLoading, setStructuringLoading] =
     useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishMessage, setPublishMessage] = useState("");
 
   const {
     content,
     location,
+    areaCode,
     time,
     deadline,
   } = useLocalSearchParams<{
     content?: string;
     location?: string;
+    areaCode?: string;
     time?: string;
     deadline?: string;
   }>();
@@ -99,6 +104,24 @@ export default function RequestConfirmScreen() {
     const state = await structureConfirmedRequest(maskingState);
     setStructuringState(state);
     setStructuringLoading(false);
+  };
+
+  const handlePublish = async () => {
+    const draft = structuringState?.draft;
+    if (!draft || !draft.title.trim() || !draft.description.trim() || !draft.category.trim()
+      || !draft.scheduledAt || !draft.estimatedMinutes || !draft.requiredHelpers || !areaCode
+      || draft.riskLevel === "high" || draft.riskLevel === "prohibited") return;
+    setPublishing(true); setPublishMessage("");
+    const result = await submitRequestCreation(beginRequestCreation({
+      title: draft.title.trim(), description: draft.description.trim(), category: draft.category.trim(),
+      scheduledAt: draft.scheduledAt, estimatedMinutes: draft.estimatedMinutes,
+      requiredHelpers: draft.requiredHelpers, areaCode,
+      riskLevel: draft.riskLevel, confirmed: true,
+    }));
+    if (result.status === "created") setPublishMessage("依頼を公開しました。");
+    else if (result.status === "conflict") setPublishMessage("同じ依頼はすでに作成されています。");
+    else setPublishMessage("依頼を公開できませんでした。入力内容を確認してください。");
+    setPublishing(false);
   };
 
   return (
@@ -206,6 +229,30 @@ export default function RequestConfirmScreen() {
                   style={styles.draftInput}
                   value={structuringState.draft.category}
                 />
+                <Text style={styles.draftLabel}>希望日時（ISO形式）</Text>
+                <TextInput
+                  accessibilityLabel="希望日時"
+                  placeholder="2026-09-10T10:00:00+09:00"
+                  onChangeText={(scheduledAt) => setStructuringState((state) => state ? updateStructuredDraft(state, { scheduledAt }) : state)}
+                  style={styles.draftInput}
+                  value={structuringState.draft.scheduledAt ?? ""}
+                />
+                <Text style={styles.draftLabel}>所要時間（分）</Text>
+                <TextInput
+                  accessibilityLabel="所要時間"
+                  keyboardType="number-pad"
+                  onChangeText={(value) => setStructuringState((state) => state ? updateStructuredDraft(state, { estimatedMinutes: Number(value) || null }) : state)}
+                  style={styles.draftInput}
+                  value={structuringState.draft.estimatedMinutes?.toString() ?? ""}
+                />
+                <Text style={styles.draftLabel}>必要人数</Text>
+                <TextInput
+                  accessibilityLabel="必要人数"
+                  keyboardType="number-pad"
+                  onChangeText={(value) => setStructuringState((state) => state ? updateStructuredDraft(state, { requiredHelpers: Number(value) || null }) : state)}
+                  style={styles.draftInput}
+                  value={structuringState.draft.requiredHelpers?.toString() ?? ""}
+                />
                 <Text style={styles.unpublishedText}>
                   この下書きはまだ公開されていません。
                 </Text>
@@ -294,32 +341,25 @@ export default function RequestConfirmScreen() {
             </View>
 
             <Pressable
-              disabled={
-                !canProceedAfterMasking(maskingState)
-                || structuringLoading
-                || structuringState?.status === "draft"
-                || structuringState?.status === "manual"
-              }
-              onPress={() => void handleSubmit()}
+              disabled={!canProceedAfterMasking(maskingState) || structuringLoading || publishing}
+              onPress={() => void (structuringState?.draft ? handlePublish() : handleSubmit())}
               style={({ pressed }) => [
                 styles.submitButton,
-                (!canProceedAfterMasking(maskingState)
-                  || structuringLoading
-                  || structuringState?.status === "draft"
-                  || structuringState?.status === "manual") && styles.disabledButton,
+                (!canProceedAfterMasking(maskingState) || structuringLoading || publishing) && styles.disabledButton,
                 pressed && styles.pressed,
               ]}
             >
-              {structuringLoading ? (
+              {structuringLoading || publishing ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <Text style={styles.submitButtonText}>
                   {structuringState?.status === "draft" || structuringState?.status === "manual"
-                    ? "下書きを編集中"
+                    ? "内容を確認して公開する"
                     : "AIで内容を整理する"}
                 </Text>
               )}
             </Pressable>
+            {publishMessage ? <Text style={styles.errorText}>{publishMessage}</Text> : null}
 
             <Pressable
               onPress={() => router.back()}
