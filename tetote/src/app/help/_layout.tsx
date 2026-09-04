@@ -30,9 +30,10 @@ function TabIcon({
   );
 }
 
+// href: null だけでタブバーから消える。tabBarButton を併用すると expo-router が
+// 「Cannot use `href` and `tabBarButton` together」を投げ、依頼者側の全画面が真っ白になる。
 const hiddenTabOptions = {
   href: null,
-  tabBarButton: () => null,
   tabBarItemStyle: {
     display: "none" as const,
   },
