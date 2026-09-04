@@ -26,7 +26,11 @@ import {
   updateStructuredDraft,
   type RequestStructuringState,
 } from "../../api/request-structuring";
-import { beginRequestCreation, submitRequestCreation } from "../../api/request-creation";
+import {
+  beginRequestCreation,
+  submitRequestCreation,
+  type CreatedRequest,
+} from "../../api/request-creation";
 
 function maskingErrorMessage(error: unknown): string {
   if (error instanceof ApiAuthenticationError) {
@@ -48,6 +52,16 @@ function structuringErrorMessage(error: unknown): string {
   return "依頼内容を構造化できませんでした。";
 }
 
+function publishErrorMessage(error: unknown): string {
+  if (error instanceof ApiAuthenticationError) {
+    return "セッションの有効期限が切れました。もう一度ログインしてください。";
+  }
+  if (error instanceof ApiError && error.status === 422) {
+    return "依頼内容を確認して、もう一度お試しください。";
+  }
+  return "依頼を公開できませんでした。通信環境を確認してください。";
+}
+
 export default function RequestConfirmScreen() {
   const router = useRouter();
   const { scale } = useFontSize();
@@ -63,6 +77,7 @@ export default function RequestConfirmScreen() {
     useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishMessage, setPublishMessage] = useState("");
+  const [createdRequest, setCreatedRequest] = useState<CreatedRequest | null>(null);
 
   const {
     content,
@@ -100,27 +115,61 @@ export default function RequestConfirmScreen() {
 
   const handleSubmit = async () => {
     if (!canProceedAfterMasking(maskingState) || structuringLoading) return;
+    setPublishMessage("");
     setStructuringLoading(true);
     const state = await structureConfirmedRequest(maskingState);
     setStructuringState(state);
     setStructuringLoading(false);
   };
 
+  const validatePublishInput = () => {
+    const draft = structuringState?.draft;
+    if (!draft) return "AI整理後の下書きを確認してください。";
+    if (!draft.title.trim() || !draft.description.trim() || !draft.category.trim()) {
+      return "タイトル、依頼内容、カテゴリを入力してください。";
+    }
+    if (!draft.scheduledAt) return "希望日時をISO形式で入力してください。";
+    if (!draft.estimatedMinutes || draft.estimatedMinutes < 10 || draft.estimatedMinutes > 240) {
+      return "所要時間は10分から240分の範囲で入力してください。";
+    }
+    if (!draft.requiredHelpers || draft.requiredHelpers < 1 || draft.requiredHelpers > 5) {
+      return "必要人数は1人から5人の範囲で入力してください。";
+    }
+    if (!areaCode) return "場所欄で概算地域を取得してから公開してください。";
+    if (draft.riskLevel === "high" || draft.riskLevel === "prohibited") {
+      return "危険度が高い依頼は公開できません。内容を修正してください。";
+    }
+    return null;
+  };
+
   const handlePublish = async () => {
     const draft = structuringState?.draft;
-    if (!draft || !draft.title.trim() || !draft.description.trim() || !draft.category.trim()
-      || !draft.scheduledAt || !draft.estimatedMinutes || !draft.requiredHelpers || !areaCode
-      || draft.riskLevel === "high" || draft.riskLevel === "prohibited") return;
-    setPublishing(true); setPublishMessage("");
+    const validationMessage = validatePublishInput();
+    if (!draft || validationMessage) {
+      setPublishMessage(validationMessage ?? "依頼内容を確認してください。");
+      return;
+    }
+    setPublishing(true);
+    setPublishMessage("");
     const result = await submitRequestCreation(beginRequestCreation({
-      title: draft.title.trim(), description: draft.description.trim(), category: draft.category.trim(),
-      scheduledAt: draft.scheduledAt, estimatedMinutes: draft.estimatedMinutes,
-      requiredHelpers: draft.requiredHelpers, areaCode,
-      riskLevel: draft.riskLevel, confirmed: true,
+      title: draft.title.trim(),
+      description: draft.description.trim(),
+      category: draft.category.trim(),
+      scheduledAt: draft.scheduledAt,
+      estimatedMinutes: draft.estimatedMinutes,
+      requiredHelpers: draft.requiredHelpers,
+      areaCode,
+      riskLevel: draft.riskLevel,
+      confirmed: true,
     }));
-    if (result.status === "created") setPublishMessage("依頼を公開しました。");
-    else if (result.status === "conflict") setPublishMessage("同じ依頼はすでに作成されています。");
-    else setPublishMessage("依頼を公開できませんでした。入力内容を確認してください。");
+    if (result.status === "created") {
+      setCreatedRequest(result.request);
+      setPublishMessage("依頼を公開しました。");
+    } else if (result.status === "conflict") {
+      setPublishMessage("同じ依頼はすでに作成されています。");
+    } else {
+      setPublishMessage(publishErrorMessage(result.error));
+    }
     setPublishing(false);
   };
 
@@ -340,9 +389,30 @@ export default function RequestConfirmScreen() {
               </Text>
             </View>
 
+            {createdRequest ? (
+              <View style={styles.publishSuccessBox}>
+                <Ionicons name="checkmark-circle" size={22} color="#245C2D" />
+                <View style={styles.publishSuccessTextBox}>
+                  <Text style={styles.publishSuccessTitle}>依頼を公開しました</Text>
+                  <Text style={styles.publishSuccessText}>
+                    応募者の確認へ進めます。
+                  </Text>
+                </View>
+              </View>
+            ) : null}
+
             <Pressable
               disabled={!canProceedAfterMasking(maskingState) || structuringLoading || publishing}
-              onPress={() => void (structuringState?.draft ? handlePublish() : handleSubmit())}
+              onPress={() => {
+                if (createdRequest) {
+                  router.replace({
+                    pathname: "/help/requests",
+                    params: { requestId: createdRequest.id },
+                  });
+                  return;
+                }
+                void (structuringState?.draft ? handlePublish() : handleSubmit());
+              }}
               style={({ pressed }) => [
                 styles.submitButton,
                 (!canProceedAfterMasking(maskingState) || structuringLoading || publishing) && styles.disabledButton,
@@ -353,13 +423,19 @@ export default function RequestConfirmScreen() {
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <Text style={styles.submitButtonText}>
-                  {structuringState?.status === "draft" || structuringState?.status === "manual"
-                    ? "内容を確認して公開する"
-                    : "AIで内容を整理する"}
+                  {createdRequest
+                    ? "応募者確認へ進む"
+                    : structuringState?.status === "draft" || structuringState?.status === "manual"
+                      ? "内容を確認して公開する"
+                      : "AIで内容を整理する"}
                 </Text>
               )}
             </Pressable>
-            {publishMessage ? <Text style={styles.errorText}>{publishMessage}</Text> : null}
+            {publishMessage ? (
+              <Text style={createdRequest ? styles.successText : styles.errorText}>
+                {publishMessage}
+              </Text>
+            ) : null}
 
             <Pressable
               onPress={() => router.back()}
@@ -474,6 +550,14 @@ const createStyles = (scale: number) =>
       fontSize: 12 * scale,
       lineHeight: 18 * scale,
       fontWeight: "700",
+    },
+
+    successText: {
+      color: "#245C2D",
+      fontSize: 12 * scale,
+      lineHeight: 18 * scale,
+      fontWeight: "800",
+      textAlign: "center",
     },
 
     retryButton: {
@@ -598,6 +682,36 @@ const createStyles = (scale: number) =>
     noticeText: {
       flex: 1,
       color: "#8B651F",
+      fontSize: 12 * scale,
+      lineHeight: 18 * scale,
+      fontWeight: "700",
+    },
+
+    publishSuccessBox: {
+      width: "100%",
+      backgroundColor: "#E8F3E5",
+      borderRadius: 16,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 9,
+      marginTop: 14,
+    },
+
+    publishSuccessTextBox: {
+      flex: 1,
+      gap: 2,
+    },
+
+    publishSuccessTitle: {
+      color: "#245C2D",
+      fontSize: 13 * scale,
+      fontWeight: "900",
+    },
+
+    publishSuccessText: {
+      color: "#245C2D",
       fontSize: 12 * scale,
       lineHeight: 18 * scale,
       fontWeight: "700",
