@@ -1,12 +1,13 @@
 from copy import deepcopy
 import base64
 import binascii
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import math
 import os
 import re
+import secrets
 import uuid
 from typing import Any, Awaitable, Callable
 from uuid import UUID, uuid4
@@ -59,6 +60,10 @@ from app.repositories.reports import (
 from app.repositories.verifications import (
     VerificationRepository, VerificationRepositoryError, get_verification_repository,
 )
+from app.repositories.verification_reviews import (
+    VerificationReviewRepository, get_verification_review_repository,
+)
+from app.repositories.verification_email import get_verification_email_repository
 from app.settings import settings
 from app.services.applications import (
     create_application as create_application_service,
@@ -73,6 +78,8 @@ from app.repositories.uploads import (
     MemoryUploadRepository, UploadRepository, get_upload_repository,
 )
 from app.services import character, request_structuring, safety
+from app.services import verification_reviews as verification_review_service
+from app.services import verification_email
 if SUPERTOKENS_ENABLED:
     from supertokens_python.framework.fastapi import get_middleware
 from app.routers import system_router
@@ -89,6 +96,10 @@ from app.schemas import (
     RequestUpdateInput, ResetResponse, ReviewInput, ReviewResponse, SelectionInput,
     SavedRequestListResponse,
     StructureInput, StructuredRequestResponse, VerificationInput, VerificationResponse,
+    VerificationDecisionInput, VerificationDocumentAccessResponse,
+    VerificationReviewItem, VerificationReviewListResponse,
+    UniversityEmailChallengeInput, UniversityEmailChallengeResponse,
+    UniversityEmailCodeInput, UniversityEmailVerificationResponse,
     ProfileImageInput, ProfileImageResponse, UploadSessionInput, UploadSessionResponse,
     UploadedContentResponse,
     UserSettingsResponse, UserSettingsUpdateInput,
@@ -156,6 +167,7 @@ STATUS_ERROR_CODES = {
     413: "IMAGE_TOO_LARGE",
     415: "UNSUPPORTED_MEDIA_TYPE",
     422: "VALIDATION_ERROR",
+    429: "RATE_LIMITED",
     500: "INTERNAL_SERVER_ERROR",
 }
 
@@ -171,6 +183,7 @@ def api_errors(*statuses: int) -> dict[int, dict[str, Any]]:
         413: ("IMAGE_TOO_LARGE", "ファイルが大きすぎます"),
         415: ("UNSUPPORTED_MEDIA_TYPE", "対応していない形式です"),
         422: ("VALIDATION_ERROR", "入力内容を確認してください"),
+        429: ("RATE_LIMITED", "しばらく待ってからもう一度お試しください"),
         500: ("INTERNAL_SERVER_ERROR", "サーバー内部でエラーが発生しました"),
         502: ("STRUCTURE_INVALID_RESPONSE", "構造化サービスの応答を検証できません"),
         503: ("STRUCTURE_SERVICE_UNAVAILABLE", "構造化サービスを利用できません"),
@@ -511,7 +524,8 @@ PUBLIC_REQUEST_FIELDS = {
 
 def reset_store() -> None:
     global applications, matches, messages, reviews, achievements
-    global profile_store, users_store, verifications, reports, blocks, audit_logs
+    global profile_store, users_store, verifications, verification_document_tokens
+    global reports, blocks, audit_logs
     global idempotency_store
     profile_store = {
         "id": "usr_101",
@@ -563,6 +577,7 @@ def reset_store() -> None:
     reviews = {}
     achievements = {}
     verifications = {}
+    verification_document_tokens = {}
     reports = {}
     blocks = set()
     audit_logs = []
@@ -1842,6 +1857,181 @@ async def create_verification(
         if exc.code == "VERIFICATION_ALREADY_PENDING":
             raise HTTPException(409, detail={"code": exc.code}) from exc
         raise HTTPException(422, detail={"code": exc.code}) from exc
+
+
+@app.post("/verification-email/challenges", response_model=UniversityEmailChallengeResponse,
+          status_code=201, tags=["Verification"], summary="大学メールへ確認コードを送信",
+          responses=api_errors(401, 422, 429, 500))
+async def create_university_email_challenge(
+    body: UniversityEmailChallengeInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        email = verification_email.normalize_university_email(body.email)
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": str(exc)}) from exc
+    challenge_id = str(uuid4())
+    code = verification_email.generate_code()
+    digest = verification_email.code_digest(challenge_id, code)
+    repository = get_verification_email_repository()
+    try:
+        await repository.create(current_user, email, digest, challenge_id)
+    except Exception as exc:
+        if "RATE_LIMITED" in str(exc):
+            raise HTTPException(429, detail={"code": "VERIFICATION_CODE_RATE_LIMITED"}) from exc
+        raise
+    await verification_email.send_code(email, code)
+    return {"challengeId": challenge_id, "expiresInSeconds": 600}
+
+
+@app.post("/verification-email/verify", response_model=UniversityEmailVerificationResponse,
+          tags=["Verification"], summary="大学メール確認コードを照合",
+          responses=api_errors(401, 404, 409, 422, 429, 500))
+async def verify_university_email_code(
+    body: UniversityEmailCodeInput,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    digest = verification_email.code_digest(body.challengeId, body.code)
+    result = await get_verification_email_repository().verify(
+        current_user, body.challengeId, digest
+    )
+    errors = {"CHALLENGE_NOT_FOUND": (404, result), "CODE_EXPIRED": (409, result),
+              "TOO_MANY_ATTEMPTS": (429, result), "INVALID_CODE": (422, result)}
+    if result != "APPROVED":
+        status, code = errors.get(result, (409, "VERIFICATION_STATE_CONFLICT"))
+        raise HTTPException(status, detail={"code": code})
+    return {"verificationStatus": "approved"}
+
+
+def require_verification_reviewer(user: CurrentUser) -> None:
+    if user.role not in {"verifier", "admin"}:
+        raise HTTPException(403, detail={"code": "ROLE_FORBIDDEN"})
+    if not user.mfa_completed:
+        raise HTTPException(403, detail={"code": "MFA_REQUIRED"})
+
+
+def public_verification_review(item: dict[str, Any]) -> dict[str, Any]:
+    """審査メタデータだけを返し、画像ID・Storageキーを公開しない。"""
+    return {
+        "id": item["id"], "userId": item["userId"], "method": item["method"],
+        "status": item["status"], "createdAt": item["createdAt"],
+        "reviewedAt": item.get("reviewedAt"),
+        "deletionDueAt": item.get("deletionDueAt"), "deletedAt": item.get("deletedAt"),
+        "hasDocument": bool(item.get("_imageId") and not item.get("deletedAt")),
+    }
+
+
+@app.get(
+    "/verification-reviews", response_model=VerificationReviewListResponse,
+    tags=["Verification review"], summary="審査待ちの本人確認申請を一覧",
+    responses=api_errors(401, 403, 500),
+)
+async def list_verification_reviews(
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: VerificationReviewRepository = Depends(get_verification_review_repository),
+):
+    require_verification_reviewer(current_user)
+    return {"items": [public_verification_review(item)
+                      for item in await repository.list_pending()]}
+
+
+@app.post(
+    "/verification-reviews/{verification_id}/document-access",
+    response_model=VerificationDocumentAccessResponse, tags=["Verification review"],
+    summary="本人確認書類の短時間閲覧URLを発行",
+    responses=api_errors(401, 403, 404, 409, 500),
+)
+async def create_verification_document_access(
+    verification_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: VerificationReviewRepository = Depends(get_verification_review_repository),
+):
+    require_verification_reviewer(current_user)
+    item = await repository.get(verification_id)
+    if item is None:
+        raise HTTPException(404, detail={"code": "VERIFICATION_NOT_FOUND"})
+    if not item.get("_imageId") or item.get("deletedAt"):
+        raise HTTPException(404, detail={"code": "VERIFICATION_DOCUMENT_NOT_FOUND"})
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    token = secrets.token_urlsafe(32)
+    verification_document_tokens[token] = {
+        "verificationId": verification_id, "reviewerId": current_user.user_id,
+        "expiresAt": expires_at,
+    }
+    record_audit_event(
+        actor_id=current_user.user_id, event_type="verification_document_access_granted",
+        target_type="verification_request", target_id=verification_id,
+    )
+    return {"url": f"/verification-documents/{token}", "expiresAt": expires_at}
+
+
+@app.get(
+    "/verification-documents/{document_token}", tags=["Verification review"],
+    summary="短時間URLで本人確認書類を閲覧",
+    responses=api_errors(401, 403, 404, 500),
+)
+async def view_verification_document(
+    document_token: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: VerificationReviewRepository = Depends(get_verification_review_repository),
+    uploads: UploadRepository = Depends(upload_repository_dependency),
+):
+    require_verification_reviewer(current_user)
+    grant = verification_document_tokens.get(document_token)
+    if (
+        grant is None or grant["reviewerId"] != current_user.user_id
+        or grant["expiresAt"] <= datetime.now(timezone.utc)
+    ):
+        raise HTTPException(404, detail={"code": "VERIFICATION_DOCUMENT_NOT_FOUND"})
+    item = await repository.get(grant["verificationId"])
+    image = await uploads.get_image(item.get("_imageId")) if item else None
+    if image is None or image.get("purpose") != "verification_document":
+        raise HTTPException(404, detail={"code": "VERIFICATION_DOCUMENT_NOT_FOUND"})
+    record_audit_event(
+        actor_id=current_user.user_id, event_type="verification_document_viewed",
+        target_type="verification_request", target_id=item["id"],
+    )
+    return Response(
+        content=image["data"], media_type=image["contentType"],
+        headers={"Cache-Control": "no-store", "Content-Disposition": "inline"},
+    )
+
+
+@app.post(
+    "/verification-reviews/{verification_id}/decision",
+    response_model=VerificationReviewItem, tags=["Verification review"],
+    summary="本人確認申請を承認または否認",
+    responses=api_errors(401, 403, 404, 409, 422, 500),
+)
+async def decide_verification_review(
+    verification_id: str, body: VerificationDecisionInput,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: VerificationReviewRepository = Depends(get_verification_review_repository),
+):
+    require_verification_reviewer(current_user)
+    item = await verification_review_service.decide(
+        repository, verification_id, current_user, body.decision
+    )
+    return public_verification_review(item)
+
+
+@app.delete(
+    "/verification-reviews/{verification_id}/document",
+    response_model=VerificationReviewItem, tags=["Verification review"],
+    summary="審査済みの本人確認書類を削除",
+    responses=api_errors(401, 403, 404, 409, 500),
+)
+async def delete_verification_document(
+    verification_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    repository: VerificationReviewRepository = Depends(get_verification_review_repository),
+    uploads: UploadRepository = Depends(upload_repository_dependency),
+):
+    require_verification_reviewer(current_user)
+    item = await verification_review_service.delete_document(
+        repository, uploads, verification_id, current_user
+    )
+    return public_verification_review(item)
 
 
 @app.post("/reports", response_model=ReportResponse, status_code=201, tags=["Safety"], summary="違反・危険行為を通報", description="通報者はセッションから決定する。詐欺または危険作業の依頼通報はhighとなり、対象依頼をsuspendedへ自動遷移する。", responses=api_errors(401, 404, 422, 500))

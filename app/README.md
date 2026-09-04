@@ -122,6 +122,12 @@ SUPERTOKENS_ENABLED=false AUTH_MOCK_ENABLED=true python -m uvicorn main:app --re
 | POST | `/matches/{id}/reviews` | 評価投稿 |
 | POST | `/achievements/generate` | 実績生成 |
 | POST | `/verifications` | 本人確認申請 |
+| POST | `/verification-email/challenges` | `.ac.jp`大学メールへ6桁確認コードを送信 |
+| POST | `/verification-email/verify` | 確認コードを照合して本人確認を完了 |
+| GET | `/verification-reviews` | 本人確認担当者向け審査待ち一覧（MFA必須） |
+| POST | `/verification-reviews/{id}/document-access` | 5分間の書類閲覧URLを発行 |
+| POST | `/verification-reviews/{id}/decision` | 本人確認を承認・否認 |
+| DELETE | `/verification-reviews/{id}/document` | 審査済み本人確認書類を削除 |
 | POST | `/reports` | 通報 |
 | POST | `/users/{id}/block` | ブロック・解除 |
 
