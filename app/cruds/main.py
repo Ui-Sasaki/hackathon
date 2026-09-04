@@ -406,9 +406,11 @@ class RequestIdMiddleware:
 app.add_middleware(RequestIdMiddleware)
 # CORS must be the outermost middleware so responses produced directly by
 # SuperTokens (including refresh failures) receive the browser CORS headers.
+_origins_env = os.getenv("WEBSITE_DOMAIN", "http://localhost:3000")
+_allow_origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("WEBSITE_DOMAIN", "http://localhost:3000")],
+    allow_origins=_allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=cors_headers(),

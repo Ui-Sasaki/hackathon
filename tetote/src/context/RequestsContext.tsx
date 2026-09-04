@@ -13,6 +13,12 @@ import {
   toRequestCard,
   type RequestCard,
 } from "../features/requests/client";
+import {
+  dismissPublicRequest,
+  listSavedPublicRequests,
+  removeSavedPublicRequest,
+  savePublicRequest,
+} from "../features/requests/preferences";
 import { useAuth } from "../auth/AuthContext";
 
 export type RequestItem = RequestCard;
@@ -39,6 +45,7 @@ export function RequestsProvider({ children }: { children: ReactNode }) {
   const [requests, setRequests] = useState<RequestItem[]>([]);
   const [status, setStatus] = useState<RequestsStatus>("loading");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [savedRequests, setSavedRequests] = useState<RequestItem[]>([]);
   // 一覧から閉じたカードは、再読み込み後も再表示しない。
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
@@ -61,16 +68,31 @@ export function RequestsProvider({ children }: { children: ReactNode }) {
     fetchRequests();
   }, [authStatus, fetchRequests]);
 
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
+    void listSavedPublicRequests()
+      .then((items) => {
+        setSavedIds(new Set(items.map((item) => item.id)));
+        setSavedRequests(items.map(toRequestCard));
+      })
+      .catch(() => undefined);
+  }, [authStatus]);
+
   const reload = useCallback(() => {
     setStatus("loading");
     setErrorMessage(null);
     fetchRequests();
   }, [fetchRequests]);
 
-  // 非表示・保存はローカル状態で扱う。APIへの永続化（/requests/{id}/dismiss、
-  // /saved-requests）はバックエンド実装済みで、接続は #78 / #79 の範囲。
   const dismissRequest = (id: string) => {
     setDismissedIds((current) => new Set(current).add(id));
+    void dismissPublicRequest(id).catch(() => {
+      setDismissedIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    });
   };
 
   const visibleRequests = requests.filter(
@@ -80,20 +102,34 @@ export function RequestsProvider({ children }: { children: ReactNode }) {
   const saveRequest = (id: string) => {
     const request = requests.find((item) => item.id === id);
     if (!request) return;
-
-    setSavedRequests((current) => {
-      const alreadySaved = current.some((item) => item.id === id);
-      if (alreadySaved) return current;
-      return [...current, request];
+    setSavedIds((current) => new Set(current).add(id));
+    setSavedRequests((current) => current.some((item) => item.id === id) ? current : [...current, request]);
+    void savePublicRequest(id).catch(() => {
+      setSavedIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      setSavedRequests((current) => current.filter((item) => item.id !== id));
     });
   };
 
   const removeSavedRequest = (id: string) => {
+    setSavedIds((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+    const previous = savedRequests.find((item) => item.id === id);
     setSavedRequests((current) => current.filter((item) => item.id !== id));
+    void removeSavedPublicRequest(id).catch(() => {
+      setSavedIds((current) => new Set(current).add(id));
+      if (previous) setSavedRequests((current) => [...current, previous]);
+    });
   };
 
   const toggleSavedRequest = (id: string) => {
-    const alreadySaved = savedRequests.some((item) => item.id === id);
+    const alreadySaved = savedIds.has(id);
     if (alreadySaved) {
       removeSavedRequest(id);
     } else {
@@ -102,7 +138,7 @@ export function RequestsProvider({ children }: { children: ReactNode }) {
   };
 
   const isRequestSaved = (id: string) => {
-    return savedRequests.some((item) => item.id === id);
+    return savedIds.has(id);
   };
 
   return (

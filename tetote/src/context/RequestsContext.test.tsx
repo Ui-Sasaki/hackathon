@@ -6,6 +6,7 @@ import { RequestsProvider } from "./RequestsContext";
 const mocks = vi.hoisted(() => ({
   authStatus: "loading" as "loading" | "authenticated" | "unauthenticated" | "error",
   listPublicRequests: vi.fn(),
+  listSavedPublicRequests: vi.fn(),
 }));
 
 vi.mock("../auth/AuthContext", () => ({
@@ -16,11 +17,19 @@ vi.mock("../features/requests/client", () => ({
   requestListErrorMessage: vi.fn(() => "error"),
   toRequestCard: vi.fn((item) => item),
 }));
+vi.mock("../features/requests/preferences", () => ({
+  dismissPublicRequest: vi.fn(),
+  listSavedPublicRequests: mocks.listSavedPublicRequests,
+  removeSavedPublicRequest: vi.fn(),
+  savePublicRequest: vi.fn(),
+}));
+
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
   mocks.authStatus = "loading";
   mocks.listPublicRequests.mockResolvedValue({ items: [] });
+  mocks.listSavedPublicRequests.mockResolvedValue([]);
 });
 
 describe("RequestsProvider authentication boundary", () => {
@@ -30,6 +39,7 @@ describe("RequestsProvider authentication boundary", () => {
     });
 
     expect(mocks.listPublicRequests).not.toHaveBeenCalled();
+    expect(mocks.listSavedPublicRequests).not.toHaveBeenCalled();
   });
 
   it("requests protected data after authentication succeeds", async () => {
@@ -40,6 +50,7 @@ describe("RequestsProvider authentication boundary", () => {
     });
 
     expect(mocks.listPublicRequests).toHaveBeenCalledOnce();
+    expect(mocks.listSavedPublicRequests).toHaveBeenCalledOnce();
   });
 
   it("starts requesting when authentication finishes", async () => {
@@ -54,5 +65,6 @@ describe("RequestsProvider authentication boundary", () => {
     });
 
     expect(mocks.listPublicRequests).toHaveBeenCalledOnce();
+    expect(mocks.listSavedPublicRequests).toHaveBeenCalledOnce();
   });
 });
