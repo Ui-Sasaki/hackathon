@@ -20,6 +20,7 @@ vi.mock("react-native", async () => {
   };
   return {
     ActivityIndicator: component("ActivityIndicator"),
+    Modal: component("Modal"),
     Pressable: component("Pressable"),
     ScrollView: component("ScrollView"),
     StyleSheet: { create: <T,>(styles: T) => styles },
