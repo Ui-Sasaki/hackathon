@@ -391,6 +391,88 @@
         "title": "BlockResponse",
         "type": "object"
       },
+      "CharacterProgressResponse": {
+        "description": "キャラクター画面の貢献度。完了済みマッチだけをサーバーが集計する。",
+        "properties": {
+          "characterId": {
+            "description": "表示するキャラクター識別子（c1, c2, c3）",
+            "title": "Characterid",
+            "type": "string"
+          },
+          "currentPoints": {
+            "description": "累計ポイント",
+            "minimum": 0.0,
+            "title": "Currentpoints",
+            "type": "integer"
+          },
+          "helpCount": {
+            "description": "完了した支援の回数",
+            "minimum": 0.0,
+            "title": "Helpcount",
+            "type": "integer"
+          },
+          "maxStage": {
+            "description": "最終段階",
+            "minimum": 1.0,
+            "title": "Maxstage",
+            "type": "integer"
+          },
+          "nextStagePoints": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "次の段階に必要な累計ポイント。最終段階ならnull",
+            "title": "Nextstagepoints"
+          },
+          "pointsUntilNextStage": {
+            "description": "次の段階まであと何ポイントか。最終段階なら0",
+            "minimum": 0.0,
+            "title": "Pointsuntilnextstage",
+            "type": "integer"
+          },
+          "progressRatio": {
+            "description": "現在の段階内での進み具合（0〜1）",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Progressratio",
+            "type": "number"
+          },
+          "ruleVersion": {
+            "description": "ポイント規則の版",
+            "title": "Ruleversion",
+            "type": "string"
+          },
+          "stage": {
+            "description": "現在の段階（1始まり）",
+            "minimum": 1.0,
+            "title": "Stage",
+            "type": "integer"
+          },
+          "userId": {
+            "title": "Userid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "helpCount",
+          "currentPoints",
+          "stage",
+          "maxStage",
+          "characterId",
+          "nextStagePoints",
+          "pointsUntilNextStage",
+          "progressRatio",
+          "ruleVersion"
+        ],
+        "title": "CharacterProgressResponse",
+        "type": "object"
+      },
       "ChatCounterpartSummary": {
         "properties": {
           "displayName": {
@@ -3637,6 +3719,69 @@
         "summary": "応募を取り下げ",
         "tags": [
           "Applications"
+        ]
+      }
+    },
+    "/character-progress": {
+      "get": {
+        "description": "認証済み本人が支援者として完了したマッチだけを集計し、累計ポイント・支援回数・段階・次段階までのポイント・表示キャラクター識別子を返す。集計値はクライアント入力を使わない。",
+        "operationId": "get_character_progress_character_progress_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CharacterProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "AUTHENTICATION_REQUIRED",
+                    "details": {},
+                    "message": "認証が必要です",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "認証が必要です"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_SERVER_ERROR",
+                    "details": {},
+                    "message": "サーバー内部でエラーが発生しました",
+                    "requestId": "trace_0123abcd"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "サーバー内部でエラーが発生しました"
+          }
+        },
+        "security": [
+          {
+            "SuperTokensSession": []
+          }
+        ],
+        "summary": "自分のキャラクター進捗を取得",
+        "tags": [
+          "Character"
         ]
       }
     },

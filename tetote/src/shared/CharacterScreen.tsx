@@ -1,27 +1,63 @@
+import { useCallback, useEffect, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
+  ActivityIndicator,
   Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
 import { useFontSize } from "../context/FontSizeContext";
+import {
+  characterAssetKey,
+  characterProgressErrorMessage,
+  characterProgressLoadingState,
+  evolutionLabel,
+  getCharacterProgress,
+  progressPercent,
+  type CharacterAssetKey,
+  type CharacterProgressState,
+} from "../features/character/client";
 
+// 段階ごとの画像。require はビルド時に解決されるため、動的なパスは使えない。
+const characterImages: Record<CharacterAssetKey, number> = {
+  c1: require("../../assets/onboarding_asset/c1.png"),
+  c2: require("../../assets/onboarding_asset/c2.png"),
+  c3: require("../../assets/onboarding_asset/c3.png"),
+};
+
+/**
+ * キャラクター（貢献度）画面。
+ * 支援回数・ポイント・進化までの残りは GET /character-progress から取得する。
+ * 完了した支援だけが数えられ、規則はサーバー側（app/services/character.py）にある。
+ */
 export default function HelperCharacterScreen() {
   const { scale } = useFontSize();
   const styles = createStyles(scale);
 
-  const currentPoints = 250;
-  const pointsUntilEvolution = 100;
-  const helpCount = 4;
+  const [state, setState] = useState<CharacterProgressState>(
+    characterProgressLoadingState(),
+  );
+
+  const load = useCallback(() => {
+    setState(characterProgressLoadingState());
+    void getCharacterProgress().then(setState);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const progress = state.progress;
+  const percent = progressPercent(progress);
 
   return (
     <View style={styles.screen}>
       <View style={styles.container}>
         <View style={styles.characterArea}>
           <Image
-            source={require(
-              "../../assets/onboarding_asset/c1.png"
-            )}
+            accessibilityLabel={`キャラクター 段階${progress?.stage ?? 1}`}
+            source={characterImages[characterAssetKey(progress?.characterId)]}
             style={styles.characterImage}
             resizeMode="contain"
           />
@@ -29,19 +65,44 @@ export default function HelperCharacterScreen() {
 
         <View style={styles.progressSection}>
           <Text style={styles.progressText}>
-            進化まであと{pointsUntilEvolution}pt
+            {evolutionLabel(progress)}
           </Text>
 
-          <View style={styles.progressTrack}>
+          <View
+            accessibilityRole="progressbar"
+            accessibilityValue={{ min: 0, max: 100, now: percent }}
+            style={styles.progressTrack}
+          >
             <View
               style={[
                 styles.progressFill,
                 {
-                  width: "35%",
+                  width: `${percent}%`,
                 },
               ]}
             />
           </View>
+
+          {state.status === "loading" && (
+            <View style={styles.statusRow}>
+              <ActivityIndicator size="small" color="#245C2D" />
+              <Text style={styles.statusText}>貢献度を読み込んでいます...</Text>
+            </View>
+          )}
+
+          {state.status === "error" && (
+            <View style={styles.statusRow}>
+              <Text style={styles.errorText}>
+                {characterProgressErrorMessage(state.error)}
+              </Text>
+              <Pressable
+                onPress={load}
+                style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.retryButtonText}>再読み込み</Text>
+              </Pressable>
+            </View>
+          )}
         </View>
 
         <Text style={styles.meterTitle}>
@@ -56,7 +117,7 @@ export default function HelperCharacterScreen() {
 
             <View style={styles.statCircle}>
               <Text style={styles.statNumber}>
-                {helpCount}
+                {progress ? progress.helpCount : "-"}
               </Text>
             </View>
           </View>
@@ -68,7 +129,7 @@ export default function HelperCharacterScreen() {
 
             <View style={styles.statCircle}>
               <Text style={styles.statPoints}>
-                {currentPoints}
+                {progress ? progress.currentPoints : "-"}
               </Text>
             </View>
           </View>
@@ -94,7 +155,7 @@ const createStyles = (scale: number) =>
       paddingTop: 40,
       paddingBottom: 28,
       alignItems: "center",
-    　transform: [{ translateY: -30 }],
+      transform: [{ translateY: -30 }],
     },
 
     characterArea: {
@@ -134,6 +195,44 @@ const createStyles = (scale: number) =>
       height: "100%",
       borderRadius: 999,
       backgroundColor: "#245C2D",
+    },
+
+    statusRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      flexWrap: "wrap",
+      justifyContent: "center",
+      gap: 8,
+      marginTop: 10,
+    },
+
+    statusText: {
+      color: "#777777",
+      fontSize: 13 * scale,
+    },
+
+    errorText: {
+      color: "#A52A2A",
+      fontSize: 13 * scale,
+      fontWeight: "700",
+      textAlign: "center",
+    },
+
+    retryButton: {
+      borderRadius: 999,
+      backgroundColor: "#D9D9D9",
+      paddingHorizontal: 14,
+      paddingVertical: 6,
+    },
+
+    retryButtonText: {
+      color: "#333333",
+      fontSize: 12 * scale,
+      fontWeight: "800",
+    },
+
+    pressed: {
+      opacity: 0.72,
     },
 
     meterTitle: {

@@ -48,7 +48,14 @@ class MatchRepository(Protocol):
 
     async def dispute(self, actor: CurrentUser, match_id: str, reason: str) -> str: ...
 
+    async def list_completed_for_helper(self, actor: CurrentUser) -> list[CompletedHelpRecord]: ...
+
     async def reset(self) -> None: ...
+
+
+# キャラクター進捗の集計に使う、支援者本人が完了したマッチの最小情報。
+# estimatedMinutes は依頼から取れるときだけ入る（Memory実装では None）。
+CompletedHelpRecord = dict[str, Any]
 
 
 class MemoryMatchRepository:
@@ -76,6 +83,13 @@ class MemoryMatchRepository:
         # repository methods in dbtodo 04.
         self._items[values["id"]] = values
         return deepcopy(values)
+
+    async def list_completed_for_helper(self, actor: CurrentUser) -> list[CompletedHelpRecord]:
+        return [
+            {"matchId": item["id"], "requestId": item["requestId"], "estimatedMinutes": None}
+            for item in self._items.values()
+            if item["helperId"] == actor.user_id and item["status"] == "completed"
+        ]
 
     async def reset(self) -> None:
         self._items.clear()
@@ -175,6 +189,27 @@ class PostgresMatchRepository:
         return await self._transition(
             actor, "select app.dispute_match($1, $2)", parsed_id, reason,
         )
+
+    async def list_completed_for_helper(self, actor: CurrentUser) -> list[CompletedHelpRecord]:
+        # 本人が支援者として完了したマッチだけ。活動時間は依頼から一緒に取る。
+        async with actor_connection(actor) as conn:
+            rows = await conn.fetch(
+                """select m.id, m.request_id, r.estimated_minutes
+                     from matches m
+                     join requests r on r.id = m.request_id
+                    where m.helper_id = app.current_actor()
+                      and m.status = 'completed'
+                      and app.match_is_visible(m.id)
+                    order by m.completed_at""",
+            )
+        return [
+            {
+                "matchId": str(row["id"]),
+                "requestId": str(row["request_id"]),
+                "estimatedMinutes": row["estimated_minutes"],
+            }
+            for row in rows
+        ]
 
     async def reset(self) -> None:
         return None
