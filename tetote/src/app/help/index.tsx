@@ -206,7 +206,7 @@ const styles = StyleSheet.create({
 mascotArea: {
   alignItems: "center",
   justifyContent: "center",
-  marginTop: 32,
+  marginTop: 48,
   marginBottom: 12,
 },
 
