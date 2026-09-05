@@ -52,16 +52,20 @@ export default function ApplicationScreen() {
   const description = request?.description ?? fallbackDescription;
 
   useEffect(() => {
-    if (!requestId) {
-      setRequestLoading(false);
-      return;
-    }
+    // requestId が無いときは初期状態（読み込みなし）のまま何もしない。
+    if (!requestId) return;
     let active = true;
-    setRequestLoading(true);
-    setRequestError(null);
-    void getRequest(requestId)
+    // 読み込み開始の状態更新も同じ非同期の流れに乗せ、effect 本体で同期的に
+    // setState しない（React の lint: set-state-in-effect）。
+    void Promise.resolve()
+      .then(() => {
+        if (!active) return null;
+        setRequestLoading(true);
+        setRequestError(null);
+        return getRequest(requestId);
+      })
       .then((item) => {
-        if (!active) return;
+        if (!active || !item) return;
         setRequest(item);
         setAvailableAt((current) => current || item.scheduledAt);
         setRequestLoading(false);

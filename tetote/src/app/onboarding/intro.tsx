@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   View,
   Text,
@@ -42,8 +42,9 @@ export default function IntroScreen() {
   const currentSlide = slides[page];
   const Illustration = currentSlide.Illustration;
 
-  const opacity = useRef(new Animated.Value(1)).current;
-  const translateX = useRef(new Animated.Value(0)).current;
+  // useRef(...).current を描画中に読まない（React の lint に合わせる）
+  const [opacity] = useState(() => new Animated.Value(1));
+  const [translateX] = useState(() => new Animated.Value(0));
 
   const handleNext = () => {
     if (isAnimating) return;

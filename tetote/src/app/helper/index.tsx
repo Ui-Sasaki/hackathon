@@ -8,11 +8,10 @@ import {
   PanResponder,
   ActivityIndicator,
 } from "react-native";
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useRequests } from "../../context/RequestsContext";
-import { useMode } from "../../context/ModeContext";
 import { useFontSize } from "../../context/FontSizeContext";
 
 const tagOptions = [
@@ -52,17 +51,12 @@ const styles = createStyles(scale);
   const [tagDropdownOpen, setTagDropdownOpen] =
     useState(false);
 
-  const translateX = useRef(
-    new Animated.Value(0)
-  ).current;
-
-  const translateY = useRef(
-    new Animated.Value(0)
-  ).current;
-
-  const opacity = useRef(
-    new Animated.Value(1)
-  ).current;
+  // Animated.Value は描画をまたいで同じインスタンスを使う。useRef(...).current を
+  // 描画中に読む形は React の lint（refs during render）に反するため、
+  // useState の初期化関数で一度だけ作る。
+  const [translateX] = useState(() => new Animated.Value(0));
+  const [translateY] = useState(() => new Animated.Value(0));
+  const [opacity] = useState(() => new Animated.Value(1));
 
   const toggleTag = (tag: string) => {
     if (tag === "すべて") {

@@ -44,9 +44,10 @@ export default function HelperCharacterScreen() {
     void getCharacterProgress().then(setState);
   }, []);
 
+  // 初回は初期状態が loading なので、取得だけを行う（effect 内で同期的に setState しない）。
   useEffect(() => {
-    load();
-  }, [load]);
+    void getCharacterProgress().then(setState);
+  }, []);
 
   const progress = state.progress;
   const percent = progressPercent(progress);
