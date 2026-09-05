@@ -1,0 +1,106 @@
+name: CI
+
+# PR と main への push で、バックエンド・フロントエンド・API仕様の同期を自動で確かめる。
+# 目的: 「マージしたら本番が真っ白」「依頼が公開されない」のような壊れ方を、人の目に頼らず止める。
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend (pytest + OpenAPI sync)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # テストは外部サービスへ出ない。実キーが Secrets にあっても使わせない。
+      SUPERTOKENS_ENABLED: "false"
+      MOCK_RESET_ENABLED: "true"
+      REQUEST_REPOSITORY: memory
+      APP_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python -e ".[dev]"
+
+      - name: pytest
+        run: .venv/bin/python -m pytest -q
+
+      - name: OpenAPI が実装と同期しているか
+        run: |
+          .venv/bin/python scripts/export_openapi.py
+          if ! git diff --quiet -- docs/openapi.json; then
+            echo "::error::docs/openapi.json が実装と一致しません。scripts/export_openapi.py を実行してコミットしてください。"
+            git --no-pager diff --stat -- docs/openapi.json
+            exit 1
+          fi
+
+  frontend:
+    name: frontend (tsc + vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tetote
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: tetote/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: TypeScript
+        run: npx tsc --noEmit
+
+      - name: vitest
+        run: npm test
+
+      # lint は現時点で既存エラーが残っているため、まず結果だけ見える形で回す。
+      # エラーを解消したら continue-on-error を外して必須にする。
+      - name: ESLint (参考・失敗しても止めない)
+        continue-on-error: true
+        run: npx eslint src
+
+  web-build:
+    name: web build (expo export)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: frontend
+    defaults:
+      run:
+        working-directory: tetote
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: tetote/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      # 本番と同じコマンドでビルドが通るかだけを見る。接続先はダミーの https。
+      - name: expo export --platform web
+        env:
+          EXPO_PUBLIC_API_URL: https://ci.invalid
+        run: node scripts/check-api-url.js && npx expo export --platform web
